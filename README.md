@@ -62,7 +62,33 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+Or with Make:
+
+```bash
+make run
+```
+
 Server will start at `http://127.0.0.1:8000`.
+
+## Running Tests
+
+Run the test suite directly:
+
+```bash
+pytest -q
+```
+
+Or with Make:
+
+```bash
+make test
+```
+
+## Common Make Targets
+
+- `make install` — install Python dependencies from `requirements.txt`
+- `make run` — run the FastAPI app with auto-reload
+- `make test` — run the unit test suite
 
 ## API Usage
 
