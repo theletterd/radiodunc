@@ -55,6 +55,31 @@ This document tracks phased delivery for the local AI radio project and is inten
 - Station definitions persisted and retrievable.
 - Reasonable diversity across format/persona outputs.
 
+
+---
+
+## Phase 2.5 — Persona & Config Hardening
+
+**Status:** `TODO`
+
+### Goals
+- Move announcer persona definitions from hardcoded presets to configuration-driven data.
+- Make station generation deterministic when desired and easier to tune without code edits.
+- Tighten config validation and startup behavior for local-vs-template config files.
+
+### Deliverables
+- Config schema support for `station_presets` (format, tagline, dj_name strategy, dj_style, optional voice hints).
+- Station generation update to read persona presets from config with safe defaults/fallbacks.
+- Optional seed parameter/config value for reproducible station generation order.
+- Startup/config validation errors that clearly identify invalid preset entries.
+- README update with persona configuration examples and migration notes.
+
+### Exit Criteria
+- Editing `radio_config.json` can fully change generated station personas without code changes.
+- Invalid persona config fails fast with actionable validation messages.
+- Generated station diversity remains comparable to current preset approach.
+- Optional deterministic mode reproduces identical station sets for same library + seed.
+
 ---
 
 ## Phase 3 — Playlist Scheduler
@@ -187,4 +212,4 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Next Recommended Work Item
 
-Move to **Phase 2** by implementing station generation summary stats and initial `/stations/generate` + `/stations` endpoints.
+Move to **Phase 2.5** by making announcer personas configuration-driven and hardening station-generation config validation.
