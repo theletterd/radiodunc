@@ -60,7 +60,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 2.5 — Persona & Config Hardening
 
-**Status:** `TODO`
+**Status:** `DONE` (config-driven personas + seed + validation implemented)
 
 ### Goals
 - Move announcer persona definitions from hardcoded presets to configuration-driven data.

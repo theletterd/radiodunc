@@ -14,6 +14,8 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
   - weather alerts location
   - local time zone
   - news alert preferences
+  - station persona presets (format/tagline/DJ naming/style/voice hints)
+  - optional `station_generation_seed` for deterministic station shuffle order
 - `GET /config` and `PUT /config`
 - `POST /library/scan` endpoint:
   - accepts optional folder path
@@ -108,6 +110,8 @@ curl http://127.0.0.1:8000/tracks
 
 ### Generate stations
 
+Station generation now uses `station_presets` from config rather than hardcoded code presets. Set `station_generation_seed` to any integer to get reproducible preset shuffle order for a given library.
+
 ```bash
 curl -X POST http://127.0.0.1:8000/stations/generate \
   -H "Content-Type: application/json" \
@@ -123,7 +127,7 @@ curl http://127.0.0.1:8000/stations
 ## Notes
 
 - Metadata extraction depends on file tags; missing tags are stored as `null`.
-- Phase 2 now includes station generation and configurable weather/news/local-time constants.
+- Phase 2.5 adds config-driven station persona presets, deterministic optional seed control, and fail-fast config validation for invalid preset entries.
 
 ## Project Planning
 
