@@ -9,7 +9,7 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
   - `Track`
   - `Station`
   - `DJClip`
-- Config file support (`radio_config.json`) for:
+- Config file support (checked-in `example-radio_config.json` + local `radio_config.json`) for:
   - default music folder to scan
   - weather alerts location
   - local time zone
@@ -35,7 +35,8 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
 - `app/schemas.py` — Pydantic schemas
 - `app/scanner.py` — audio scan + metadata extraction logic
 - `app/stations.py` — station generation logic
-- `radio_config.json` — configurable local defaults
+- `example-radio_config.json` — template config committed to git
+- `radio_config.json` — local personal config (gitignored, auto-created)
 - `requirements.txt` — dependencies
 
 ## Setup
@@ -97,7 +98,7 @@ curl -X POST http://127.0.0.1:8000/library/scan \
   -d '{"folder_path": "/path/to/your/music"}'
 ```
 
-You can also omit `folder_path` to use `music_folder` from `radio_config.json`.
+You can also omit `folder_path` to use `music_folder` from your local `radio_config.json` (auto-created from `example-radio_config.json`).
 
 ### List tracks
 

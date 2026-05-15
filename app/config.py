@@ -25,13 +25,18 @@ class AppConfig(BaseModel):
 
 
 CONFIG_PATH = Path("radio_config.json")
+EXAMPLE_CONFIG_PATH = Path("example-radio_config.json")
 
 
 def load_config() -> AppConfig:
     if not CONFIG_PATH.exists():
-        default = AppConfig()
-        save_config(default)
-        return default
+        if EXAMPLE_CONFIG_PATH.exists():
+            data = json.loads(EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8"))
+            config = AppConfig.model_validate(data)
+        else:
+            config = AppConfig()
+        save_config(config)
+        return config
 
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     return AppConfig.model_validate(data)
