@@ -37,7 +37,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 2 — Station Generation
 
-**Status:** `TODO`
+**Status:** `DONE` (initial generation + config implemented)
 
 ### Goals
 - Analyze scanned track library and derive multiple fictional station concepts.
