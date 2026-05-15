@@ -1,0 +1,17 @@
+{
+  "music_folder": "~/Music",
+  "station_generation_count": 6,
+  "alerts": {
+    "weather_location": "Seattle, WA",
+    "local_time_zone": "America/Los_Angeles",
+    "news": {
+      "enabled": true,
+      "categories": [
+        "local",
+        "national",
+        "music"
+      ],
+      "briefing_minutes": 30
+    }
+  }
+}
