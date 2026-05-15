@@ -13,5 +13,28 @@
       ],
       "briefing_minutes": 30
     }
-  }
+  },
+  "station_generation_seed": 1337,
+  "station_presets": [
+    {
+      "format": "Indie Discovery",
+      "tagline": "Fresh cuts and deep tracks.",
+      "dj_name_prefix": "DJ",
+      "dj_style": "warm storyteller",
+      "voice_hint": "friendly mezzo"
+    },
+    {
+      "format": "Classic Rock Drive",
+      "tagline": "Legends on repeat, with attitude.",
+      "dj_name_prefix": "Captain",
+      "dj_style": "high-energy throwback"
+    },
+    {
+      "format": "Chill Evenings",
+      "tagline": "Low-key vibes for late nights.",
+      "dj_name_prefix": "Host",
+      "dj_style": "calm minimalist",
+      "voice_hint": "soft and intimate"
+    }
+  ]
 }

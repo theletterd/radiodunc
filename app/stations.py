@@ -9,17 +9,6 @@ from sqlalchemy.orm import Session
 from .config import AppConfig
 from .models import Station, Track
 
-FORMAT_PRESETS: list[dict] = [
-    {"format": "Indie Discovery", "tagline": "Fresh cuts and deep tracks.", "dj_style": "warm storyteller"},
-    {"format": "Classic Rock Drive", "tagline": "Legends on repeat, with attitude.", "dj_style": "high-energy throwback"},
-    {"format": "Chill Evenings", "tagline": "Low-key vibes for late nights.", "dj_style": "calm minimalist"},
-    {"format": "Pop Pulse", "tagline": "Hooks, hits, and new obsessions.", "dj_style": "playful and fast-paced"},
-    {"format": "Eclectic Mixtape", "tagline": "No rules, only great songs.", "dj_style": "quirky curator"},
-    {"format": "Retro Rewind", "tagline": "Back when radio ruled the road.", "dj_style": "nostalgic host"},
-    {"format": "Alternative Edge", "tagline": "Sharp guitars and bold voices.", "dj_style": "witty and rebellious"},
-    {"format": "Late Night Vinyl", "tagline": "Analog soul for digital nights.", "dj_style": "intimate and poetic"},
-]
-
 
 def _library_summary(db: Session) -> dict:
     tracks = db.query(Track).all()
@@ -38,13 +27,15 @@ def generate_stations(db: Session, config: AppConfig, count: int | None = None) 
         raise ValueError("No tracks found. Scan your library before generating stations.")
 
     target_count = count or config.station_generation_count
-    presets = FORMAT_PRESETS.copy()
-    random.shuffle(presets)
+    rng = random.Random(config.station_generation_seed)
+    presets = [preset.model_dump() for preset in config.station_presets]
+    rng.shuffle(presets)
 
     created: list[Station] = []
     for idx in range(min(target_count, len(presets))):
         preset = presets[idx]
-        station_name = f"{preset['format']} FM"
+        format_name = preset["format"]
+        station_name = f"{format_name} FM"
         description = (
             f"Built from {summary['track_count']} tracks with emphasis on "
             f"{', '.join(summary['top_genres'][:2])}."
@@ -54,14 +45,15 @@ def generate_stations(db: Session, config: AppConfig, count: int | None = None) 
             "local_time_zone": config.alerts.local_time_zone,
             "news_preferences": config.alerts.news.model_dump(),
             "core_artists": summary["top_artists"][:3],
+            "voice_hint": preset.get("voice_hint"),
         }
 
         station = Station(
             name=station_name,
             tagline=preset["tagline"],
-            format=preset["format"],
+            format=format_name,
             description=description,
-            dj_name=f"DJ {preset['format'].split()[0]}",
+            dj_name=f"{preset['dj_name_prefix']} {format_name.split()[0]}",
             dj_style=preset["dj_style"],
             config_json=json.dumps(station_config),
         )
@@ -69,4 +61,4 @@ def generate_stations(db: Session, config: AppConfig, count: int | None = None) 
         created.append(station)
 
     db.commit()
-    return {"generated": len(created), "library_summary": summary}
+    return {"generated": len(created), "library_summary": summary, "seed": config.station_generation_seed}
