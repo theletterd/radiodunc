@@ -2,7 +2,7 @@
 
 // ── Timing constants ─────────────────────────────────────────────────────────
 // Adjust these to taste; all audio scheduling uses AudioContext time (sample-accurate).
-const FADE_OUT_S     = 2.5;  // current track fades 1→0 over this many seconds
+const FADE_OUT_S     = 9.0;  // current track fades 1→0 over this many seconds
 const DJ_OVERLAP_S   = 0.5;  // DJ clip starts this far before the fade-out ends
 const FADE_IN_S      = 1.2;  // next track fades 0→1 over this many seconds
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
@@ -154,7 +154,7 @@ async function triggerTransition(reason) {
     // 4. Place the DJ clip on the AudioContext timeline.
     //    djStart adapts: if we're on time, it overlaps the fade-out tail;
     //    if we're late, it fires immediately.
-    const djStart = Math.max(ctx.currentTime + 0.05, t + FADE_OUT_S - DJ_OVERLAP_S);
+    const djStart = ctx.currentTime + 0.05;
     let djEnd = djStart; // advances to djStart + clip duration if we have a clip
 
     if (djBuf) {

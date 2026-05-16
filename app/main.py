@@ -4,12 +4,9 @@ import os
 import time
 import hashlib
 from pathlib import Path
-from datetime import datetime, timedelta
-from contextlib import asynccontextmanager
-from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -19,7 +16,6 @@ from .database import Base, engine, get_db
 from .models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
 from .dj_scripts import generate_dj_script
 from .scanner import scan_library
-from .broadcast import BroadcastEngine
 from .schemas import (
     LibraryScanRequest,
     QueueGenerateRequest,
@@ -36,17 +32,13 @@ from .schemas import (
     StationGenerateRequest,
     StationOut,
     TrackOut,
-    BroadcastStatusResponse,
     PlayerNextResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
 from .tts import build_tts_provider, get_or_create_dj_clip
-from .playout_worker import PlayoutWorker
 
 Base.metadata.create_all(bind=engine)
-
-_last_manifest_stale_log_at_epoch: float = 0.0
 
 
 def _ensure_player_state_schema() -> None:
@@ -128,20 +120,7 @@ def _log_event(event: str, **fields: object) -> None:
 
 _configure_logging()
 
-broadcast_engine = BroadcastEngine(Path("generated_audio") / "hls")
-playout_worker = None
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    playout_worker.start()
-    try:
-        yield
-    finally:
-        playout_worker.stop()
-
-
-app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
 
 @app.middleware("http")
@@ -304,10 +283,6 @@ def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
     return media_path
 
 
-if playout_worker is None:
-    playout_worker = PlayoutWorker(tick_seconds=0.3, broadcast_engine=broadcast_engine, safe_media_path=_safe_media_path)
-
-
 @app.get("/player/current-media")
 def player_current_media(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -333,13 +308,11 @@ def player_current_media(db: Session = Depends(get_db)):
         except ValueError as exc:
             logger.warning("Invalid OpenAI TTS config during playback; falling back to tone", extra={"error": str(exc)})
             provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-        is_ad_break = bool(item.get("is_ad_break"))
         clip, audio_path, _cached = get_or_create_dj_clip(
             db,
             script_text=script_text,
             voice=voice,
             provider=provider,
-            persist=is_ad_break,
         )
         media_path = _safe_media_path(audio_path, config)
 
@@ -366,75 +339,6 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
     config = load_config()
     media_path = _safe_media_path(clip.audio_path, config)
     return FileResponse(str(media_path), media_type="audio/wav", filename=media_path.name)
-
-
-@app.get("/broadcast/status", response_model=BroadcastStatusResponse)
-def broadcast_status():
-    return broadcast_engine.status()
-
-
-@app.get("/broadcast/live.m3u8")
-def broadcast_live_manifest(request: Request):
-    manifest = broadcast_engine.manifest_path()
-    range_header = request.headers.get("range")
-    status = broadcast_engine.status()
-    if not status.running:
-        _log_event("broadcast.manifest.unavailable", path=str(manifest), reason="engine_not_running", range=range_header)
-        raise HTTPException(status_code=503, detail="Live stream encoder is not running")
-    if not manifest.exists():
-        _log_event("broadcast.manifest.miss", path=str(manifest), range=range_header)
-        raise HTTPException(status_code=404, detail="Live stream is not running")
-
-    manifest_age_seconds = time.time() - manifest.stat().st_mtime
-    stale_manifest = manifest_age_seconds > 8.0
-    global _last_manifest_stale_log_at_epoch
-    if stale_manifest and (time.time() - _last_manifest_stale_log_at_epoch) >= 5.0:
-        _last_manifest_stale_log_at_epoch = time.time()
-        _log_event(
-            "broadcast.manifest.stale",
-            path=str(manifest),
-            age_seconds=round(manifest_age_seconds, 3),
-            range=range_header,
-        )
-
-    manifest_bytes = manifest.read_bytes()
-    size = len(manifest_bytes)
-
-    now_utc = datetime.now(ZoneInfo("UTC"))
-    manifest_ttl_seconds = 5
-    expires_at = now_utc + timedelta(seconds=manifest_ttl_seconds)
-    headers = {
-        "Cache-Control": f"public, max-age={manifest_ttl_seconds}, must-revalidate",
-        "Expires": expires_at.strftime("%a, %d %b %Y %H:%M:%S GMT"),
-        "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
-        "Content-Length": str(size),
-    }
-
-    _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header, partial=False)
-    return Response(content=manifest_bytes, media_type="application/vnd.apple.mpegurl", headers=headers)
-
-
-@app.get("/broadcast/{segment_name}")
-def broadcast_live_segment(segment_name: str, request: Request):
-    segment = broadcast_engine.resolve_segment_path(segment_name)
-    range_header = request.headers.get("range")
-    if segment is None or segment.suffix != ".ts":
-        _log_event("broadcast.segment.miss", segment=segment_name, path=str(broadcast_engine.segment_path(segment_name)), range=range_header)
-        raise HTTPException(status_code=404, detail="Segment not found")
-    size = segment.stat().st_size
-    _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
-    manifest = broadcast_engine.manifest_path()
-    stale_manifest = manifest.exists() and (time.time() - manifest.stat().st_mtime > 8.0)
-    return FileResponse(
-        str(segment),
-        media_type="video/mp2t",
-        filename=segment.name,
-        headers={
-            "Cache-Control": "public, max-age=10, must-revalidate",
-            "Expires": (datetime.now(ZoneInfo("UTC")) + timedelta(seconds=10)).strftime("%a, %d %b %Y %H:%M:%S GMT"),
-            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
-        },
-    )
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
@@ -466,15 +370,6 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admi
     state.last_error = None
     db.commit()
     db.refresh(state)
-    first_track = queue["tracks"][0] if queue.get("tracks") else None
-    if first_track is not None:
-        try:
-            broadcast_engine.start(station_id=payload.station_id, source_track_path=Path(first_track.file_path).expanduser().resolve())
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("broadcast.start.failed station_id=%s", payload.station_id)
-            state.last_error = f"broadcast start failed: {exc}"
-            db.commit()
-            db.refresh(state)
     _log_event("player.play.started", station_id=payload.station_id, queue_items=len(sequence))
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
@@ -555,7 +450,6 @@ def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_a
             script_text=script_response.script_text,
             voice=None,
             provider=provider,
-            persist=True,
         )
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
@@ -595,7 +489,6 @@ def player_stop(db: Session = Depends(get_db)):
     _log_event("player.stop.requested", station_id=state.current_station_id)
     state.is_playing = False
     state.playout_mode = "stopped"
-    broadcast_engine.stop()
     db.commit()
     db.refresh(state)
     _log_event("player.stop.completed", station_id=state.current_station_id)
@@ -678,7 +571,7 @@ def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest
     except ValueError as exc:
         logger.warning("Invalid OpenAI TTS config during clip synthesis; falling back to tone", extra={"error": str(exc)})
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-    clip, audio_path, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider, persist=True)
+    clip, audio_path, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider)
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to persist DJ clip")
     return DJClipResponse(clip_id=clip.id, audio_path=audio_path, voice=clip.voice, cached=cached)

@@ -8,7 +8,6 @@ import struct
 import urllib.error
 import urllib.request
 import wave
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -95,42 +94,23 @@ def _clip_hash(script_text: str, voice: str) -> str:
     return hashlib.sha256(key).hexdigest()
 
 
-def cleanup_ephemeral_clips(directory: Path, max_age_seconds: int = 300) -> None:
-    if not directory.exists():
-        return
-    cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds)
-    for path in directory.glob("ephemeral_*.wav"):
-        try:
-            if datetime.utcfromtimestamp(path.stat().st_mtime) < cutoff:
-                path.unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Failed to remove ephemeral clip", extra={"path": str(path)})
-
-
-def get_or_create_dj_clip(db: Session, script_text: str, voice: str | None = None, provider=None, *, persist: bool = True) -> tuple[DJClip | None, str, bool]:
+def get_or_create_dj_clip(db: Session, script_text: str, voice: str | None = None, provider=None) -> tuple[DJClip | None, str, bool]:
     normalized_voice = (voice or "default").strip() or "default"
     digest = _clip_hash(script_text, normalized_voice)
     clips_dir = Path("generated_audio")
     local_provider = provider or ToneTTSProvider()
 
-    if persist:
-        existing = db.query(DJClip).filter(DJClip.script_hash == digest).first()
-        if existing:
-            logger.info("Reusing cached DJ clip", extra={"clip_id": existing.id, "voice": normalized_voice})
-            return existing, existing.audio_path, True
+    existing = db.query(DJClip).filter(DJClip.script_hash == digest).first()
+    if existing:
+        logger.info("Reusing cached DJ clip", extra={"clip_id": existing.id, "voice": normalized_voice})
+        return existing, existing.audio_path, True
 
-        output_path = clips_dir / f"{digest}.wav"
-        logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
-        local_provider.synthesize(script_text, normalized_voice, output_path)
-
-        clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice)
-        db.add(clip)
-        db.commit()
-        db.refresh(clip)
-        return clip, clip.audio_path, False
-
-    cleanup_ephemeral_clips(clips_dir, max_age_seconds=300)
-    output_path = clips_dir / f"ephemeral_{digest}.wav"
-    logger.info("Generating ephemeral DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
+    output_path = clips_dir / f"{digest}.wav"
+    logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
     local_provider.synthesize(script_text, normalized_voice, output_path)
-    return None, str(output_path), False
+
+    clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice)
+    db.add(clip)
+    db.commit()
+    db.refresh(clip)
+    return clip, clip.audio_path, False

@@ -133,9 +133,3 @@ class PlayerNextResponse(BaseModel):
     dj_script: str
 
 
-class BroadcastStatusResponse(BaseModel):
-    running: bool
-    station_id: int | None = None
-    stream_url: str
-    started_at_epoch: float | None = None
-    last_error: str | None = None
