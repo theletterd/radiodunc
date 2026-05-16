@@ -49,7 +49,9 @@ class OpenAITTSProvider:
 
     def synthesize(self, text: str, voice: str, output_path: Path) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"model": self.model, "voice": (voice or self.voice), "input": text, "format": "wav"}
+        requested_voice = (voice or "").strip()
+        resolved_voice = self.voice if not requested_voice or requested_voice == "default" else requested_voice
+        payload = {"model": self.model, "voice": resolved_voice, "input": text, "response_format": "wav"}
         request = urllib.request.Request(
             "https://api.openai.com/v1/audio/speech",
             data=json.dumps(payload).encode("utf-8"),
