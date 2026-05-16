@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 
 from mutagen import File as MutagenFile
 from sqlalchemy.orm import Session
@@ -6,6 +7,9 @@ from sqlalchemy.orm import Session
 from .models import Track
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg"}
+MAX_TRACKS_PER_SCAN = 1000
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_tag(tags: dict, key: str):
@@ -50,6 +54,9 @@ def scan_library(folder_path: str, db: Session) -> dict:
     imported = 0
     skipped_duplicates = 0
     errors: list[dict] = []
+    limit_reached = False
+
+    logger.info("library.scan.started", extra={"folder": str(root), "max_tracks_per_scan": MAX_TRACKS_PER_SCAN})
 
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
@@ -62,6 +69,14 @@ def scan_library(folder_path: str, db: Session) -> dict:
             skipped_duplicates += 1
             continue
 
+        if imported >= MAX_TRACKS_PER_SCAN:
+            limit_reached = True
+            logger.info(
+                "library.scan.limit_reached",
+                extra={"folder": str(root), "max_tracks_per_scan": MAX_TRACKS_PER_SCAN, "scanned": scanned, "imported": imported},
+            )
+            break
+
         try:
             metadata = _extract_track_metadata(path)
             track = Track(file_path=file_path, **metadata)
@@ -71,9 +86,22 @@ def scan_library(folder_path: str, db: Session) -> dict:
             errors.append({"file_path": file_path, "error": str(exc)})
 
     db.commit()
+    logger.info(
+        "library.scan.completed",
+        extra={
+            "folder": str(root),
+            "scanned": scanned,
+            "imported": imported,
+            "skipped_duplicates": skipped_duplicates,
+            "errors": len(errors),
+            "limit_reached": limit_reached,
+        },
+    )
     return {
         "scanned": scanned,
         "imported": imported,
         "skipped_duplicates": skipped_duplicates,
         "errors": errors,
+        "limit_reached": limit_reached,
+        "max_tracks_per_scan": MAX_TRACKS_PER_SCAN,
     }
