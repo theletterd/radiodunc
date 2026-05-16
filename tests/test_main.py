@@ -291,7 +291,7 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert played.state.current_track.title == "One"
 
     advanced = player_next(db)
-    assert advanced.state.now_playing_type == "dj"
+    assert advanced.state.now_playing_type == "track"
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False

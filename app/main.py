@@ -5,6 +5,7 @@ import time
 import hashlib
 from pathlib import Path
 from datetime import datetime
+from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -39,6 +40,7 @@ from .schemas import (
 from .scheduler import build_station_queue
 from .stations import generate_stations
 from .tts import build_tts_provider, get_or_create_dj_clip
+from .playout_worker import PlayoutWorker
 
 Base.metadata.create_all(bind=engine)
 
@@ -87,7 +89,19 @@ def _log_event(event: str, **fields: object) -> None:
 
 _configure_logging()
 
-app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
+playout_worker = PlayoutWorker(tick_seconds=0.3)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    playout_worker.start()
+    try:
+        yield
+    finally:
+        playout_worker.stop()
+
+
+app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0", lifespan=lifespan)
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
 
 broadcast_engine = BroadcastEngine(Path("generated_audio") / "hls")
@@ -238,23 +252,6 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     )
 
 
-def _advance_player(state: PlayerState) -> None:
-    queue = json.loads(state.queue_json) if state.queue_json else []
-    if not queue:
-        state.is_playing = False
-        state.current_track_id = None
-        return
-    next_idx = state.queue_index + 1
-    if next_idx >= len(queue):
-        state.is_playing = False
-        state.current_track_id = None
-        return
-    state.queue_index = next_idx
-    item = queue[next_idx]
-    state.current_track_id = item.get("track_id") if item.get("type") == "track" else None
-
-
-
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
@@ -379,89 +376,16 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
 def player_next(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.next.requested", current_index=state.queue_index)
-    config = load_config()
-
     if not state.queue_json:
-        if state.current_station_id is None:
-            raise HTTPException(status_code=400, detail="No station selected")
-        station = db.query(Station).filter(Station.id == state.current_station_id).first()
-        if not station:
-            raise HTTPException(status_code=404, detail=f"Station {state.current_station_id} not found")
-        queue = build_station_queue(db=db, station_id=station.id, config=config, size=10, seed=None)
-        sequence = [
-            {"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"}
-            for track in queue["tracks"]
-        ]
-        state.queue_json = json.dumps(sequence)
-        state.queue_index = 0
-        state.current_track_id = sequence[0].get("track_id") if sequence else None
-        state.is_playing = bool(sequence)
-        db.commit()
-        db.refresh(state)
-        return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
+        raise HTTPException(status_code=400, detail="No queue available")
 
     queue = json.loads(state.queue_json) if state.queue_json else []
     if not queue or not (0 <= state.queue_index < len(queue)):
         state.is_playing = False
         state.current_track_id = None
     else:
-        current_item = queue[state.queue_index]
-        if current_item.get("type") == "track" and state.current_station_id is not None and state.queue_index + 1 < len(queue):
-            station = db.query(Station).filter(Station.id == state.current_station_id).first()
-            current_track = db.query(Track).filter(Track.id == current_item.get("track_id")).first()
-            next_item = queue[state.queue_index + 1]
-            next_track = db.query(Track).filter(Track.id == next_item.get("track_id")).first() if next_item.get("type") == "track" else None
-            payload_script = DJScriptGenerateRequest(
-                previous_track_id=current_track.id if current_track else None,
-                next_track_id=next_track.id if next_track else None,
-                include_weather=False,
-                include_news=False,
-                include_fake_ad=False,
-                max_sentences=3,
-            )
-            script = generate_dj_script(
-                station=station,
-                payload=payload_script,
-                previous_track=current_track,
-                next_track=next_track,
-                config=config if config.radio_polish_enabled else None,
-            )
-            opener = f"{_daypart_greeting(config)} from {station.name}. " if config.daypart_programming_enabled else ""
-            time_check = f"{_local_time_announcement(config)} and you're listening to {station.name}. " if config.time_announcement_enabled else ""
-            queue.insert(
-                state.queue_index + 1,
-                {
-                    "type": "dj",
-                    "label": f"{station.dj_name or 'DJ'} break",
-                    "script_text": f"{time_check}{opener}{script.script_text}",
-                    "is_ad_break": False,
-                },
-            )
-            state.queue_json = json.dumps(queue)
-            if station and current_track and next_track:
-                script_text = queue[state.queue_index + 1].get("script_text") or queue[state.queue_index + 1].get("label") or "Station ID"
-                voice = queue[state.queue_index + 1].get("voice")
-                try:
-                    provider = build_tts_provider(config)
-                except ValueError:
-                    provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-                _clip, audio_path, _cached = get_or_create_dj_clip(
-                    db,
-                    script_text=script_text,
-                    voice=voice,
-                    provider=provider,
-                    persist=False,
-                )
-                try:
-                    broadcast_engine.start_transition(
-                        station_id=station.id,
-                        current_track_path=_safe_media_path(current_track.file_path, config),
-                        dj_clip_path=_safe_media_path(audio_path, config),
-                        next_track_path=_safe_media_path(next_track.file_path, config),
-                    )
-                except Exception:
-                    logger.exception("broadcast.transition.start.failed station_id=%s", station.id)
-        _advance_player(state)
+        queue[state.queue_index]["planned_end_epoch"] = time.time()
+        state.queue_json = json.dumps(queue)
 
     db.commit()
     db.refresh(state)
