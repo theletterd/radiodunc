@@ -188,6 +188,20 @@ async function syncAudioToState() {
 }
 
 
+
+async function startPlayback() {
+  await ensureStationSelectedForPlayback();
+  await primePlaybackFromGesture();
+  const response = await api('/player/play', {
+    method: 'POST',
+    body: JSON.stringify({ station_id: state.station_id, queue_size: 12 }),
+  });
+  state = response.state;
+  loadedQueuePosition = null;
+  renderAll();
+  await syncAudioToState();
+}
+
 async function advanceToNextQueueItem() {
   const response = await api('/player/next', { method: 'POST' });
   state = response.state;
@@ -262,6 +276,12 @@ document.getElementById('refreshStationsBtn').addEventListener('click', async ()
   }
 });
 
+document.getElementById('playBtn').addEventListener('click', async () => {
+  console.log('[ui][button] play clicked', { stationId: state?.station_id });
+  await startPlayback();
+});
+
+
 document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next clicked', {
     queuePosition: state?.queue_position,
@@ -272,6 +292,12 @@ document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next flow complete');
 });
 
+
+
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  console.log('[ui][button] stop clicked');
+  await stopPlayback();
+});
 
 
 audioEl.addEventListener('ended', async () => {

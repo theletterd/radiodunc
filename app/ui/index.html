@@ -28,11 +28,13 @@
 
     <main>
       <h1 id="stationName">No station selected</h1>
-      <p id="stationMeta" class="muted">Pick a station, then press Next.</p>
+      <p id="stationMeta" class="muted">Pick a station, then press Play.</p>
 
       <div class="card">
         <div class="row">
-          <button id="nextBtn" class="primary">Next</button>
+          <button id="playBtn" class="primary">Play</button>
+          <button id="nextBtn">Next</button>
+          <button id="stopBtn">Stop</button>
           <label>Volume <input id="volume" type="range" min="0" max="100" value="80" /></label>
         </div>
       </div>
