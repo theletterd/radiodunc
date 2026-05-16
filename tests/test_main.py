@@ -22,9 +22,12 @@ from app.main import (
     update_player_state,
     generate_station_dj_script,
     synthesize_station_dj_clip,
+    player_play,
+    player_next,
+    player_stop,
 )
 from app.models import DJClip, FavoriteStation, RecentStation, Station, Track
-from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -261,3 +264,33 @@ def test_synthesize_station_dj_clip_creates_and_caches():
     assert second.cached is True
     assert first.audio_path == second.audio_path
     assert db.query(DJClip).count() == 1
+
+
+def test_player_play_next_stop_flow(monkeypatch):
+    db = _make_db_session()
+    station = Station(name="Flow FM", dj_name="DJ Flow")
+    track1 = Track(file_path="/m/1.mp3", title="One", artist="A")
+    track2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
+    db.add_all([station, track1, track2])
+    db.commit()
+    db.refresh(station)
+    db.refresh(track1)
+    db.refresh(track2)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr(
+        "app.main.build_station_queue",
+        lambda **_kwargs: {"tracks": [track1, track2]},
+    )
+
+    played = player_play(PlayerPlayRequest(station_id=station.id, queue_size=2), db)
+    assert played.state.is_playing is True
+    assert played.state.queue_depth == 4
+    assert played.state.current_track is not None
+    assert played.state.current_track.title == "One"
+
+    advanced = player_next(db)
+    assert advanced.state.now_playing_type == "dj"
+
+    stopped = player_stop(db)
+    assert stopped.state.is_playing is False
