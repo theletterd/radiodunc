@@ -4,7 +4,7 @@ import os
 import time
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
@@ -449,27 +449,46 @@ def broadcast_live_manifest(request: Request):
         )
         raise HTTPException(status_code=503, detail="Live stream manifest is stale")
 
-    content = manifest.read_text(encoding="utf-8")
-    size = len(content.encode("utf-8"))
-    _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header)
-    return Response(
-        content=content,
-        media_type="application/vnd.apple.mpegurl",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
-        },
-    )
+    manifest_bytes = manifest.read_bytes()
+    size = len(manifest_bytes)
+
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    manifest_ttl_seconds = 2
+    expires_at = now_utc + timedelta(seconds=manifest_ttl_seconds)
+    headers = {
+        "Cache-Control": f"public, max-age={manifest_ttl_seconds}, must-revalidate",
+        "Expires": expires_at.strftime("%a, %d %b %Y %H:%M:%S GMT"),
+        "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
+        "Accept-Ranges": "bytes",
+    }
+
+    if range_header and range_header.startswith("bytes="):
+        start_text, _sep, _end_text = range_header[6:].partition("-")
+        try:
+            start = int(start_text) if start_text else 0
+        except ValueError:
+            start = 0
+        if start < 0 or start >= size:
+            headers["Content-Range"] = f"bytes */{size}"
+            _log_event("broadcast.manifest.range_not_satisfiable", path=str(manifest), size_bytes=size, range=range_header)
+            return Response(status_code=416, headers=headers)
+        body = manifest_bytes[start:]
+        headers["Content-Range"] = f"bytes {start}-{size - 1}/{size}"
+        headers["Content-Length"] = str(len(body))
+        _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header, partial=True)
+        return Response(content=body, status_code=206, media_type="application/vnd.apple.mpegurl", headers=headers)
+
+    headers["Content-Length"] = str(size)
+    _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header, partial=False)
+    return Response(content=manifest_bytes, media_type="application/vnd.apple.mpegurl", headers=headers)
 
 
 @app.get("/broadcast/{segment_name}")
 def broadcast_live_segment(segment_name: str, request: Request):
-    segment = broadcast_engine.segment_path(segment_name)
+    segment = broadcast_engine.resolve_segment_path(segment_name)
     range_header = request.headers.get("range")
-    if not segment.exists() or segment.suffix != ".ts":
-        _log_event("broadcast.segment.miss", segment=segment_name, path=str(segment), range=range_header)
+    if segment is None or segment.suffix != ".ts":
+        _log_event("broadcast.segment.miss", segment=segment_name, path=str(broadcast_engine.segment_path(segment_name)), range=range_header)
         raise HTTPException(status_code=404, detail="Segment not found")
     size = segment.stat().st_size
     _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
@@ -480,9 +499,8 @@ def broadcast_live_segment(segment_name: str, request: Request):
         media_type="video/mp2t",
         filename=segment.name,
         headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
+            "Cache-Control": "public, max-age=60, immutable",
+            "Expires": (datetime.now(ZoneInfo("UTC")) + timedelta(seconds=60)).strftime("%a, %d %b %Y %H:%M:%S GMT"),
             "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         },
     )
