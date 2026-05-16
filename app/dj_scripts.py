@@ -86,8 +86,31 @@ def _generate_openai_script(
 
     output_text = data.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
-        logger.info("OpenAI DJ script response included output_text")
+        logger.info("OpenAI DJ script response included top-level output_text")
         return output_text
+
+    output_items = data.get("output")
+    if isinstance(output_items, list):
+        text_chunks: list[str] = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content_items = item.get("content")
+            if not isinstance(content_items, list):
+                continue
+            for content in content_items:
+                if not isinstance(content, dict) or content.get("type") != "output_text":
+                    continue
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    text_chunks.append(text.strip())
+        if text_chunks:
+            assembled_text = " ".join(text_chunks)
+            logger.info("OpenAI DJ script response extracted text from output.content")
+            return assembled_text
+
+    response_preview = json.dumps(data, ensure_ascii=False)[:2000]
+    logger.info("OpenAI DJ script raw response preview=%s", response_preview)
     logger.warning("OpenAI DJ script response missing usable output_text; falling back to sentence pool")
     return None
 
@@ -129,6 +152,13 @@ def generate_dj_script(
         sentence_pool.append("This set is sponsored by Midnight Coffee Co.—brew loud, drive smooth.")
 
     if config is not None:
+        logger.info(
+            "DJ script generation path: station_id=%s provider=%s openai_key_present=%s model=%s",
+            station.id,
+            config.script_provider,
+            bool(config.openai_api_key),
+            config.openai_text_model,
+        )
         scripted = _generate_openai_script(station, payload, previous_track, next_track, config)
         if scripted:
             parts = [part.strip() for part in scripted.replace("\n", " ").split(".") if part.strip()]
