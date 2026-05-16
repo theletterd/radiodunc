@@ -183,7 +183,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 8 — Radio Polish
 
-**Status:** `TODO`
+**Status:** `IN PROGRESS`
 
 ### Goals
 - Improve realism and production quality.
