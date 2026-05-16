@@ -62,6 +62,17 @@ function stationName(id) {
   return stations.find((s) => s.id === id)?.name || `#${id}`;
 }
 
+
+async function ensureStationSelectedForPlayback() {
+  if (state?.station_id) return;
+  const fallbackStationId = state?.recent_station_ids?.[0] ?? state?.favorites?.[0] ?? stations?.[0]?.id;
+  if (!fallbackStationId) {
+    throw new Error('No station available. Scan library and generate stations first.');
+  }
+  console.log('[ui][station] auto-selecting fallback station', { stationId: fallbackStationId });
+  state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: fallbackStationId }) });
+}
+
 function renderStations() {
   const q = document.getElementById('search').value.toLowerCase();
   const el = document.getElementById('stations');
@@ -99,7 +110,7 @@ function renderStations() {
 function renderPlayer() {
   const current = stations.find((s) => s.id === state?.station_id);
   document.getElementById('stationName').textContent = current?.name || 'No station selected';
-  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
+  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Next.';
   const sliderValue = state?.volume ?? 80;
   document.getElementById('volume').value = sliderValue;
   audioEl.volume = musicTargetVolume();
