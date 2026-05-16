@@ -15,6 +15,7 @@ from app.main import (
     generate_station_queue,
     get_config,
     healthcheck,
+    root,
     list_stations,
     list_tracks,
     scan_library_endpoint,
@@ -41,6 +42,12 @@ def _make_db_session():
 
 def test_healthcheck_returns_ok():
     assert healthcheck() == {"status": "ok"}
+
+
+def test_root_redirects_to_ui():
+    response = root()
+    assert response.status_code == 307
+    assert response.headers.get("location") == "/ui/"
 
 
 def test_ui_index_file_exists():
@@ -291,9 +298,8 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert played.state.current_track is not None
     assert played.state.current_track.title == "One"
 
-    with pytest.raises(HTTPException) as exc:
-        player_next(db)
-    assert exc.value.status_code == 403
+    nexted = player_next(db)
+    assert nexted.state.is_playing is True
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False
