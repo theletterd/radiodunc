@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -8,16 +9,20 @@ from sqlalchemy.orm import sessionmaker
 from app.config import AppConfig
 from app.database import Base
 from app.main import (
+    get_player_state,
     generate_stations_endpoint,
+    set_favorite_station,
+    generate_station_queue,
     get_config,
     healthcheck,
     list_stations,
     list_tracks,
     scan_library_endpoint,
     update_config,
+    update_player_state,
 )
-from app.models import Station, Track
-from app.schemas import LibraryScanRequest, QueueGenerateRequest, StationGenerateRequest
+from app.models import FavoriteStation, RecentStation, Station, Track
+from app.schemas import FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -29,6 +34,13 @@ def _make_db_session():
 
 def test_healthcheck_returns_ok():
     assert healthcheck() == {"status": "ok"}
+
+
+def test_ui_index_file_exists():
+    html = Path("app/ui/index.html").read_text(encoding="utf-8")
+    assert "RadioDunc" in html
+
+
 
 
 def test_get_and_put_config_round_trip(monkeypatch):
@@ -159,8 +171,6 @@ def test_generate_station_queue_endpoint_maps_value_error(monkeypatch):
             "tracks": [],
         }
 
-    from app.main import generate_station_queue
-
     monkeypatch.setattr("app.main.build_station_queue", fake_queue)
     ok = generate_station_queue(1, QueueGenerateRequest(size=1), db)
     assert ok["station_id"] == 1
@@ -169,3 +179,41 @@ def test_generate_station_queue_endpoint_maps_value_error(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         generate_station_queue(1, QueueGenerateRequest(size=1), db)
     assert exc.value.status_code == 400
+
+
+def test_player_state_defaults_and_updates():
+    db = _make_db_session()
+    station = Station(name="Solo FM")
+    db.add(station)
+    db.commit()
+    db.refresh(station)
+
+    initial = get_player_state(db)
+    assert initial.station_id is None
+    assert initial.is_playing is False
+    assert initial.volume == 80
+    assert initial.favorites == []
+
+    updated = update_player_state(PlayerStateUpdateRequest(station_id=station.id, is_playing=True, volume=65), db)
+    assert updated.station_id == station.id
+    assert updated.is_playing is True
+    assert updated.volume == 65
+    assert updated.station is not None
+    assert updated.station.name == "Solo FM"
+    assert updated.recent_station_ids == [station.id]
+
+    assert db.query(RecentStation).count() == 1
+
+
+def test_set_favorite_station_adds_and_removes():
+    db = _make_db_session()
+    station = Station(name="Fav FM")
+    db.add(station)
+    db.commit()
+    db.refresh(station)
+
+    set_favorite_station(station.id, FavoriteStationRequest(favorite=True), db)
+    assert db.query(FavoriteStation).count() == 1
+
+    set_favorite_station(station.id, FavoriteStationRequest(favorite=False), db)
+    assert db.query(FavoriteStation).count() == 0
