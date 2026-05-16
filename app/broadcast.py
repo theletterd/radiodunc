@@ -106,6 +106,11 @@ class BroadcastEngine:
             logger.info("broadcast.start station_id=%s source=%s slot=%s", station_id, source_track_path, target_slot)
             self._start_proc(cmd, target_slot)
             if not self._wait_until_hls_ready(target_slot):
+                proc = self._procs.get(target_slot)
+                stderr_tail = ""
+                if proc is not None and proc.stderr is not None:
+                    stderr_tail = proc.stderr.read()[-800:]
+                logger.error("broadcast.start.not_ready station_id=%s slot=%s stderr=%s", station_id, target_slot, stderr_tail)
                 self._last_error = "broadcast start failed to produce hls output"
                 self._stop_slot_locked(target_slot)
                 return
@@ -131,6 +136,11 @@ class BroadcastEngine:
             logger.info("broadcast.transition.start station_id=%s current=%s dj=%s next=%s slot=%s", station_id, current_track_path, dj_clip_path, next_track_path, target_slot)
             self._start_proc(cmd, target_slot)
             if not self._wait_until_hls_ready(target_slot):
+                proc = self._procs.get(target_slot)
+                stderr_tail = ""
+                if proc is not None and proc.stderr is not None:
+                    stderr_tail = proc.stderr.read()[-800:]
+                logger.error("broadcast.transition.not_ready station_id=%s slot=%s stderr=%s", station_id, target_slot, stderr_tail)
                 self._last_error = "broadcast transition failed to produce hls output"
                 self._stop_slot_locked(target_slot)
                 return
