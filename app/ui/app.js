@@ -1,24 +1,50 @@
 let stations = [];
 let state = null;
 const audioEl = document.getElementById('playerAudio');
-const overlayEl = document.getElementById('overlayAudio');
 let loadedQueuePosition = null;
 let transitionInFlight = false;
 let transitionEpoch = 0;
 const FADE_DURATION_MS = 8000;
-const DJ_DUCK_FADE_DURATION_MS = 500;
-const DJ_DUCK_MULTIPLIER = 0.5;
-const DJ_FIXED_VOLUME = 1;
-const TRACK_TO_DJ_PREROLL_SECONDS = 20;
-let djPreparedForTrackQueuePosition = null;
-let djOverlayFinishingHandledForQueuePosition = null;
-let trackTransitionTriggeredForQueuePosition = null;
-let overlapTrackQueuePosition = null;
-let overlapTrackEnded = false;
-let overlapDjEnded = false;
-let overlapAdvancedToSecondTrack = false;
 let playbackRetryTimer = null;
+let autoplayBlocked = false;
+let autoplayUnlockHandlerBound = false;
+let playbackPrimed = false;
 const PLAYBACK_RETRY_DELAY_MS = 750;
+
+
+function bindAutoplayUnlockHandler() {
+  if (autoplayUnlockHandlerBound) return;
+  autoplayUnlockHandlerBound = true;
+  const unlockPlayback = async () => {
+    if (!autoplayBlocked) return;
+    autoplayBlocked = false;
+    console.log('[ui][audio] user interaction detected; retrying playback');
+    await syncAudioToState();
+  };
+  document.addEventListener('pointerdown', unlockPlayback, { passive: true });
+  document.addEventListener('keydown', unlockPlayback, { passive: true });
+}
+
+
+async function primePlaybackFromGesture() {
+  if (playbackPrimed) return;
+  const previousMuted = audioEl.muted;
+  const previousVolume = audioEl.volume;
+  try {
+    audioEl.muted = true;
+    audioEl.volume = 0;
+    await audioEl.play();
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    playbackPrimed = true;
+    console.log('[ui][audio] playback primed from user gesture');
+  } catch (err) {
+    console.warn('[ui][audio] playback prime attempt failed', { err });
+  } finally {
+    audioEl.muted = previousMuted;
+    audioEl.volume = previousVolume;
+  }
+}
 
 function musicTargetVolume() {
   return Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
@@ -151,11 +177,8 @@ async function syncAudioToState() {
   if (!state?.is_playing) {
     console.log('[ui][audio] sync stopping playback because state is not playing');
     audioEl.pause();
-    overlayEl.pause();
     audioEl.removeAttribute('src');
-    overlayEl.removeAttribute('src');
     audioEl.load();
-    overlayEl.load();
     loadedQueuePosition = null;
     clearPlaybackRetry();
     return;
@@ -167,10 +190,8 @@ async function syncAudioToState() {
 
   if (loadedQueuePosition !== state.queue_position) {
     console.log('[ui][audio] loading queue position', { from: loadedQueuePosition, to: state.queue_position });
-    audioEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
+    audioEl.src = `/player/stream?pos=${state.queue_position}&ts=${Date.now()}`;
     loadedQueuePosition = state.queue_position;
-    djPreparedForTrackQueuePosition = null;
-    djOverlayFinishingHandledForQueuePosition = null;
   }
   try {
     clearPlaybackRetry();
@@ -180,8 +201,15 @@ async function syncAudioToState() {
     if (audioEl.volume < targetVolume - 0.01) {
       await fadeToVolume(targetVolume, FADE_DURATION_MS);
     }
-  } catch (_err) {
-    console.warn('[ui][audio] play() failed, scheduling retry');
+  } catch (err) {
+    if (err?.name === 'NotAllowedError') {
+      if (!autoplayBlocked) {
+        autoplayBlocked = true;
+        console.warn('[ui][audio] play() blocked by browser autoplay policy; waiting for user interaction', { err });
+      }
+      return;
+    }
+    console.warn('[ui][audio] play() failed, scheduling retry', { err });
     schedulePlaybackRetry();
   }
 }
@@ -202,110 +230,16 @@ async function fadeThenAdvance(actionFn) {
     audioEl.volume = 0;
     await syncAudioToState();
     await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
-    overlapTrackQueuePosition = null;
-    overlapTrackEnded = false;
-    overlapDjEnded = false;
-    overlapAdvancedToSecondTrack = false;
-  } finally {
+          } finally {
     if (epoch === transitionEpoch) {
       transitionInFlight = false;
     }
   }
 }
 
-async function runDjOverlapTransition() {
-  if (!state?.is_playing || state?.now_playing_type !== 'track') {
-    await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
-    return;
-  }
-
-  if (transitionInFlight || djPreparedForTrackQueuePosition === state.queue_position) return;
-  const epoch = ++transitionEpoch;
-  transitionInFlight = true;
-  const targetVolume = musicTargetVolume();
-  const duckedMusicVolume = targetVolume * DJ_DUCK_MULTIPLIER;
-  try {
-    const trackQueuePosition = state.queue_position;
-    overlapTrackQueuePosition = trackQueuePosition;
-    overlapTrackEnded = false;
-    overlapDjEnded = false;
-    overlapAdvancedToSecondTrack = false;
-    const djResponse = await api('/player/next', { method: 'POST' });
-    if (djResponse?.state?.now_playing_type !== 'dj') {
-      state = djResponse.state;
-      renderAll();
-      audioEl.volume = 0;
-      await syncAudioToState();
-      await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
-      return;
-    }
-
-    state = djResponse.state;
-    renderAll();
-    overlayEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
-    overlayEl.volume = DJ_FIXED_VOLUME;
-    djOverlayFinishingHandledForQueuePosition = null;
-    try {
-      await overlayEl.play();
-    } catch (_err) { }
-
-    if (!audioEl.paused) {
-      await fadeToVolume(duckedMusicVolume, DJ_DUCK_FADE_DURATION_MS, epoch);
-    }
-
-    djPreparedForTrackQueuePosition = trackQueuePosition;
-  } finally {
-    if (epoch === transitionEpoch) {
-      transitionInFlight = false;
-    }
-  }
-}
-
-
-async function maybeAdvanceAfterOverlapProgress() {
-  if (overlapTrackQueuePosition === null) return;
-  if (!overlapAdvancedToSecondTrack && overlapTrackEnded) {
-    overlapAdvancedToSecondTrack = true;
-    await transitionFromDjToNextTrack({ keepDjOverlayPlaying: !overlapDjEnded });
-    return;
-  }
-  if (overlapAdvancedToSecondTrack && overlapDjEnded) {
-    overlayEl.pause();
-    overlayEl.removeAttribute('src');
-    overlayEl.load();
-    overlapTrackQueuePosition = null;
-    overlapTrackEnded = false;
-    overlapDjEnded = false;
-    overlapAdvancedToSecondTrack = false;
-  }
-}
-
-async function transitionFromDjToNextTrack({ keepDjOverlayPlaying = false } = {}) {
+async function advanceToNextQueueItem() {
   if (transitionInFlight) return;
-  const epoch = ++transitionEpoch;
-  transitionInFlight = true;
-  const targetVolume = musicTargetVolume();
-  try {
-    const nextTrackResponse = await api('/player/next', { method: 'POST' });
-    state = nextTrackResponse.state;
-    renderAll();
-    if (!keepDjOverlayPlaying) {
-      overlayEl.pause();
-      overlayEl.removeAttribute('src');
-      overlayEl.load();
-    }
-    audioEl.volume = 0;
-    await syncAudioToState();
-    await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
-    overlapTrackQueuePosition = null;
-    overlapTrackEnded = false;
-    overlapDjEnded = false;
-    overlapAdvancedToSecondTrack = false;
-  } finally {
-    if (epoch === transitionEpoch) {
-      transitionInFlight = false;
-    }
-  }
+  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
 }
 
 async function stopPlayback() {
@@ -320,19 +254,9 @@ async function stopPlayback() {
     }
   }
   audioEl.pause();
-  overlayEl.pause();
   audioEl.removeAttribute('src');
-  overlayEl.removeAttribute('src');
   audioEl.load();
-  overlayEl.load();
   loadedQueuePosition = null;
-  djPreparedForTrackQueuePosition = null;
-  djOverlayFinishingHandledForQueuePosition = null;
-  trackTransitionTriggeredForQueuePosition = null;
-  overlapTrackQueuePosition = null;
-  overlapTrackEnded = false;
-  overlapDjEnded = false;
-  overlapAdvancedToSecondTrack = false;
   clearPlaybackRetry();
   renderAll();
 }
@@ -393,6 +317,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
     console.warn('[ui][button] play ignored: no station selected');
     return;
   }
+  await primePlaybackFromGesture();
   const response = await api('/player/play', { method: 'POST', body: JSON.stringify({ station_id: state.station_id, queue_size: 10 }) });
   state = response.state;
   console.log('[ui][button] play response', {
@@ -410,7 +335,7 @@ document.getElementById('nextBtn').addEventListener('click', async () => {
     queuePosition: state?.queue_position,
     nowPlayingType: state?.now_playing_type,
   });
-  await runDjOverlapTransition();
+  await advanceToNextQueueItem();
   console.log('[ui][button] next flow complete');
 });
 
@@ -420,41 +345,13 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   console.log('[ui][button] stop flow complete');
 });
 
-audioEl.addEventListener('timeupdate', async () => {
-  if (transitionInFlight) return;
-  if (!state?.is_playing || state?.now_playing_type !== 'track') return;
-  if (!Number.isFinite(audioEl.duration) || audioEl.duration <= 0) return;
 
-  const remaining = audioEl.duration - audioEl.currentTime;
-  if (trackTransitionTriggeredForQueuePosition === state.queue_position) return;
-  if (remaining <= TRACK_TO_DJ_PREROLL_SECONDS) {
-    trackTransitionTriggeredForQueuePosition = state.queue_position;
-    await runDjOverlapTransition();
-  }
-});
 
 audioEl.addEventListener('ended', async () => {
   if (transitionInFlight) return;
-  if (overlapTrackQueuePosition !== null) {
-    overlapTrackEnded = true;
-    await maybeAdvanceAfterOverlapProgress();
-    return;
-  }
-  if (trackTransitionTriggeredForQueuePosition === state?.queue_position) return;
-  trackTransitionTriggeredForQueuePosition = state?.queue_position ?? null;
-  await runDjOverlapTransition();
+  await advanceToNextQueueItem();
 });
 
-overlayEl.addEventListener('ended', async () => {
-  if (transitionInFlight) return;
-  if (overlapTrackQueuePosition !== null) {
-    overlapDjEnded = true;
-    djOverlayFinishingHandledForQueuePosition = state?.queue_position ?? null;
-    await maybeAdvanceAfterOverlapProgress();
-    return;
-  }
-  await transitionFromDjToNextTrack();
-});
 
 document.getElementById('volume').addEventListener('input', async (event) => {
   console.log('[ui][control] volume input', { value: Number(event.target.value) });
@@ -477,6 +374,7 @@ window.addEventListener('focus', async () => {
 });
 
 async function init() {
+  bindAutoplayUnlockHandler();
   console.log('[ui][init] start');
   await loadConfigDefaults();
   await loadStations();
