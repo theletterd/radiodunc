@@ -64,11 +64,57 @@ DEFAULT_STATION_PRESETS: list[StationPreset] = [
 
 class AppConfig(BaseModel):
     music_folder: str = "~/Music"
+    tts_provider: str = "openai"
+    script_provider: str = "openai"
+    openai_api_key: str | None = None
+    openai_text_model: str = "gpt-4o-mini"
+    openai_tts_model: str = "gpt-4o-mini-tts"
+    openai_tts_voice: str = "alloy"
     station_generation_count: int = 6
     station_generation_seed: int | None = None
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     station_presets: list[StationPreset] = Field(default_factory=lambda: [preset.model_copy() for preset in DEFAULT_STATION_PRESETS])
+
+    @field_validator("tts_provider", mode="before")
+    @classmethod
+    def normalize_tts_provider(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip().lower()
+        if normalized not in {"tone", "openai"}:
+            raise ValueError("must be one of: tone, openai")
+        return normalized
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def normalize_optional_secret_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("openai_text_model", "openai_tts_model", "openai_tts_voice", mode="before")
+    @classmethod
+    def normalize_model_id(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("script_provider", mode="before")
+    @classmethod
+    def normalize_script_provider(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        normalized = value.strip().lower()
+        if normalized not in {"template", "openai"}:
+            raise ValueError("must be one of: template, openai")
+        return normalized
 
     @field_validator("station_presets")
     @classmethod

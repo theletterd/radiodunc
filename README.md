@@ -184,3 +184,17 @@ curl -X POST http://127.0.0.1:8000/stations/1/dj-clip \
 ```
 
 The clip is cached by a script+voice hash, so repeated requests return the same stored audio path.
+
+
+## OpenAI Script + TTS (Phase 8)
+
+You can use OpenAI for both DJ script generation and DJ clip TTS with these config fields:
+
+- `script_provider`: `"openai"` (or `"template"` for local fallback)
+- `tts_provider`: `"openai"` (or `"tone"` for local fallback)
+- `openai_api_key`: your OpenAI API key
+- optional `openai_text_model` (defaults to `gpt-4o-mini`)
+- optional `openai_tts_model` (defaults to `gpt-4o-mini-tts`)
+- optional `openai_tts_voice` (defaults to `alloy`)
+
+The UI volume slider updates playback volume live while dragging.

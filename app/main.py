@@ -30,7 +30,7 @@ from .schemas import (
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
-from .tts import get_or_create_dj_clip
+from .tts import build_tts_provider, get_or_create_dj_clip
 
 Base.metadata.create_all(bind=engine)
 
@@ -192,7 +192,7 @@ def player_current_media(db: Session = Depends(get_db)):
     if item.get("type") == "dj":
         script_text = item.get("script_text") or item.get("label") or "Station ID"
         voice = item.get("voice")
-        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice)
+        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice, provider=build_tts_provider(config))
         media_path = _safe_media_path(clip.audio_path, config)
         return FileResponse(str(media_path), filename=media_path.name)
 
@@ -298,7 +298,7 @@ def generate_station_dj_script(station_id: int, payload: DJScriptGenerateRequest
         if not next_track:
             raise HTTPException(status_code=404, detail=f"Track {payload.next_track_id} not found")
 
-    return generate_dj_script(station, payload, previous_track, next_track)
+    return generate_dj_script(station, payload, previous_track, next_track, config=load_config())
 
 
 @app.post("/stations/{station_id}/dj-clip", response_model=DJClipResponse)
@@ -307,5 +307,5 @@ def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest
     if not station:
         raise HTTPException(status_code=404, detail=f"Station {station_id} not found")
 
-    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice)
+    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=build_tts_provider(load_config()))
     return DJClipResponse(clip_id=clip.id, audio_path=clip.audio_path, voice=clip.voice, cached=cached)
