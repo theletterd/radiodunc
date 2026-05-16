@@ -277,6 +277,14 @@ def player_current_media(db: Session = Depends(get_db)):
     raise HTTPException(status_code=409, detail="Current queue item has unsupported type")
 
 
+
+
+@app.get("/player/stream")
+def player_stream(db: Session = Depends(get_db)):
+    """Transitional single-audio endpoint for frontend playback."""
+    return player_current_media(db)
+
+
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
