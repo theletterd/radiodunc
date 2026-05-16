@@ -57,6 +57,13 @@ class PlayoutState:
 
 
 class PlayoutWorker:
+    """Timeline-based playout.
+
+    Listener metrics are intentionally excluded from progression logic. If
+    `PlayerState.is_playing` is true, the worker continues to progress live
+    playout regardless of audience size.
+    """
+
     def __init__(
         self,
         tick_seconds: float = 0.3,

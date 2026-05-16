@@ -26,9 +26,10 @@ from app.main import (
     player_next,
     player_stop,
     player_current_media,
+    listeners_heartbeat,
 )
 from app.models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
-from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, ListenerHeartbeatRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -290,8 +291,9 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert played.state.current_track is not None
     assert played.state.current_track.title == "One"
 
-    advanced = player_next(db)
-    assert advanced.state.now_playing_type == "track"
+    with pytest.raises(HTTPException) as exc:
+        player_next(db)
+    assert exc.value.status_code == 403
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False
@@ -367,3 +369,15 @@ def test_player_current_media_rejects_path_outside_allowed_root(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         player_current_media(db)
     assert exc.value.status_code == 403
+
+
+def test_listener_heartbeat_tracks_last_seen_by_session_id():
+    db = _make_db_session()
+
+    first = listeners_heartbeat(ListenerHeartbeatRequest(session_id="session-a"), db)
+    second = listeners_heartbeat(ListenerHeartbeatRequest(session_id="session-a"), db)
+    third = listeners_heartbeat(ListenerHeartbeatRequest(session_id="session-b"), db)
+
+    assert first.session_id == "session-a"
+    assert second.last_seen_at_epoch >= first.last_seen_at_epoch
+    assert third.active_listener_count == 2
