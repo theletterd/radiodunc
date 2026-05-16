@@ -304,7 +304,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 
 audioEl.addEventListener('ended', async () => {
-  console.warn('[ui][audio] ended event received; attempting live stream recovery');
+  console.warn('[ui][audio] ended event received; attempting stream recovery');
   loadedQueuePosition = null;
   await syncAudioToState();
 });
