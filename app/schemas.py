@@ -140,3 +140,13 @@ class BroadcastStatusResponse(BaseModel):
     stream_url: str
     started_at_epoch: float | None = None
     last_error: str | None = None
+
+
+class ListenerHeartbeatRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=256)
+
+
+class ListenerHeartbeatResponse(BaseModel):
+    session_id: str
+    last_seen_at_epoch: float
+    active_listener_count: int

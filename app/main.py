@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from .config import AppConfig, load_config, save_config
 from .database import Base, engine, get_db
-from .models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
+from .models import DJClip, FavoriteStation, ListenerSession, PlayerState, RecentStation, Station, Track
 from .dj_scripts import generate_dj_script
 from .scanner import scan_library
 from .broadcast import BroadcastEngine
@@ -38,6 +38,8 @@ from .schemas import (
     StationOut,
     TrackOut,
     BroadcastStatusResponse,
+    ListenerHeartbeatRequest,
+    ListenerHeartbeatResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
@@ -292,6 +294,12 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     )
 
 
+def _active_listener_count(db: Session, *, now_epoch: float | None = None, active_window_seconds: float = 30.0) -> int:
+    now_epoch = now_epoch or time.time()
+    min_last_seen = now_epoch - active_window_seconds
+    return db.query(ListenerSession).filter(ListenerSession.last_seen_at_epoch >= min_last_seen).count()
+
+
 
 def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
     expected = os.getenv("ADMIN_API_TOKEN")
@@ -318,6 +326,25 @@ def _enqueue_admin_command(state: PlayerState, payload: PlayerAdminCommandReques
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
+
+
+@app.post("/listeners/heartbeat", response_model=ListenerHeartbeatResponse)
+def listeners_heartbeat(payload: ListenerHeartbeatRequest, db: Session = Depends(get_db)):
+    now_epoch = time.time()
+    listener = db.query(ListenerSession).filter(ListenerSession.session_id == payload.session_id).first()
+    if listener is None:
+        listener = ListenerSession(session_id=payload.session_id, last_seen_at_epoch=now_epoch)
+        db.add(listener)
+    else:
+        listener.last_seen_at_epoch = now_epoch
+    db.commit()
+    db.refresh(listener)
+
+    return ListenerHeartbeatResponse(
+        session_id=listener.session_id,
+        last_seen_at_epoch=listener.last_seen_at_epoch,
+        active_listener_count=_active_listener_count(db, now_epoch=now_epoch),
+    )
 
 
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
@@ -404,7 +431,7 @@ def broadcast_live_segment(segment_name: str):
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
-def player_play(payload: PlayerPlayRequest, _admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
+def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
     state = _get_or_create_player_state(db)
     _log_event("player.play.requested", station_id=payload.station_id, queue_size=payload.queue_size, seed=payload.seed)
     config = load_config()
@@ -446,7 +473,7 @@ def player_play(payload: PlayerPlayRequest, _admin: None = Depends(_require_admi
 
 
 @app.post("/player/next", response_model=PlayerActionResponse)
-def player_next(_admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
+def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
     state = _get_or_create_player_state(db)
     if state.playout_mode == "live":
         raise HTTPException(status_code=403, detail="/player/next is disabled during live playout; use /player/admin/command")
@@ -471,7 +498,7 @@ def player_next(_admin: None = Depends(_require_admin), db: Session = Depends(ge
 
 
 @app.post("/player/admin/command", response_model=PlayerActionResponse)
-def player_admin_command(payload: PlayerAdminCommandRequest, _admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
+def player_admin_command(payload: PlayerAdminCommandRequest, db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
     state = _get_or_create_player_state(db)
     if payload.command == "force_station_change" and payload.station_id is None:
         raise HTTPException(status_code=400, detail="station_id is required for force_station_change")
