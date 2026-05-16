@@ -321,6 +321,15 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
             breaks_since_weather = 0
         if payload_script.include_news:
             breaks_since_news = 0
+        _log_event(
+            "player.play.dj_script.requested",
+            station_id=station.id,
+            radio_polish_enabled=config.radio_polish_enabled,
+            script_provider=config.script_provider,
+            include_weather=payload_script.include_weather,
+            include_news=payload_script.include_news,
+            include_fake_ad=payload_script.include_fake_ad,
+        )
         script = generate_dj_script(
             station=station,
             payload=payload_script,
