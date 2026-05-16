@@ -10,6 +10,7 @@ from .prompt_library import (
     render_ad_break_prompt,
     render_news_prompt,
     render_song_transition_prompt,
+    render_time_check_prompt,
     render_weather_prompt,
 )
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
@@ -44,6 +45,8 @@ def _generate_openai_script(
         prompt_sections.append(render_news_prompt(station))
     if payload.include_fake_ad:
         prompt_sections.append(render_ad_break_prompt(station))
+    if config.time_announcement_enabled:
+        prompt_sections.append(render_time_check_prompt(station, "the current local time"))
     prompt_sections.append("Return plain text only.")
     prompt = " ".join(prompt_sections)
     req = urllib.request.Request(

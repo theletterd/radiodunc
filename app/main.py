@@ -55,6 +55,15 @@ def _daypart_greeting(config: AppConfig) -> str:
     return "Late night vibes"
 
 
+def _local_time_announcement(config: AppConfig) -> str:
+    try:
+        zone = ZoneInfo(config.alerts.local_time_zone)
+    except Exception:  # noqa: BLE001
+        zone = ZoneInfo("UTC")
+    stamp = datetime.now(zone).strftime("%-I:%M%p").lower()
+    return f"It's {stamp}"
+
+
 @app.get("/health")
 def healthcheck():
     return {"status": "ok"}
@@ -232,6 +241,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     sequence = []
     breaks_since_weather = 0
     breaks_since_news = 0
+    breaks_since_time_check = 0
     tracks_since_break = 0
     for idx, track in enumerate(queue["tracks"]):
         sequence.append({"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"})
@@ -241,6 +251,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
 
         breaks_since_weather += 1
         breaks_since_news += 1
+        breaks_since_time_check += 1
         payload_script = DJScriptGenerateRequest(
             previous_track_id=track.id,
             next_track_id=queue["tracks"][idx + 1].id if idx + 1 < len(queue["tracks"]) else None,
@@ -261,11 +272,15 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
             config=config if config.radio_polish_enabled else None,
         )
         opener = f"{_daypart_greeting(config)} from {station.name}. " if config.daypart_programming_enabled else ""
+        time_check = ""
+        if config.time_announcement_enabled and breaks_since_time_check >= config.time_announcement_every_breaks:
+            time_check = f"{_local_time_announcement(config)} and you're listening to {station.name}. "
+            breaks_since_time_check = 0
         sequence.append(
             {
                 "type": "dj",
                 "label": f"{station.dj_name or 'DJ'} break",
-                "script_text": f"{opener}{script.script_text}",
+                "script_text": f"{time_check}{opener}{script.script_text}",
             }
         )
         tracks_since_break = 0

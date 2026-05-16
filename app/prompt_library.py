@@ -42,3 +42,10 @@ def render_news_prompt(station: Station) -> str:
     return "[NEWS_PROMPT_PLACEHOLDER] Write a short top-of-hour news tease for station {station_name}.".format(
         station_name=station.name
     )
+
+
+def render_time_check_prompt(station: Station, local_time: str) -> str:
+    return (
+        "[TIME_CHECK_PROMPT_PLACEHOLDER] "
+        f"Add a natural time check for {local_time} while hosting on {station.name}."
+    )

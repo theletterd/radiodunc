@@ -3,6 +3,7 @@ from app.prompt_library import (
     render_ad_break_prompt,
     render_news_prompt,
     render_song_transition_prompt,
+    render_time_check_prompt,
     render_weather_prompt,
 )
 
@@ -16,8 +17,10 @@ def test_prompt_library_placeholders_present():
     ad = render_ad_break_prompt(station)
     weather = render_weather_prompt(station, "Austin, TX")
     news = render_news_prompt(station)
+    time_check = render_time_check_prompt(station, "8:53am")
 
     assert "[TRANSITION_PROMPT_PLACEHOLDER]" in transition
     assert "[AD_BREAK_PROMPT_PLACEHOLDER]" in ad
     assert "[WEATHER_PROMPT_PLACEHOLDER]" in weather
     assert "[NEWS_PROMPT_PLACEHOLDER]" in news
+    assert "[TIME_CHECK_PROMPT_PLACEHOLDER]" in time_check

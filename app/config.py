@@ -75,6 +75,8 @@ class AppConfig(BaseModel):
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
     radio_polish_enabled: bool = True
     daypart_programming_enabled: bool = True
+    time_announcement_enabled: bool = False
+    time_announcement_every_breaks: int = Field(default=2, ge=1, le=20)
     dj_break_every_tracks: int = Field(default=1, ge=1, le=10)
     weather_insert_every_breaks: int = Field(default=3, ge=1, le=20)
     news_insert_every_breaks: int = Field(default=5, ge=1, le=20)
