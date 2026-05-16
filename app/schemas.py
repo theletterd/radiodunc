@@ -116,3 +116,11 @@ class DJClipResponse(BaseModel):
     audio_path: str
     voice: str | None = None
     cached: bool
+
+
+class BroadcastStatusResponse(BaseModel):
+    running: bool
+    station_id: int | None = None
+    stream_url: str
+    started_at_epoch: float | None = None
+    last_error: str | None = None
