@@ -10,11 +10,13 @@ const DJ_DUCK_FADE_DURATION_MS = 500;
 const DJ_DUCK_MULTIPLIER = 0.5;
 const DJ_FIXED_VOLUME = 1;
 const TRACK_TO_DJ_PREROLL_SECONDS = 20;
-const DJ_TO_TRACK_PREROLL_SECONDS = 3;
 let djPreparedForTrackQueuePosition = null;
 let djOverlayFinishingHandledForQueuePosition = null;
 let trackTransitionTriggeredForQueuePosition = null;
-let overlayTransitionTriggeredForQueuePosition = null;
+let overlapTrackQueuePosition = null;
+let overlapTrackEnded = false;
+let overlapDjEnded = false;
+let overlapAdvancedToSecondTrack = false;
 let playbackRetryTimer = null;
 const PLAYBACK_RETRY_DELAY_MS = 750;
 
@@ -200,6 +202,12 @@ async function fadeThenAdvance(actionFn) {
     audioEl.volume = 0;
     await syncAudioToState();
     await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
+    if (!keepDjOverlayPlaying) {
+      overlapTrackQueuePosition = null;
+      overlapTrackEnded = false;
+      overlapDjEnded = false;
+      overlapAdvancedToSecondTrack = false;
+    }
   } finally {
     if (epoch === transitionEpoch) {
       transitionInFlight = false;
@@ -220,6 +228,10 @@ async function runDjOverlapTransition() {
   const duckedMusicVolume = targetVolume * DJ_DUCK_MULTIPLIER;
   try {
     const trackQueuePosition = state.queue_position;
+    overlapTrackQueuePosition = trackQueuePosition;
+    overlapTrackEnded = false;
+    overlapDjEnded = false;
+    overlapAdvancedToSecondTrack = false;
     const djResponse = await api('/player/next', { method: 'POST' });
     if (djResponse?.state?.now_playing_type !== 'dj') {
       state = djResponse.state;
@@ -251,7 +263,28 @@ async function runDjOverlapTransition() {
   }
 }
 
-async function transitionFromDjToNextTrack() {
+
+async function maybeAdvanceAfterOverlapProgress() {
+  if (overlapTrackQueuePosition === null) return;
+  if (!overlapAdvancedToSecondTrack && overlapTrackEnded) {
+    overlapAdvancedToSecondTrack = true;
+    await transitionFromDjToNextTrack({ keepDjOverlayPlaying: !overlapDjEnded });
+    return;
+  }
+  if (overlapAdvancedToSecondTrack && overlapDjEnded) {
+    overlayEl.pause();
+    overlayEl.removeAttribute('src');
+    overlayEl.load();
+    if (!keepDjOverlayPlaying) {
+      overlapTrackQueuePosition = null;
+      overlapTrackEnded = false;
+      overlapDjEnded = false;
+      overlapAdvancedToSecondTrack = false;
+    }
+  }
+}
+
+async function transitionFromDjToNextTrack({ keepDjOverlayPlaying = false } = {}) {
   if (transitionInFlight) return;
   const epoch = ++transitionEpoch;
   transitionInFlight = true;
@@ -260,12 +293,20 @@ async function transitionFromDjToNextTrack() {
     const nextTrackResponse = await api('/player/next', { method: 'POST' });
     state = nextTrackResponse.state;
     renderAll();
-    overlayEl.pause();
-    overlayEl.removeAttribute('src');
-    overlayEl.load();
+    if (!keepDjOverlayPlaying) {
+      overlayEl.pause();
+      overlayEl.removeAttribute('src');
+      overlayEl.load();
+    }
     audioEl.volume = 0;
     await syncAudioToState();
     await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
+    if (!keepDjOverlayPlaying) {
+      overlapTrackQueuePosition = null;
+      overlapTrackEnded = false;
+      overlapDjEnded = false;
+      overlapAdvancedToSecondTrack = false;
+    }
   } finally {
     if (epoch === transitionEpoch) {
       transitionInFlight = false;
@@ -294,7 +335,10 @@ async function stopPlayback() {
   djPreparedForTrackQueuePosition = null;
   djOverlayFinishingHandledForQueuePosition = null;
   trackTransitionTriggeredForQueuePosition = null;
-  overlayTransitionTriggeredForQueuePosition = null;
+  overlapTrackQueuePosition = null;
+  overlapTrackEnded = false;
+  overlapDjEnded = false;
+  overlapAdvancedToSecondTrack = false;
   clearPlaybackRetry();
   renderAll();
 }
@@ -385,30 +429,24 @@ audioEl.addEventListener('timeupdate', async () => {
 
 audioEl.addEventListener('ended', async () => {
   if (transitionInFlight) return;
+  if (overlapTrackQueuePosition !== null) {
+    overlapTrackEnded = true;
+    await maybeAdvanceAfterOverlapProgress();
+    return;
+  }
   if (trackTransitionTriggeredForQueuePosition === state?.queue_position) return;
   trackTransitionTriggeredForQueuePosition = state?.queue_position ?? null;
   await runDjOverlapTransition();
 });
 
-overlayEl.addEventListener('timeupdate', async () => {
-  if (transitionInFlight) return;
-  if (!state?.is_playing || state?.now_playing_type !== 'dj') return;
-  if (!Number.isFinite(overlayEl.duration) || overlayEl.duration <= 0) return;
-  if (djOverlayFinishingHandledForQueuePosition === state.queue_position) return;
-
-  const remaining = overlayEl.duration - overlayEl.currentTime;
-  if (overlayTransitionTriggeredForQueuePosition === state.queue_position) return;
-  if (remaining <= DJ_TO_TRACK_PREROLL_SECONDS) {
-    overlayTransitionTriggeredForQueuePosition = state.queue_position;
-    djOverlayFinishingHandledForQueuePosition = state.queue_position;
-    await transitionFromDjToNextTrack();
-  }
-});
-
 overlayEl.addEventListener('ended', async () => {
   if (transitionInFlight) return;
-  if (overlayTransitionTriggeredForQueuePosition === state?.queue_position) return;
-  overlayTransitionTriggeredForQueuePosition = state?.queue_position ?? null;
+  if (overlapTrackQueuePosition !== null) {
+    overlapDjEnded = true;
+    djOverlayFinishingHandledForQueuePosition = state?.queue_position ?? null;
+    await maybeAdvanceAfterOverlapProgress();
+    return;
+  }
   await transitionFromDjToNextTrack();
 });
 
