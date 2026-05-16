@@ -28,6 +28,7 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
 - `POST /stations/generate` endpoint for phase 2 station creation
 - `GET /stations` endpoint to list generated stations
 - `POST /stations/{station_id}/queue` endpoint for phase 3 playlist scheduling
+- `POST /stations/{station_id}/dj-clip` endpoint for phase 5 clip synthesis + cache reuse
 - Basic error handling for invalid paths and scan failures
 
 ## Project Structure
@@ -171,3 +172,14 @@ curl -X POST http://127.0.0.1:8000/stations/1/queue \
 ```
 
 This queue generator prefers station `core_artists` when available, avoids same-artist repetition within `playlist_artist_repeat_window`, and supports deterministic output via request `seed`.
+
+
+### Synthesize a DJ clip
+
+```bash
+curl -X POST http://127.0.0.1:8000/stations/1/dj-clip \
+  -H "Content-Type: application/json" \
+  -d "{"script_text":"You're listening to Night Drive FM.","voice":"default"}"
+```
+
+The clip is cached by a script+voice hash, so repeated requests return the same stored audio path.

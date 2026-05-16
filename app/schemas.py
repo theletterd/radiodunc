@@ -87,3 +87,15 @@ class DJScriptResponse(BaseModel):
     dj_name: str
     sentences: list[str]
     script_text: str
+
+
+class DJClipSynthesizeRequest(BaseModel):
+    script_text: str = Field(min_length=1)
+    voice: str | None = None
+
+
+class DJClipResponse(BaseModel):
+    clip_id: int
+    audio_path: str
+    voice: str | None = None
+    cached: bool

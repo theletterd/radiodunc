@@ -125,7 +125,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 5 — TTS + Clip Caching
 
-**Status:** `TODO`
+**Status:** `DONE` (local tone-based TTS adapter + clip cache implemented)
 
 ### Goals
 - Convert DJ scripts to speech clips.

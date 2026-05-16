@@ -21,9 +21,10 @@ from app.main import (
     update_config,
     update_player_state,
     generate_station_dj_script,
+    synthesize_station_dj_clip,
 )
-from app.models import FavoriteStation, RecentStation, Station, Track
-from app.schemas import DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.models import DJClip, FavoriteStation, RecentStation, Station, Track
+from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -243,3 +244,20 @@ def test_generate_station_dj_script_happy_path_and_not_found():
     with pytest.raises(HTTPException) as exc:
         generate_station_dj_script(9999, DJScriptGenerateRequest(), db)
     assert exc.value.status_code == 404
+
+
+def test_synthesize_station_dj_clip_creates_and_caches():
+    db = _make_db_session()
+    station = Station(name="Clip FM")
+    db.add(station)
+    db.commit()
+    db.refresh(station)
+
+    payload = DJClipSynthesizeRequest(script_text="Hello from Clip FM", voice="default")
+    first = synthesize_station_dj_clip(station.id, payload, db)
+    second = synthesize_station_dj_clip(station.id, payload, db)
+
+    assert first.cached is False
+    assert second.cached is True
+    assert first.audio_path == second.audio_path
+    assert db.query(DJClip).count() == 1
