@@ -6,7 +6,10 @@ let playbackRetryTimer = null;
 let autoplayBlocked = false;
 let autoplayUnlockHandlerBound = false;
 let playbackPrimed = false;
+let syncInFlight = null;
+let lastStreamReloadAtMs = 0;
 const PLAYBACK_RETRY_DELAY_MS = 750;
+const STREAM_RELOAD_COOLDOWN_MS = 4000;
 
 
 function bindAutoplayUnlockHandler() {
@@ -144,7 +147,9 @@ function schedulePlaybackRetry() {
   }, PLAYBACK_RETRY_DELAY_MS);
 }
 
-async function syncAudioToState() {
+async function syncAudioToState(options = {}) {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = (async () => {
   console.log('[ui][audio] sync start', {
     isPlaying: state?.is_playing,
     queuePosition: state?.queue_position,
@@ -165,9 +170,13 @@ async function syncAudioToState() {
     return;
   }
 
-  if (!audioEl.src || loadedQueuePosition === null) {
-    console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8' });
+  const forceReload = Boolean(options.forceReload);
+  const shouldLoadInitialStream = !audioEl.src;
+  const canReloadNow = (Date.now() - lastStreamReloadAtMs) >= STREAM_RELOAD_COOLDOWN_MS;
+  if (shouldLoadInitialStream || (forceReload && canReloadNow)) {
+    console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8', forceReload });
     audioEl.src = `/broadcast/live.m3u8?ts=${Date.now()}`;
+    lastStreamReloadAtMs = Date.now();
   }
   loadedQueuePosition = state.queue_position;
   audioEl.volume = musicTargetVolume();
@@ -185,6 +194,12 @@ async function syncAudioToState() {
     }
     console.warn('[ui][audio] play() failed, scheduling retry', { err });
     schedulePlaybackRetry();
+  }
+  })();
+  try {
+    await syncInFlight;
+  } finally {
+    syncInFlight = null;
   }
 }
 
@@ -305,8 +320,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 audioEl.addEventListener('ended', async () => {
   console.warn('[ui][audio] ended event received; attempting stream recovery');
-  loadedQueuePosition = null;
-  await syncAudioToState();
+  await syncAudioToState({ forceReload: true });
 });
 
 
