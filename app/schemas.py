@@ -51,3 +51,22 @@ class QueueResponse(BaseModel):
     artist_repeat_window: int
     used_station_alignment: bool
     tracks: list[TrackOut]
+
+
+class PlayerStateUpdateRequest(BaseModel):
+    station_id: int | None = None
+    is_playing: bool | None = None
+    volume: int | None = Field(default=None, ge=0, le=100)
+
+
+class PlayerStateResponse(BaseModel):
+    station_id: int | None = None
+    is_playing: bool
+    volume: int
+    station: StationOut | None = None
+    favorites: list[int]
+    recent_station_ids: list[int]
+
+
+class FavoriteStationRequest(BaseModel):
+    favorite: bool

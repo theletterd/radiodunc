@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RadioDunc</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    .layout { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+    .panel { padding: 16px; border-right: 1px solid #1e293b; }
+    .main { padding: 24px; }
+    input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #020617; color: #e2e8f0; }
+    .station { padding: 10px; border: 1px solid #334155; border-radius: 10px; margin-top: 10px; cursor: pointer; background: #111827; }
+    .station.active { border-color: #38bdf8; }
+    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .muted { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="panel">
+      <h2>Stations</h2>
+      <input id="search" placeholder="Search stations" />
+      <div id="stations"></div>
+    </aside>
+    <main class="main">
+      <h1 id="stationName">No station selected</h1>
+      <p class="muted" id="stationMeta">Pick a station from the left to start.</p>
+      <div class="row">
+        <button id="playPause">Play</button>
+        <label>Volume <input id="volume" type="range" min="0" max="100" value="80" style="width:220px; vertical-align: middle;" /></label>
+      </div>
+      <h3>Recent</h3>
+      <p id="recent" class="muted">-</p>
+      <h3>Favorites</h3>
+      <p id="favorites" class="muted">-</p>
+    </main>
+  </div>
+<script>
+let stations = [];
+let state = null;
+
+async function api(path, options={}) {
+  const res = await fetch(path, {headers: {'Content-Type':'application/json'}, ...options});
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const list = document.getElementById('stations');
+  list.innerHTML = '';
+  const filtered = stations.filter(s => s.name.toLowerCase().includes(q));
+  filtered.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'station' + (state?.station_id === s.id ? ' active' : '');
+    el.innerHTML = `<div><strong>${s.name}</strong></div><div class="muted">${s.tagline || s.format || ''}</div>`;
+    el.onclick = async () => {
+      state = await api('/player/state', {method:'PUT', body: JSON.stringify({station_id:s.id, is_playing:true})});
+      renderNowPlaying();
+      render();
+    };
+    const fav = document.createElement('button');
+    fav.textContent = state?.favorites?.includes(s.id) ? '★' : '☆';
+    fav.onclick = async (e) => {
+      e.stopPropagation();
+      const makeFav = !state?.favorites?.includes(s.id);
+      await api(`/stations/${s.id}/favorite`, {method:'PUT', body: JSON.stringify({favorite: makeFav})});
+      state = await api('/player/state');
+      renderNowPlaying();
+      render();
+    };
+    el.appendChild(fav);
+    list.appendChild(el);
+  });
+}
+
+function renderNowPlaying() {
+  const current = stations.find(s => s.id === state?.station_id);
+  document.getElementById('stationName').textContent = current ? current.name : 'No station selected';
+  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station from the left to start.';
+  document.getElementById('playPause').textContent = state?.is_playing ? 'Pause' : 'Play';
+  document.getElementById('volume').value = state?.volume ?? 80;
+  const resolveName = (id) => stations.find(s => s.id === id)?.name || `#${id}`;
+  document.getElementById('recent').textContent = (state?.recent_station_ids || []).map(resolveName).join(', ') || '-';
+  document.getElementById('favorites').textContent = (state?.favorites || []).map(resolveName).join(', ') || '-';
+}
+
+async function init() {
+  stations = await api('/stations');
+  state = await api('/player/state');
+  renderNowPlaying();
+  render();
+}
+
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('playPause').addEventListener('click', async () => {
+  state = await api('/player/state', {method:'PUT', body: JSON.stringify({is_playing: !state.is_playing})});
+  renderNowPlaying();
+});
+document.getElementById('volume').addEventListener('change', async (e) => {
+  state = await api('/player/state', {method:'PUT', body: JSON.stringify({volume: Number(e.target.value)})});
+  renderNowPlaying();
+});
+init();
+</script>
+</body>
+</html>
