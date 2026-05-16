@@ -251,42 +251,20 @@ document.getElementById('refreshStationsBtn').addEventListener('click', async ()
   }
 });
 
-document.getElementById('playBtn').addEventListener('click', async () => {
-  console.log('[ui][button] play clicked', { stationId: state?.station_id });
-  if (!state?.station_id) {
-    console.warn('[ui][button] play ignored: no station selected');
-    return;
-  }
-  await primePlaybackFromGesture();
-  const response = await api('/player/play', { method: 'POST', body: JSON.stringify({ station_id: state.station_id, queue_size: 10 }) });
-  state = response.state;
-  console.log('[ui][button] play response', {
-    isPlaying: state?.is_playing,
-    queuePosition: state?.queue_position,
-    nowPlayingType: state?.now_playing_type,
-  });
-  renderAll();
-  await syncAudioToState();
-});
-
 document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next clicked', {
     queuePosition: state?.queue_position,
     nowPlayingType: state?.now_playing_type,
   });
+  await primePlaybackFromGesture();
   await advanceToNextQueueItem();
   console.log('[ui][button] next flow complete');
-});
-
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  console.log('[ui][button] stop clicked');
-  await stopPlayback();
-  console.log('[ui][button] stop flow complete');
 });
 
 
 
 audioEl.addEventListener('ended', async () => {
+  await primePlaybackFromGesture();
   await advanceToNextQueueItem();
 });
 
