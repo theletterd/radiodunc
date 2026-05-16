@@ -70,3 +70,20 @@ class PlayerStateResponse(BaseModel):
 
 class FavoriteStationRequest(BaseModel):
     favorite: bool
+
+
+class DJScriptGenerateRequest(BaseModel):
+    previous_track_id: int | None = None
+    next_track_id: int | None = None
+    include_weather: bool = False
+    include_news: bool = False
+    include_fake_ad: bool = False
+    max_sentences: int = Field(default=3, ge=1, le=3)
+
+
+class DJScriptResponse(BaseModel):
+    station_id: int
+    station_name: str
+    dj_name: str
+    sentences: list[str]
+    script_text: str
