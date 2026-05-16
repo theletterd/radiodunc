@@ -111,7 +111,7 @@ class BroadcastEngine:
                 return
             self._replace_active_stream(target_slot, station_id)
 
-    def start_transition(self, *, station_id: int, current_track_path: Path, dj_clip_path: Path, next_track_path: Path, current_stream_path: Path | None = None, tail_seconds: int = 20, fade_seconds: int = 8) -> None:
+    def start_transition(self, *, station_id: int, current_track_path: Path, dj_clip_path: Path, next_track_path: Path, tail_seconds: int = 20, fade_seconds: int = 8) -> None:
         with self._lock:
             target_slot = self._inactive_slot()
             self._clear_slot(target_slot)
@@ -122,22 +122,13 @@ class BroadcastEngine:
                 "[musicduck][dj]amix=inputs=2:duration=longest:dropout_transition=0[transition];"
                 "[transition][2:a]concat=n=2:v=0:a=1[out]"
             )
-            use_live_stream = current_stream_path is not None and current_stream_path.exists()
-            if use_live_stream:
-                cmd = [
-                    "ffmpeg", "-y", "-i", str(current_stream_path), "-i", str(dj_clip_path),
-                    "-stream_loop", "-1", "-i", str(next_track_path), "-vn", "-filter_complex", filter_complex,
-                    "-map", "[out]", "-c:a", "aac", "-b:a", "192k", "-f", "hls", "-hls_time", "2",
-                    "-hls_list_size", "6", "-hls_flags", "delete_segments+append_list", str(out_manifest),
-                ]
-            else:
-                cmd = [
-                    "ffmpeg", "-y", "-sseof", f"-{tail_seconds}", "-i", str(current_track_path), "-i", str(dj_clip_path),
-                    "-stream_loop", "-1", "-i", str(next_track_path), "-vn", "-filter_complex", filter_complex,
-                    "-map", "[out]", "-c:a", "aac", "-b:a", "192k", "-f", "hls", "-hls_time", "2",
-                    "-hls_list_size", "6", "-hls_flags", "delete_segments+append_list", str(out_manifest),
-                ]
-            logger.info("broadcast.transition.start station_id=%s current=%s current_live=%s dj=%s next=%s slot=%s use_live_stream=%s", station_id, current_track_path, current_stream_path, dj_clip_path, next_track_path, target_slot, use_live_stream)
+            cmd = [
+                "ffmpeg", "-y", "-sseof", f"-{tail_seconds}", "-i", str(current_track_path), "-i", str(dj_clip_path),
+                "-stream_loop", "-1", "-i", str(next_track_path), "-vn", "-filter_complex", filter_complex,
+                "-map", "[out]", "-c:a", "aac", "-b:a", "192k", "-f", "hls", "-hls_time", "2",
+                "-hls_list_size", "6", "-hls_flags", "delete_segments+append_list", str(out_manifest),
+            ]
+            logger.info("broadcast.transition.start station_id=%s current=%s dj=%s next=%s slot=%s", station_id, current_track_path, dj_clip_path, next_track_path, target_slot)
             self._start_proc(cmd, target_slot)
             if not self._wait_until_hls_ready(target_slot):
                 self._last_error = "broadcast transition failed to produce hls output"
