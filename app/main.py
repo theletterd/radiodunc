@@ -487,8 +487,8 @@ def broadcast_live_segment(segment_name: str, request: Request):
         media_type="video/mp2t",
         filename=segment.name,
         headers={
-            "Cache-Control": "public, max-age=60, immutable",
-            "Expires": (datetime.now(ZoneInfo("UTC")) + timedelta(seconds=60)).strftime("%a, %d %b %Y %H:%M:%S GMT"),
+            "Cache-Control": "public, max-age=10, must-revalidate",
+            "Expires": (datetime.now(ZoneInfo("UTC")) + timedelta(seconds=10)).strftime("%a, %d %b %Y %H:%M:%S GMT"),
             "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         },
     )
