@@ -2,9 +2,6 @@ let stations = [];
 let state = null;
 const audioEl = document.getElementById('playerAudio');
 let loadedQueuePosition = null;
-let transitionInFlight = false;
-let transitionEpoch = 0;
-const FADE_DURATION_MS = 8000;
 let playbackRetryTimer = null;
 let autoplayBlocked = false;
 let autoplayUnlockHandlerBound = false;
@@ -105,9 +102,7 @@ function renderPlayer() {
   document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
   const sliderValue = state?.volume ?? 80;
   document.getElementById('volume').value = sliderValue;
-  if (!transitionInFlight) {
-    audioEl.volume = musicTargetVolume();
-  }
+  audioEl.volume = musicTargetVolume();
 
   const label = state?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
@@ -120,35 +115,6 @@ function renderPlayer() {
 function renderAll() {
   renderStations();
   renderPlayer();
-}
-
-
-async function fadeToVolume(targetVolume, durationMs = FADE_DURATION_MS, epoch = transitionEpoch) {
-  const clamped = Math.max(0, Math.min(1, targetVolume));
-  const start = audioEl.volume;
-  const delta = clamped - start;
-  if (Math.abs(delta) < 0.01 || durationMs <= 0) {
-    audioEl.volume = clamped;
-    return;
-  }
-
-  const startAt = performance.now();
-  await new Promise((resolve) => {
-    function step(now) {
-      if (epoch !== transitionEpoch) {
-        resolve();
-        return;
-      }
-      const progress = Math.min(1, (now - startAt) / durationMs);
-      audioEl.volume = Math.max(0, Math.min(1, start + (delta * progress)));
-      if (progress < 1) {
-        requestAnimationFrame(step);
-      } else {
-        resolve();
-      }
-    }
-    requestAnimationFrame(step);
-  });
 }
 
 
@@ -197,10 +163,6 @@ async function syncAudioToState() {
     clearPlaybackRetry();
     await audioEl.play();
     console.log('[ui][audio] play() resolved');
-    const targetVolume = musicTargetVolume();
-    if (audioEl.volume < targetVolume - 0.01) {
-      await fadeToVolume(targetVolume, FADE_DURATION_MS);
-    }
   } catch (err) {
     if (err?.name === 'NotAllowedError') {
       if (!autoplayBlocked) {
@@ -215,36 +177,14 @@ async function syncAudioToState() {
 }
 
 
-async function fadeThenAdvance(actionFn) {
-  if (transitionInFlight) return;
-  const epoch = ++transitionEpoch;
-  transitionInFlight = true;
-  const targetVolume = musicTargetVolume();
-  try {
-    if (state?.is_playing && !audioEl.paused) {
-      await fadeToVolume(0, FADE_DURATION_MS, epoch);
-    }
-    const response = await actionFn();
-    state = response.state;
-    renderAll();
-    audioEl.volume = 0;
-    await syncAudioToState();
-    await fadeToVolume(targetVolume, FADE_DURATION_MS, epoch);
-          } finally {
-    if (epoch === transitionEpoch) {
-      transitionInFlight = false;
-    }
-  }
-}
-
 async function advanceToNextQueueItem() {
-  if (transitionInFlight) return;
-  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
+  const response = await api('/player/next', { method: 'POST' });
+  state = response.state;
+  renderAll();
+  await syncAudioToState();
 }
 
 async function stopPlayback() {
-  transitionEpoch += 1;
-  transitionInFlight = false;
   try {
     const response = await api('/player/stop', { method: 'POST' });
     state = response.state;
@@ -331,7 +271,6 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 
 document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next clicked', {
-    transitionInFlight,
     queuePosition: state?.queue_position,
     nowPlayingType: state?.now_playing_type,
   });
@@ -348,7 +287,6 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 
 audioEl.addEventListener('ended', async () => {
-  if (transitionInFlight) return;
   await advanceToNextQueueItem();
 });
 
