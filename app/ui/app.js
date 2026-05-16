@@ -302,8 +302,9 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 
 
 audioEl.addEventListener('ended', async () => {
-  await primePlaybackFromGesture();
-  await advanceToNextQueueItem();
+  console.warn('[ui][audio] ended event received; attempting stream recovery');
+  loadedQueuePosition = null;
+  await syncAudioToState();
 });
 
 
