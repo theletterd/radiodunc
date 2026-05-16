@@ -46,6 +46,15 @@ class BroadcastEngine:
     def segment_path(self, segment_name: str) -> Path:
         return self._slot_dir(self._active_slot) / segment_name
 
+    def resolve_segment_path(self, segment_name: str) -> Path | None:
+        active_candidate = self._slot_dir(self._active_slot) / segment_name
+        if active_candidate.exists():
+            return active_candidate
+        inactive_candidate = self._slot_dir(self._inactive_slot()) / segment_name
+        if inactive_candidate.exists():
+            return inactive_candidate
+        return None
+
     def _clear_slot(self, slot: str) -> None:
         out = self._slot_dir(slot)
         out.mkdir(parents=True, exist_ok=True)
