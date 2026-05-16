@@ -85,6 +85,8 @@ _ensure_player_state_schema()
 
 logger = logging.getLogger(__name__)
 
+_admin_auth_disabled_logged = False
+
 _RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
 
 
@@ -302,10 +304,16 @@ def _active_listener_count(db: Session, *, now_epoch: float | None = None, activ
 
 
 def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
+    global _admin_auth_disabled_logged
     expected = os.getenv("ADMIN_API_TOKEN")
     if not expected:
-        raise HTTPException(status_code=503, detail="Admin controls are not configured")
-    if not x_admin_token or not hashlib.sha256(x_admin_token.encode()).digest() == hashlib.sha256(expected.encode()).digest():
+        if not _admin_auth_disabled_logged:
+            logger.warning("admin.auth.disabled reason=missing_env ADMIN_API_TOKEN")
+            _admin_auth_disabled_logged = True
+        return
+    if not x_admin_token:
+        raise HTTPException(status_code=403, detail="Missing X-Admin-Token header")
+    if not hashlib.sha256(x_admin_token.encode()).digest() == hashlib.sha256(expected.encode()).digest():
         raise HTTPException(status_code=403, detail="Admin authentication failed")
 
 
