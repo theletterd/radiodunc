@@ -8,7 +8,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -28,6 +28,7 @@ from .schemas import (
     PlayerStateUpdateRequest,
     PlayerPlayRequest,
     PlayerActionResponse,
+    PlayerAdminCommandRequest,
     FavoriteStationRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
@@ -58,6 +59,7 @@ def _ensure_player_state_schema() -> None:
             "current_item_expected_end_at_epoch": "ALTER TABLE player_state ADD COLUMN current_item_expected_end_at_epoch FLOAT NOT NULL DEFAULT 0.0",
             "current_sequence_id": "ALTER TABLE player_state ADD COLUMN current_sequence_id INTEGER NOT NULL DEFAULT 0",
             "playout_mode": "ALTER TABLE player_state ADD COLUMN playout_mode VARCHAR NOT NULL DEFAULT 'stopped'",
+            "admin_commands_json": "ALTER TABLE player_state ADD COLUMN admin_commands_json TEXT NOT NULL DEFAULT '[]'",
         }
         for column_name, ddl in missing_columns.items():
             if column_name not in columns:
@@ -70,7 +72,8 @@ def _ensure_player_state_schema() -> None:
                     current_item_started_at_epoch = COALESCE(current_item_started_at_epoch, 0.0),
                     current_item_expected_end_at_epoch = COALESCE(current_item_expected_end_at_epoch, 0.0),
                     current_sequence_id = COALESCE(current_sequence_id, 0),
-                    playout_mode = COALESCE(NULLIF(playout_mode, ''), 'stopped')
+                    playout_mode = COALESCE(NULLIF(playout_mode, ''), 'stopped'),
+                    admin_commands_json = COALESCE(NULLIF(admin_commands_json, ''), '[]')
                 """
             )
         )
@@ -289,6 +292,29 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     )
 
 
+
+def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
+    expected = os.getenv("ADMIN_API_TOKEN")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin controls are not configured")
+    if not x_admin_token or not hashlib.sha256(x_admin_token.encode()).digest() == hashlib.sha256(expected.encode()).digest():
+        raise HTTPException(status_code=403, detail="Admin authentication failed")
+
+
+def _enqueue_admin_command(state: PlayerState, payload: PlayerAdminCommandRequest) -> dict:
+    commands = json.loads(state.admin_commands_json) if state.admin_commands_json else []
+    command = {
+        "command": payload.command,
+        "station_id": payload.station_id,
+        "queue_size": payload.queue_size,
+        "seed": payload.seed,
+        "metadata": payload.metadata or {},
+        "requested_at_epoch": time.time(),
+    }
+    commands.append(command)
+    state.admin_commands_json = json.dumps(commands)
+    return command
+
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
@@ -378,7 +404,7 @@ def broadcast_live_segment(segment_name: str):
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
-def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
+def player_play(payload: PlayerPlayRequest, _admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.play.requested", station_id=payload.station_id, queue_size=payload.queue_size, seed=payload.seed)
     config = load_config()
@@ -420,8 +446,10 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/player/next", response_model=PlayerActionResponse)
-def player_next(db: Session = Depends(get_db)):
+def player_next(_admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
+    if state.playout_mode == "live":
+        raise HTTPException(status_code=403, detail="/player/next is disabled during live playout; use /player/admin/command")
     _log_event("player.next.requested", current_index=state.queue_index)
     if not state.queue_json:
         raise HTTPException(status_code=400, detail="No queue available")
@@ -440,6 +468,22 @@ def player_next(db: Session = Depends(get_db)):
     db.refresh(state)
     _log_event("player.next.completed", new_index=state.queue_index, is_playing=state.is_playing)
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
+
+
+@app.post("/player/admin/command", response_model=PlayerActionResponse)
+def player_admin_command(payload: PlayerAdminCommandRequest, _admin: None = Depends(_require_admin), db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    if payload.command == "force_station_change" and payload.station_id is None:
+        raise HTTPException(status_code=400, detail="station_id is required for force_station_change")
+    if payload.station_id is not None:
+        station = db.query(Station).filter(Station.id == payload.station_id).first()
+        if not station:
+            raise HTTPException(status_code=404, detail=f"Station {payload.station_id} not found")
+    command = _enqueue_admin_command(state, payload)
+    _log_event("player.admin.command.queued", command=command.get("command"), station_id=command.get("station_id"))
+    db.commit()
+    db.refresh(state)
+    return PlayerActionResponse(state=_build_player_state_response(db, state), action=f"admin:{payload.command}")
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)
