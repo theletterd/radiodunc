@@ -110,15 +110,15 @@ function renderStations() {
 function renderPlayer() {
   const current = stations.find((s) => s.id === state?.station_id);
   document.getElementById('stationName').textContent = current?.name || 'No station selected';
-  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Next.';
+  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play.';
   const sliderValue = state?.volume ?? 80;
   document.getElementById('volume').value = sliderValue;
   audioEl.volume = musicTargetVolume();
 
   const label = state?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
-  document.getElementById('playerFlags').textContent = `State: ${state?.is_playing ? 'Playing' : 'Stopped'} · Type: ${state?.now_playing_type || '-'} · Queue position: ${state?.queue_position ?? '-'} `;
-  document.getElementById('upNext').textContent = `Queue depth: ${state?.queue_depth ?? 0}`;
+  document.getElementById('playerFlags').textContent = `State: ${state?.is_playing ? 'Playing' : 'Stopped'} · Type: ${state?.now_playing_type || '-'} `;
+  document.getElementById('upNext').textContent = 'Live HLS broadcast';
   document.getElementById('favorites').textContent = (state?.favorites || []).map(stationName).join(', ') || '-';
   document.getElementById('recent').textContent = (state?.recent_station_ids || []).map(stationName).join(', ') || '-';
 }
@@ -203,10 +203,12 @@ async function startPlayback() {
   await syncAudioToState();
 }
 
+
 async function advanceToNextQueueItem() {
   const response = await api('/player/next', { method: 'POST' });
   state = response.state;
   renderAll();
+  loadedQueuePosition = null;
   await syncAudioToState();
 }
 
@@ -283,6 +285,8 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 });
 
 
+
+
 document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next clicked', {
     queuePosition: state?.queue_position,
@@ -292,8 +296,6 @@ document.getElementById('nextBtn').addEventListener('click', async () => {
   await advanceToNextQueueItem();
   console.log('[ui][button] next flow complete');
 });
-
-
 
 document.getElementById('stopBtn').addEventListener('click', async () => {
   console.log('[ui][button] stop clicked');
