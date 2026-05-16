@@ -36,3 +36,18 @@ class StationOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class QueueGenerateRequest(BaseModel):
+    size: int = Field(default=12, ge=1, le=200)
+    seed: int | None = None
+
+
+class QueueResponse(BaseModel):
+    station_id: int
+    station_name: str
+    queue_size: int
+    seed: int | None = None
+    artist_repeat_window: int
+    used_station_alignment: bool
+    tracks: list[TrackOut]

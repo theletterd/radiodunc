@@ -84,7 +84,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 3 — Playlist Scheduler
 
-**Status:** `TODO`
+**Status:** `DONE` (queue scheduler + endpoint + anti-repeat config implemented)
 
 ### Goals
 - Build track selection logic per station profile.
