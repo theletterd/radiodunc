@@ -8,7 +8,7 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -415,18 +415,26 @@ def broadcast_status():
 
 
 @app.get("/broadcast/live.m3u8")
-def broadcast_live_manifest():
+def broadcast_live_manifest(request: Request):
     manifest = broadcast_engine.manifest_path()
+    range_header = request.headers.get("range")
     if not manifest.exists():
+        _log_event("broadcast.manifest.miss", path=str(manifest), range=range_header)
         raise HTTPException(status_code=404, detail="Live stream is not running")
+    size = manifest.stat().st_size
+    _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header)
     return FileResponse(str(manifest), media_type="application/vnd.apple.mpegurl", filename="live.m3u8")
 
 
 @app.get("/broadcast/{segment_name}")
-def broadcast_live_segment(segment_name: str):
+def broadcast_live_segment(segment_name: str, request: Request):
     segment = broadcast_engine.segment_path(segment_name)
+    range_header = request.headers.get("range")
     if not segment.exists() or segment.suffix != ".ts":
+        _log_event("broadcast.segment.miss", segment=segment_name, path=str(segment), range=range_header)
         raise HTTPException(status_code=404, detail="Segment not found")
+    size = segment.stat().st_size
+    _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
     return FileResponse(str(segment), media_type="video/mp2t", filename=segment.name)
 
 
