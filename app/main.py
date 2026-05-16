@@ -473,6 +473,8 @@ def broadcast_live_segment(segment_name: str, request: Request):
         raise HTTPException(status_code=404, detail="Segment not found")
     size = segment.stat().st_size
     _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
+    manifest = broadcast_engine.manifest_path()
+    stale_manifest = manifest.exists() and (time.time() - manifest.stat().st_mtime > 8.0)
     return FileResponse(
         str(segment),
         media_type="video/mp2t",
