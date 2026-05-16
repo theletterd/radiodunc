@@ -7,6 +7,8 @@ let autoplayBlocked = false;
 let autoplayUnlockHandlerBound = false;
 let playbackPrimed = false;
 let syncInFlight = null;
+let refreshStateInFlight = null;
+let refreshIntervalId = null;
 let lastStreamReloadAtMs = 0;
 const PLAYBACK_RETRY_DELAY_MS = 750;
 const STREAM_RELOAD_COOLDOWN_MS = 4000;
@@ -247,9 +249,17 @@ async function stopPlayback() {
 }
 
 async function refreshState() {
-  state = await api('/player/status');
-  renderAll();
-  await syncAudioToState();
+  if (refreshStateInFlight) return refreshStateInFlight;
+  refreshStateInFlight = (async () => {
+    state = await api('/player/status');
+    renderAll();
+    await syncAudioToState();
+  })();
+  try {
+    await refreshStateInFlight;
+  } finally {
+    refreshStateInFlight = null;
+  }
 }
 
 async function loadConfigDefaults() {
@@ -397,7 +407,10 @@ async function init() {
   });
   renderAll();
   await syncAudioToState();
-  setInterval(refreshState, 5000);
+  if (refreshIntervalId !== null) {
+    clearInterval(refreshIntervalId);
+  }
+  refreshIntervalId = window.setInterval(refreshState, 5000);
   console.log('[ui][init] complete; refresh interval set to 5000ms');
 }
 
