@@ -165,7 +165,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 7 — Web UI (Local)
 
-**Status:** `TODO`
+**Status:** `DONE` (library setup, station picker, and player controls/status UI implemented)
 
 ### Goals
 - Provide local UI for scanning, station selection, and playback controls.
@@ -212,4 +212,4 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Next Recommended Work Item
 
-Move to **Phase 7** by adding a local web UI flow for station playback controls and status display.
+Move to **Phase 8** by improving radio realism with transitions, loudness control, and richer programming cadence.

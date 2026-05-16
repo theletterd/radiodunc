@@ -1,6 +1,8 @@
 import json
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
@@ -160,6 +162,43 @@ def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
 
 
+def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
+    media_path = Path(raw_path).expanduser().resolve()
+    allowed_roots = [Path(config.music_folder).expanduser().resolve(), Path("generated_audio").resolve()]
+    if not any(str(media_path).startswith(str(root)) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Media path is outside allowed roots")
+    if not media_path.exists() or not media_path.is_file():
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return media_path
+
+
+@app.get("/player/current-media")
+def player_current_media(db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    if not queue or not (0 <= state.queue_index < len(queue)):
+        raise HTTPException(status_code=404, detail="No active queue item")
+
+    item = queue[state.queue_index]
+    config = load_config()
+    if item.get("type") == "track":
+        track_id = item.get("track_id")
+        track = db.query(Track).filter(Track.id == track_id).first() if track_id is not None else None
+        if track is None:
+            raise HTTPException(status_code=404, detail="Current track not found")
+        media_path = _safe_media_path(track.file_path, config)
+        return FileResponse(str(media_path), filename=(track.title or "track") + media_path.suffix)
+
+    if item.get("type") == "dj":
+        script_text = item.get("script_text") or item.get("label") or "Station ID"
+        voice = item.get("voice")
+        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice)
+        media_path = _safe_media_path(clip.audio_path, config)
+        return FileResponse(str(media_path), filename=media_path.name)
+
+    raise HTTPException(status_code=409, detail="Current queue item has unsupported type")
+
+
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -171,7 +210,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     sequence = []
     for track in queue["tracks"]:
         sequence.append({"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"})
-        sequence.append({"type": "dj", "label": f"{station.dj_name or 'DJ'} break"})
+        sequence.append({"type": "dj", "label": f"{station.dj_name or 'DJ'} break", "script_text": f"{station.dj_name or 'DJ'} here on {station.name}."})
 
     state.current_station_id = payload.station_id
     state.is_playing = True
