@@ -333,6 +333,7 @@ def _enqueue_admin_command(state: PlayerState, payload: PlayerAdminCommandReques
     state.admin_commands_json = json.dumps(commands)
     return command
 
+
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
@@ -534,8 +535,6 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admi
 @app.post("/player/next", response_model=PlayerActionResponse)
 def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
     state = _get_or_create_player_state(db)
-    if state.playout_mode == "live":
-        raise HTTPException(status_code=403, detail="/player/next is disabled during live playout; use /player/admin/command")
     _log_event("player.next.requested", current_index=state.queue_index)
     if not state.queue_json:
         raise HTTPException(status_code=400, detail="No queue available")

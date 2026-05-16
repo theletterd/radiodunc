@@ -291,9 +291,8 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert played.state.current_track is not None
     assert played.state.current_track.title == "One"
 
-    with pytest.raises(HTTPException) as exc:
-        player_next(db)
-    assert exc.value.status_code == 403
+    nexted = player_next(db)
+    assert nexted.state.is_playing is True
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False
