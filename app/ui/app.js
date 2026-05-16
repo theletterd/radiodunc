@@ -7,7 +7,11 @@ let autoplayBlocked = false;
 let autoplayUnlockHandlerBound = false;
 let playbackPrimed = false;
 let syncInFlight = null;
+let refreshStateInFlight = null;
+let refreshIntervalId = null;
 let lastStreamReloadAtMs = 0;
+let lastRefreshTriggerAtMs = 0;
+const REFRESH_TRIGGER_COOLDOWN_MS = 1500;
 const PLAYBACK_RETRY_DELAY_MS = 750;
 const STREAM_RELOAD_COOLDOWN_MS = 4000;
 const STREAM_RECOVERY_WINDOW_MS = 30000;
@@ -53,8 +57,16 @@ function musicTargetVolume() {
 }
 
 async function api(path, options = {}) {
-  console.log('[ui][api] request', { path, method: options.method || 'GET' });
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const method = options.method || 'GET';
+  const isGet = method.toUpperCase() === 'GET';
+  const requestPath = isGet ? `${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}` : path;
+  console.log('[ui][api] request', { path: requestPath, method });
+  const response = await fetch(requestPath, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    cache: isGet ? 'no-store' : options.cache,
+    ...options,
+    method,
+  });
   if (!response.ok) {
     console.error('[ui][api] response error', { path, status: response.status });
     throw new Error(await response.text());
@@ -247,9 +259,17 @@ async function stopPlayback() {
 }
 
 async function refreshState() {
-  state = await api('/player/status');
-  renderAll();
-  await syncAudioToState();
+  if (refreshStateInFlight) return refreshStateInFlight;
+  refreshStateInFlight = (async () => {
+    state = await api('/player/status');
+    renderAll();
+    await syncAudioToState();
+  })();
+  try {
+    await refreshStateInFlight;
+  } finally {
+    refreshStateInFlight = null;
+  }
 }
 
 async function loadConfigDefaults() {
@@ -371,15 +391,25 @@ document.getElementById('volume').addEventListener('input', async (event) => {
   await syncAudioToState();
 });
 
+
+function shouldRunRefreshTrigger() {
+  const now = Date.now();
+  if ((now - lastRefreshTriggerAtMs) < REFRESH_TRIGGER_COOLDOWN_MS) {
+    return false;
+  }
+  lastRefreshTriggerAtMs = now;
+  return true;
+}
+
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && state?.is_playing && audioEl.paused) {
-    await syncAudioToState();
+  if (document.visibilityState === 'visible' && state?.is_playing && audioEl.paused && shouldRunRefreshTrigger()) {
+    await refreshState();
   }
 });
 
 window.addEventListener('focus', async () => {
-  if (state?.is_playing && audioEl.paused) {
-    await syncAudioToState();
+  if (state?.is_playing && audioEl.paused && shouldRunRefreshTrigger()) {
+    await refreshState();
   }
 });
 
@@ -397,7 +427,10 @@ async function init() {
   });
   renderAll();
   await syncAudioToState();
-  setInterval(refreshState, 5000);
+  if (refreshIntervalId !== null) {
+    clearInterval(refreshIntervalId);
+  }
+  refreshIntervalId = window.setInterval(refreshState, 5000);
   console.log('[ui][init] complete; refresh interval set to 5000ms');
 }
 
