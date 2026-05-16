@@ -48,6 +48,8 @@ from .playout_worker import PlayoutWorker
 
 Base.metadata.create_all(bind=engine)
 
+_last_manifest_stale_log_at_epoch: float = 0.0
+
 
 def _ensure_player_state_schema() -> None:
     with engine.begin() as conn:
@@ -426,16 +428,38 @@ def broadcast_status():
 def broadcast_live_manifest(request: Request):
     manifest = broadcast_engine.manifest_path()
     range_header = request.headers.get("range")
+    status = broadcast_engine.status()
+    if not status.running:
+        _log_event("broadcast.manifest.unavailable", path=str(manifest), reason="engine_not_running", range=range_header)
+        raise HTTPException(status_code=503, detail="Live stream encoder is not running")
     if not manifest.exists():
         _log_event("broadcast.manifest.miss", path=str(manifest), range=range_header)
         raise HTTPException(status_code=404, detail="Live stream is not running")
+
+    manifest_age_seconds = time.time() - manifest.stat().st_mtime
+    stale_manifest = manifest_age_seconds > 8.0
+    global _last_manifest_stale_log_at_epoch
+    if stale_manifest and (time.time() - _last_manifest_stale_log_at_epoch) >= 5.0:
+        _last_manifest_stale_log_at_epoch = time.time()
+        _log_event(
+            "broadcast.manifest.stale",
+            path=str(manifest),
+            age_seconds=round(manifest_age_seconds, 3),
+            range=range_header,
+        )
+
     content = manifest.read_text(encoding="utf-8")
     size = len(content.encode("utf-8"))
     _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header)
     return Response(
         content=content,
         media_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
+        },
     )
 
 
@@ -448,7 +472,17 @@ def broadcast_live_segment(segment_name: str, request: Request):
         raise HTTPException(status_code=404, detail="Segment not found")
     size = segment.stat().st_size
     _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
-    return FileResponse(str(segment), media_type="video/mp2t", filename=segment.name)
+    return FileResponse(
+        str(segment),
+        media_type="video/mp2t",
+        filename=segment.name,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
+        },
+    )
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
