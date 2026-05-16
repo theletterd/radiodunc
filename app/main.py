@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -39,8 +40,42 @@ Base.metadata.create_all(bind=engine)
 
 logger = logging.getLogger(__name__)
 
+
+def _configure_logging() -> None:
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
+
+def _log_event(event: str, **fields: object) -> None:
+    details = " ".join(f"{key}={value}" for key, value in fields.items())
+    logger.info("%s %s", event, details)
+
+
+_configure_logging()
+
 app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    started = time.perf_counter()
+    _log_event("request.start", method=request.method, path=request.url.path, client=request.client.host if request.client else "unknown")
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        logger.exception("request.error method=%s path=%s elapsed_ms=%s", request.method, request.url.path, elapsed_ms)
+        raise
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+    _log_event("request.end", method=request.method, path=request.url.path, status=response.status_code, elapsed_ms=elapsed_ms)
+    return response
+
 
 
 def _daypart_greeting(config: AppConfig) -> str:
@@ -86,9 +121,11 @@ def update_config(config: AppConfig):
 @app.post("/library/scan")
 def scan_library_endpoint(payload: LibraryScanRequest, db: Session = Depends(get_db)):
     config = load_config()
+    _log_event("library.scan.requested", requested_folder=payload.folder_path or "<config-default>")
     target_folder = payload.folder_path or config.music_folder
     try:
         result = scan_library(target_folder, db)
+        _log_event("library.scan.completed", folder=target_folder, total_tracks=result.get("total_tracks"), new_tracks=result.get("new_tracks"))
         return {"folder_path": target_folder, **result}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -236,6 +273,7 @@ def player_current_media(db: Session = Depends(get_db)):
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
+    _log_event("player.play.requested", station_id=payload.station_id, queue_size=payload.queue_size, seed=payload.seed)
     config = load_config()
     station = db.query(Station).filter(Station.id == payload.station_id).first()
     if not station:
@@ -297,24 +335,29 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state.last_error = None
     db.commit()
     db.refresh(state)
+    _log_event("player.play.started", station_id=payload.station_id, queue_items=len(sequence))
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
 
 @app.post("/player/next", response_model=PlayerActionResponse)
 def player_next(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
+    _log_event("player.next.requested", current_index=state.queue_index)
     _advance_player(state)
     db.commit()
     db.refresh(state)
+    _log_event("player.next.completed", new_index=state.queue_index, is_playing=state.is_playing)
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)
 def player_stop(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
+    _log_event("player.stop.requested", station_id=state.current_station_id)
     state.is_playing = False
     db.commit()
     db.refresh(state)
+    _log_event("player.stop.completed", station_id=state.current_station_id)
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="stop")
 
 
