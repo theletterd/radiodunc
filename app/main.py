@@ -1,6 +1,5 @@
 import json
 import logging
-import subprocess
 import time
 import hashlib
 from pathlib import Path
@@ -229,49 +228,6 @@ def _advance_player(state: PlayerState) -> None:
     state.current_track_id = item.get("track_id") if item.get("type") == "track" else None
 
 
-def _build_dj_ducked_mix(track_path: Path, dj_path: Path, *, fade_seconds: float = 8.0, ducked_volume: float = 0.22) -> Path:
-    overlays_dir = Path("generated_audio") / "mixes"
-    overlays_dir.mkdir(parents=True, exist_ok=True)
-
-    cache_key = hashlib.sha1(
-        f"{track_path}:{track_path.stat().st_mtime_ns}:{dj_path}:{dj_path.stat().st_mtime_ns}:{fade_seconds}:{ducked_volume}".encode("utf-8")
-    ).hexdigest()
-    output_path = overlays_dir / f"ducked-{cache_key}.mp3"
-    if output_path.exists():
-        return output_path
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-sseof",
-        f"-{fade_seconds}",
-        "-i",
-        str(track_path),
-        "-i",
-        str(dj_path),
-        "-filter_complex",
-        (
-            f"[0:a]afade=t=out:st=0:d={fade_seconds},volume={ducked_volume}[music];"
-            "[1:a]adelay=1000|1000[dj];"
-            "[music][dj]amix=inputs=2:duration=longest:dropout_transition=0[out]"
-        ),
-        "-map",
-        "[out]",
-        "-ac",
-        "2",
-        "-ar",
-        "44100",
-        "-b:a",
-        "192k",
-        str(output_path),
-    ]
-    completed = subprocess.run(cmd, capture_output=True, text=True)
-    if completed.returncode != 0:
-        logger.error("player.mix.failed stderr=%s", completed.stderr[-1000:])
-        raise HTTPException(status_code=500, detail="Failed to build DJ transition mix")
-
-    return output_path
-
 
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
@@ -322,14 +278,6 @@ def player_current_media(db: Session = Depends(get_db)):
             persist=is_ad_break,
         )
         media_path = _safe_media_path(audio_path, config)
-
-        previous_item = queue[state.queue_index - 1] if state.queue_index > 0 else None
-        if previous_item and previous_item.get("type") == "track":
-            previous_track = db.query(Track).filter(Track.id == previous_item.get("track_id")).first()
-            if previous_track and previous_track.file_path:
-                previous_track_path = _safe_media_path(previous_track.file_path, config)
-                mixed_path = _build_dj_ducked_mix(previous_track_path, media_path)
-                return FileResponse(str(mixed_path), filename=mixed_path.name)
 
         return FileResponse(str(media_path), filename=media_path.name)
 
@@ -464,6 +412,29 @@ def player_next(db: Session = Depends(get_db)):
                 },
             )
             state.queue_json = json.dumps(queue)
+            if station and current_track and next_track:
+                script_text = queue[state.queue_index + 1].get("script_text") or queue[state.queue_index + 1].get("label") or "Station ID"
+                voice = queue[state.queue_index + 1].get("voice")
+                try:
+                    provider = build_tts_provider(config)
+                except ValueError:
+                    provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+                _clip, audio_path, _cached = get_or_create_dj_clip(
+                    db,
+                    script_text=script_text,
+                    voice=voice,
+                    provider=provider,
+                    persist=False,
+                )
+                try:
+                    broadcast_engine.start_transition(
+                        station_id=station.id,
+                        current_track_path=_safe_media_path(current_track.file_path, config),
+                        dj_clip_path=_safe_media_path(audio_path, config),
+                        next_track_path=_safe_media_path(next_track.file_path, config),
+                    )
+                except Exception:
+                    logger.exception("broadcast.transition.start.failed station_id=%s", station.id)
         _advance_player(state)
 
     db.commit()
