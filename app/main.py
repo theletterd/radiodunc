@@ -123,7 +123,8 @@ def _log_event(event: str, **fields: object) -> None:
 
 _configure_logging()
 
-playout_worker = PlayoutWorker(tick_seconds=0.3)
+broadcast_engine = BroadcastEngine(Path("generated_audio") / "hls")
+playout_worker = None
 
 
 @asynccontextmanager
@@ -137,9 +138,6 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0", lifespan=lifespan)
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
-
-broadcast_engine = BroadcastEngine(Path("generated_audio") / "hls")
-
 
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -304,6 +302,10 @@ def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
     if not media_path.exists() or not media_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
     return media_path
+
+
+if playout_worker is None:
+    playout_worker = PlayoutWorker(tick_seconds=0.3, broadcast_engine=broadcast_engine, safe_media_path=_safe_media_path)
 
 
 @app.get("/player/current-media")

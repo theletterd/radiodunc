@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -56,10 +57,18 @@ class PlayoutState:
 
 
 class PlayoutWorker:
-    def __init__(self, tick_seconds: float = 0.3) -> None:
+    def __init__(
+        self,
+        tick_seconds: float = 0.3,
+        *,
+        broadcast_engine=None,
+        safe_media_path: Callable[[str, AppConfig], Path] | None = None,
+    ) -> None:
         self._tick_seconds = tick_seconds
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._broadcast_engine = broadcast_engine
+        self._safe_media_path = safe_media_path
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -142,10 +151,9 @@ class PlayoutWorker:
             return
         current = queue[state.queue_index]
         self._ensure_item_timing(db, current, state, config, now_epoch)
+        self._orchestrate_transition_window(db, state, config, queue, now_epoch)
         if now_epoch < float(current.get("planned_end_epoch", now_epoch + 1)):
             return
-
-        self._insert_transition_after_current(db, state, config, queue)
         self._advance(state, queue, now_epoch)
 
     def _process_transition_tick(self, state: PlayerState, now_epoch: float) -> None:
@@ -185,19 +193,40 @@ class PlayoutWorker:
             return 180.0
         return 10.0
 
-    def _insert_transition_after_current(self, db: Session, state: PlayerState, config: AppConfig, queue: list[dict]) -> None:
+    def _orchestrate_transition_window(self, db: Session, state: PlayerState, config: AppConfig, queue: list[dict], now_epoch: float) -> None:
+        trigger_seconds = 20.0
         if state.current_station_id is None or state.queue_index + 1 >= len(queue):
             return
         current = queue[state.queue_index]
         next_item = queue[state.queue_index + 1]
         if current.get("type") != "track" or next_item.get("type") != "track":
             return
+        planned_end = float(current.get("planned_end_epoch", now_epoch + 1))
+        if planned_end - now_epoch > trigger_seconds:
+            return
+        plan = current.get("transition_plan") or {}
+        if plan.get("status") == "committed":
+            return
+        if plan.get("status") != "ready":
+            plan = self._prepare_transition_assets(db, state, config, queue)
+            current["transition_plan"] = plan
+            state.queue_json = json.dumps(queue)
+        if plan.get("status") == "ready" and now_epoch >= float(plan.get("transition_at_epoch", planned_end)):
+            self._commit_transition_or_fallback(db, state, config, queue, plan, now_epoch)
+
+    def _prepare_transition_assets(self, db: Session, state: PlayerState, config: AppConfig, queue: list[dict]) -> dict:
+        if state.current_station_id is None or state.queue_index + 1 >= len(queue):
+            return {"status": "skipped"}
+        current = queue[state.queue_index]
+        next_item = queue[state.queue_index + 1]
+        if current.get("type") != "track" or next_item.get("type") != "track":
+            return {"status": "skipped"}
 
         station = db.query(Station).filter(Station.id == state.current_station_id).first()
         current_track = db.query(Track).filter(Track.id == current.get("track_id")).first()
         next_track = db.query(Track).filter(Track.id == next_item.get("track_id")).first()
         if not station or not current_track or not next_track:
-            return
+            return {"status": "skipped"}
 
         payload_script = DJScriptGenerateRequest(
             previous_track_id=current_track.id,
@@ -229,16 +258,63 @@ class PlayoutWorker:
             provider=provider,
             persist=False,
         )
-        queue.insert(
-            state.queue_index + 1,
-            {
-                "type": "dj",
-                "label": f"{station.dj_name or 'DJ'} break",
-                "script_text": script_text,
-                "is_ad_break": False,
-                "audio_path": str(audio_path),
-            },
-        )
+        return {
+            "status": "ready",
+            "station_id": station.id,
+            "current_track_path": current_track.file_path,
+            "next_track_path": next_track.file_path,
+            "dj_audio_path": str(audio_path),
+            "transition_at_epoch": float(current.get("planned_end_epoch", time.time())),
+        }
+
+    def _commit_transition_or_fallback(
+        self,
+        db: Session,
+        state: PlayerState,
+        config: AppConfig,
+        queue: list[dict],
+        plan: dict,
+        now_epoch: float,
+    ) -> None:
+        if self._broadcast_engine is None or self._safe_media_path is None:
+            return
+        station_id = int(plan.get("station_id", state.current_station_id or 0))
+        try:
+            current_path = self._safe_media_path(str(plan["current_track_path"]), config)
+            next_path = self._safe_media_path(str(plan["next_track_path"]), config)
+            dj_path = self._safe_media_path(str(plan["dj_audio_path"]), config)
+            self._broadcast_engine.start_transition(
+                station_id=station_id,
+                current_track_path=current_path,
+                dj_clip_path=dj_path,
+                next_track_path=next_path,
+            )
+            queue.insert(
+                state.queue_index + 1,
+                {
+                    "type": "dj",
+                    "label": "DJ break",
+                    "script_text": "Live transition",
+                    "is_ad_break": False,
+                    "audio_path": str(dj_path),
+                    "planned_start_epoch": now_epoch,
+                    "planned_end_epoch": now_epoch + 10,
+                },
+            )
+            plan["status"] = "committed"
+            current = queue[state.queue_index]
+            current["transition_plan"] = plan
+            self._advance(state, queue, now_epoch)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("playout.transition.commit.failed")
+            state.last_error = f"transition failed, fallback to next track: {exc}"
+            try:
+                self._broadcast_engine.start(station_id=station_id, source_track_path=self._safe_media_path(str(plan["next_track_path"]), config))
+            except Exception:
+                logger.exception("playout.transition.fallback.start.failed")
+            plan["status"] = "failed"
+            current = queue[state.queue_index]
+            current["transition_plan"] = plan
         state.queue_json = json.dumps(queue)
 
     def _advance(self, state: PlayerState, queue: list[dict], now_epoch: float) -> None:
