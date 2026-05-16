@@ -66,6 +66,23 @@ class PlayerStateResponse(BaseModel):
     station: StationOut | None = None
     favorites: list[int]
     recent_station_ids: list[int]
+    current_track: TrackOut | None = None
+    queue_depth: int = 0
+    queue_position: int = 0
+    now_playing_type: str | None = None
+    now_playing_label: str | None = None
+    last_error: str | None = None
+
+
+class PlayerPlayRequest(BaseModel):
+    station_id: int
+    queue_size: int = Field(default=12, ge=1, le=200)
+    seed: int | None = None
+
+
+class PlayerActionResponse(BaseModel):
+    state: PlayerStateResponse
+    action: str
 
 
 class FavoriteStationRequest(BaseModel):

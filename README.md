@@ -29,6 +29,7 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
 - `GET /stations` endpoint to list generated stations
 - `POST /stations/{station_id}/queue` endpoint for phase 3 playlist scheduling
 - `POST /stations/{station_id}/dj-clip` endpoint for phase 5 clip synthesis + cache reuse
+- `GET /player/status`, `POST /player/play`, `POST /player/next`, and `POST /player/stop` endpoints for phase 6 playback orchestration
 - Basic error handling for invalid paths and scan failures
 
 ## Project Structure

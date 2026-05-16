@@ -1,3 +1,5 @@
+import json
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -13,6 +15,8 @@ from .schemas import (
     QueueResponse,
     PlayerStateResponse,
     PlayerStateUpdateRequest,
+    PlayerPlayRequest,
+    PlayerActionResponse,
     FavoriteStationRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
@@ -113,6 +117,12 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     recent_station_ids = [
         row.station_id for row in db.query(RecentStation).order_by(RecentStation.played_at.desc(), RecentStation.id.desc()).limit(10).all()
     ]
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    now = queue[state.queue_index] if queue and 0 <= state.queue_index < len(queue) else None
+    current_track = None
+    if state.current_track_id is not None:
+        current_track = db.query(Track).filter(Track.id == state.current_track_id).first()
+
     return PlayerStateResponse(
         station_id=state.current_station_id,
         is_playing=state.is_playing,
@@ -120,7 +130,76 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
         station=station,
         favorites=favorites,
         recent_station_ids=recent_station_ids,
+        current_track=current_track,
+        queue_depth=len(queue),
+        queue_position=state.queue_index,
+        now_playing_type=now.get("type") if now else None,
+        now_playing_label=now.get("label") if now else None,
+        last_error=state.last_error,
     )
+
+
+def _advance_player(state: PlayerState) -> None:
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    if not queue:
+        state.is_playing = False
+        state.current_track_id = None
+        return
+    next_idx = state.queue_index + 1
+    if next_idx >= len(queue):
+        state.is_playing = False
+        state.current_track_id = None
+        return
+    state.queue_index = next_idx
+    item = queue[next_idx]
+    state.current_track_id = item.get("track_id") if item.get("type") == "track" else None
+
+
+@app.get("/player/status", response_model=PlayerStateResponse)
+def player_status(db: Session = Depends(get_db)):
+    return _build_player_state_response(db, _get_or_create_player_state(db))
+
+
+@app.post("/player/play", response_model=PlayerActionResponse)
+def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    station = db.query(Station).filter(Station.id == payload.station_id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail=f"Station {payload.station_id} not found")
+
+    queue = build_station_queue(db=db, station_id=payload.station_id, config=load_config(), size=payload.queue_size, seed=payload.seed)
+    sequence = []
+    for track in queue["tracks"]:
+        sequence.append({"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"})
+        sequence.append({"type": "dj", "label": f"{station.dj_name or 'DJ'} break"})
+
+    state.current_station_id = payload.station_id
+    state.is_playing = True
+    state.queue_json = json.dumps(sequence)
+    state.queue_index = 0
+    state.current_track_id = sequence[0].get("track_id") if sequence else None
+    state.last_error = None
+    db.commit()
+    db.refresh(state)
+    return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
+
+
+@app.post("/player/next", response_model=PlayerActionResponse)
+def player_next(db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    _advance_player(state)
+    db.commit()
+    db.refresh(state)
+    return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
+
+
+@app.post("/player/stop", response_model=PlayerActionResponse)
+def player_stop(db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    state.is_playing = False
+    db.commit()
+    db.refresh(state)
+    return PlayerActionResponse(state=_build_player_state_response(db, state), action="stop")
 
 
 @app.get("/player/state", response_model=PlayerStateResponse)

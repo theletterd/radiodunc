@@ -51,8 +51,12 @@ class PlayerState(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     current_station_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    current_track_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_playing: Mapped[bool] = mapped_column(default=False, nullable=False)
     volume: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
+    queue_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    queue_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 

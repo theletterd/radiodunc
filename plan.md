@@ -145,7 +145,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 6 — Playback Orchestration (MVP)
 
-**Status:** `TODO`
+**Status:** `DONE` (queue-backed player endpoints + state machine controls implemented)
 
 ### Goals
 - Play queue as `song → DJ clip → next song` sequence.
@@ -212,4 +212,4 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Next Recommended Work Item
 
-Move to **Phase 5** by adding TTS synthesis and DJ clip caching for generated scripts.
+Move to **Phase 7** by adding a local web UI flow for station playback controls and status display.
