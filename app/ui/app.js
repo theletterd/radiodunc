@@ -370,9 +370,21 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
 
 document.getElementById('refreshStationsBtn').addEventListener('click', async () => {
   console.log('[ui][button] refresh stations clicked');
-  await loadStations();
-  console.log('[ui][button] refresh stations complete', { stationCount: stations.length });
-  renderStations();
+  const status = document.getElementById('scanStatus');
+  status.textContent = 'Generating stations...';
+  try {
+    const result = await api('/stations/generate', { method: 'POST', body: JSON.stringify({}) });
+    await loadStations();
+    await refreshState();
+    console.log('[ui][button] refresh stations complete', {
+      generated: result?.generated,
+      stationCount: stations.length,
+    });
+    status.textContent = `Generated ${result?.generated ?? stations.length} stations.`;
+  } catch (error) {
+    console.error('[ui][button] refresh stations failed', { error: error.message });
+    status.textContent = `Refresh failed: ${error.message}`;
+  }
 });
 
 document.getElementById('playBtn').addEventListener('click', async () => {
