@@ -466,10 +466,10 @@ def broadcast_live_manifest(request: Request):
 
 @app.get("/broadcast/{segment_name}")
 def broadcast_live_segment(segment_name: str, request: Request):
-    segment = broadcast_engine.segment_path(segment_name)
+    segment = broadcast_engine.resolve_segment_path(segment_name)
     range_header = request.headers.get("range")
-    if not segment.exists() or segment.suffix != ".ts":
-        _log_event("broadcast.segment.miss", segment=segment_name, path=str(segment), range=range_header)
+    if segment is None or segment.suffix != ".ts":
+        _log_event("broadcast.segment.miss", segment=segment_name, path=str(broadcast_engine.segment_path(segment_name)), range=range_header)
         raise HTTPException(status_code=404, detail="Segment not found")
     size = segment.stat().st_size
     _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
