@@ -15,8 +15,10 @@ from .prompt_library import (
     render_weather_prompt,
 )
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
+from .weather import fetch_weather_summary
 
 logger = logging.getLogger(__name__)
+
 
 
 def _track_ref(track: Track | None) -> str:
@@ -53,6 +55,17 @@ def _generate_openai_script(
     ]
     if payload.include_weather:
         prompt_sections.append(render_weather_prompt(station, "your area"))
+        weather_location = "your area"
+        if station.config_json:
+            try:
+                station_cfg = json.loads(station.config_json)
+                if isinstance(station_cfg, dict):
+                    weather_location = str(station_cfg.get("weather_location") or weather_location)
+            except json.JSONDecodeError:
+                pass
+        live_weather = fetch_weather_summary(weather_location)
+        if live_weather:
+            prompt_sections.append(f"Use this real weather data as facts: {live_weather}")
     if payload.include_news:
         prompt_sections.append(render_news_prompt(station))
     if payload.include_fake_ad:
@@ -140,8 +153,14 @@ def generate_dj_script(
 
     if payload.include_weather:
         location = cfg.get("weather_location") or "your area"
-        sentence_pool.append(render_weather_prompt(station, location))
-        sentence_pool.append(f"Quick weather check for {location}: keep it locked here while we keep the soundtrack rolling.")
+        live_weather = fetch_weather_summary(location)
+        if live_weather:
+            sentence_pool.append(live_weather)
+        else:
+            sentence_pool.append(render_weather_prompt(station, location))
+            sentence_pool.append(
+                f"Quick weather check for {location}: keep it locked here while we keep the soundtrack rolling."
+            )
 
     if payload.include_news:
         sentence_pool.append(render_news_prompt(station))
