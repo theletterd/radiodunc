@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from .config import AppConfig, load_config, save_config
 from .database import Base, engine, get_db
 from .models import FavoriteStation, PlayerState, RecentStation, Station, Track
+from .dj_scripts import generate_dj_script
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
@@ -13,6 +14,8 @@ from .schemas import (
     PlayerStateResponse,
     PlayerStateUpdateRequest,
     FavoriteStationRequest,
+    DJScriptGenerateRequest,
+    DJScriptResponse,
     StationGenerateRequest,
     StationOut,
     TrackOut,
@@ -154,3 +157,24 @@ def set_favorite_station(station_id: int, payload: FavoriteStationRequest, db: S
         db.delete(existing)
     db.commit()
     return {"station_id": station_id, "favorite": payload.favorite}
+
+
+@app.post("/stations/{station_id}/dj-script", response_model=DJScriptResponse)
+def generate_station_dj_script(station_id: int, payload: DJScriptGenerateRequest, db: Session = Depends(get_db)):
+    station = db.query(Station).filter(Station.id == station_id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail=f"Station {station_id} not found")
+
+    previous_track = None
+    if payload.previous_track_id is not None:
+        previous_track = db.query(Track).filter(Track.id == payload.previous_track_id).first()
+        if not previous_track:
+            raise HTTPException(status_code=404, detail=f"Track {payload.previous_track_id} not found")
+
+    next_track = None
+    if payload.next_track_id is not None:
+        next_track = db.query(Track).filter(Track.id == payload.next_track_id).first()
+        if not next_track:
+            raise HTTPException(status_code=404, detail=f"Track {payload.next_track_id} not found")
+
+    return generate_dj_script(station, payload, previous_track, next_track)

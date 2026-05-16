@@ -105,7 +105,7 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Phase 4 — DJ Script Generation
 
-**Status:** `TODO`
+**Status:** `DONE` (template-driven script generator + endpoint implemented)
 
 ### Goals
 - Generate short between-track DJ scripts in station-specific voice.
@@ -212,4 +212,4 @@ This document tracks phased delivery for the local AI radio project and is inten
 
 ## Next Recommended Work Item
 
-Move to **Phase 2.5** by making announcer personas configuration-driven and hardening station-generation config validation.
+Move to **Phase 5** by adding TTS synthesis and DJ clip caching for generated scripts.

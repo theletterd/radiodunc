@@ -20,9 +20,10 @@ from app.main import (
     scan_library_endpoint,
     update_config,
     update_player_state,
+    generate_station_dj_script,
 )
 from app.models import FavoriteStation, RecentStation, Station, Track
-from app.schemas import FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.schemas import DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -217,3 +218,28 @@ def test_set_favorite_station_adds_and_removes():
 
     set_favorite_station(station.id, FavoriteStationRequest(favorite=False), db)
     assert db.query(FavoriteStation).count() == 0
+
+
+def test_generate_station_dj_script_happy_path_and_not_found():
+    db = _make_db_session()
+    station = Station(name="Night Drive", tagline="Smooth roads.", dj_name="DJ Nova", dj_style="laid-back")
+    track1 = Track(file_path="/m/a.mp3", title="A Song", artist="A Artist")
+    track2 = Track(file_path="/m/b.mp3", title="B Song", artist="B Artist")
+    db.add_all([station, track1, track2])
+    db.commit()
+    db.refresh(station)
+    db.refresh(track1)
+    db.refresh(track2)
+
+    result = generate_station_dj_script(
+        station.id,
+        DJScriptGenerateRequest(previous_track_id=track1.id, next_track_id=track2.id, include_weather=True, max_sentences=3),
+        db,
+    )
+    assert result.station_id == station.id
+    assert len(result.sentences) == 3
+    assert "Night Drive" in result.script_text
+
+    with pytest.raises(HTTPException) as exc:
+        generate_station_dj_script(9999, DJScriptGenerateRequest(), db)
+    assert exc.value.status_code == 404
