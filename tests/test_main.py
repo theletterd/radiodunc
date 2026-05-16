@@ -17,7 +17,7 @@ from app.main import (
     update_config,
 )
 from app.models import Station, Track
-from app.schemas import LibraryScanRequest, StationGenerateRequest
+from app.schemas import LibraryScanRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -141,3 +141,31 @@ def test_stations_endpoint_orders_by_created_at_desc():
     results = list_stations(db)
 
     assert [row.name for row in results] == ["Newer", "Older"]
+
+
+def test_generate_station_queue_endpoint_maps_value_error(monkeypatch):
+    db = _make_db_session()
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+
+    def fake_queue(**_kwargs):
+        return {
+            "station_id": 1,
+            "station_name": "X FM",
+            "queue_size": 1,
+            "seed": None,
+            "artist_repeat_window": 2,
+            "used_station_alignment": False,
+            "tracks": [],
+        }
+
+    from app.main import generate_station_queue
+
+    monkeypatch.setattr("app.main.build_station_queue", fake_queue)
+    ok = generate_station_queue(1, QueueGenerateRequest(size=1), db)
+    assert ok["station_id"] == 1
+
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad")))
+    with pytest.raises(HTTPException) as exc:
+        generate_station_queue(1, QueueGenerateRequest(size=1), db)
+    assert exc.value.status_code == 400

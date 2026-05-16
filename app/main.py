@@ -7,10 +7,13 @@ from .models import Station, Track
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
+    QueueGenerateRequest,
+    QueueResponse,
     StationGenerateRequest,
     StationOut,
     TrackOut,
 )
+from .scheduler import build_station_queue
 from .stations import generate_stations
 
 Base.metadata.create_all(bind=engine)
@@ -64,3 +67,17 @@ def generate_stations_endpoint(payload: StationGenerateRequest, db: Session = De
 @app.get("/stations", response_model=list[StationOut])
 def list_stations(db: Session = Depends(get_db)):
     return db.query(Station).order_by(Station.created_at.desc()).all()
+
+
+@app.post("/stations/{station_id}/queue", response_model=QueueResponse)
+def generate_station_queue(station_id: int, payload: QueueGenerateRequest, db: Session = Depends(get_db)):
+    try:
+        return build_station_queue(
+            db=db,
+            station_id=station_id,
+            config=load_config(),
+            size=payload.size,
+            seed=payload.seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

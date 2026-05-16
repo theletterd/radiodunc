@@ -66,6 +66,7 @@ class AppConfig(BaseModel):
     music_folder: str = "~/Music"
     station_generation_count: int = 6
     station_generation_seed: int | None = None
+    playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     station_presets: list[StationPreset] = Field(default_factory=lambda: [preset.model_copy() for preset in DEFAULT_STATION_PRESETS])
 

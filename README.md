@@ -16,6 +16,7 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
   - news alert preferences
   - station persona presets (format/tagline/DJ naming/style/voice hints)
   - optional `station_generation_seed` for deterministic station shuffle order
+- configurable `playlist_artist_repeat_window` anti-repeat setting for queue scheduling
 - `GET /config` and `PUT /config`
 - `POST /library/scan` endpoint:
   - accepts optional folder path
@@ -26,6 +27,7 @@ This repository contains a FastAPI backend skeleton for scanning a local music l
 - `GET /tracks` endpoint to list scanned tracks
 - `POST /stations/generate` endpoint for phase 2 station creation
 - `GET /stations` endpoint to list generated stations
+- `POST /stations/{station_id}/queue` endpoint for phase 3 playlist scheduling
 - Basic error handling for invalid paths and scan failures
 
 ## Project Structure
@@ -158,3 +160,14 @@ curl http://127.0.0.1:8000/stations
 ## Project Planning
 
 See `plan.md` for phased roadmap and status tracking.
+
+
+### Generate station queue
+
+```bash
+curl -X POST http://127.0.0.1:8000/stations/1/queue \
+  -H "Content-Type: application/json" \
+  -d '{"size": 12, "seed": 123}'
+```
+
+This queue generator prefers station `core_artists` when available, avoids same-artist repetition within `playlist_artist_repeat_window`, and supports deterministic output via request `seed`.
