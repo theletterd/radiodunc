@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from .config import AppConfig, load_config, save_config
 from .database import Base, engine, get_db
@@ -43,6 +44,39 @@ from .tts import build_tts_provider, get_or_create_dj_clip
 from .playout_worker import PlayoutWorker
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_player_state_schema() -> None:
+    with engine.begin() as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(player_state)")).fetchall()
+        }
+        missing_columns = {
+            "timeline_started_at_epoch": "ALTER TABLE player_state ADD COLUMN timeline_started_at_epoch FLOAT NOT NULL DEFAULT 0.0",
+            "current_item_started_at_epoch": "ALTER TABLE player_state ADD COLUMN current_item_started_at_epoch FLOAT NOT NULL DEFAULT 0.0",
+            "current_item_expected_end_at_epoch": "ALTER TABLE player_state ADD COLUMN current_item_expected_end_at_epoch FLOAT NOT NULL DEFAULT 0.0",
+            "current_sequence_id": "ALTER TABLE player_state ADD COLUMN current_sequence_id INTEGER NOT NULL DEFAULT 0",
+            "playout_mode": "ALTER TABLE player_state ADD COLUMN playout_mode VARCHAR NOT NULL DEFAULT 'stopped'",
+        }
+        for column_name, ddl in missing_columns.items():
+            if column_name not in columns:
+                conn.execute(text(ddl))
+        conn.execute(
+            text(
+                """
+                UPDATE player_state
+                SET timeline_started_at_epoch = COALESCE(timeline_started_at_epoch, 0.0),
+                    current_item_started_at_epoch = COALESCE(current_item_started_at_epoch, 0.0),
+                    current_item_expected_end_at_epoch = COALESCE(current_item_expected_end_at_epoch, 0.0),
+                    current_sequence_id = COALESCE(current_sequence_id, 0),
+                    playout_mode = COALESCE(NULLIF(playout_mode, ''), 'stopped')
+                """
+            )
+        )
+
+
+_ensure_player_state_schema()
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +283,11 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
         now_playing_type=now.get("type") if now else None,
         now_playing_label=now.get("label") if now else None,
         last_error=state.last_error,
+        timeline_started_at_epoch=state.timeline_started_at_epoch,
+        current_item_started_at_epoch=state.current_item_started_at_epoch,
+        current_item_expected_end_at_epoch=state.current_item_expected_end_at_epoch,
+        current_sequence_id=state.current_sequence_id,
+        playout_mode=state.playout_mode,
     )
 
 
@@ -356,6 +395,12 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state.queue_json = json.dumps(sequence)
     state.queue_index = 0
     state.current_track_id = sequence[0].get("track_id") if sequence else None
+    now_epoch = time.time()
+    state.timeline_started_at_epoch = now_epoch
+    state.current_item_started_at_epoch = now_epoch
+    state.current_item_expected_end_at_epoch = now_epoch
+    state.current_sequence_id = (state.current_sequence_id or 0) + 1
+    state.playout_mode = "live" if sequence else "recovering"
     state.last_error = None
     db.commit()
     db.refresh(state)
@@ -383,9 +428,11 @@ def player_next(db: Session = Depends(get_db)):
     if not queue or not (0 <= state.queue_index < len(queue)):
         state.is_playing = False
         state.current_track_id = None
+        state.playout_mode = "recovering"
     else:
         queue[state.queue_index]["planned_end_epoch"] = time.time()
         state.queue_json = json.dumps(queue)
+        state.playout_mode = "live"
 
     db.commit()
     db.refresh(state)
@@ -398,6 +445,7 @@ def player_stop(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.stop.requested", station_id=state.current_station_id)
     state.is_playing = False
+    state.playout_mode = "stopped"
     broadcast_engine.stop()
     db.commit()
     db.refresh(state)
@@ -422,6 +470,10 @@ def update_player_state(payload: PlayerStateUpdateRequest, db: Session = Depends
         db.add(RecentStation(station_id=payload.station_id))
     if payload.is_playing is not None:
         state.is_playing = payload.is_playing
+        if payload.is_playing:
+            state.playout_mode = "live"
+        else:
+            state.playout_mode = "stopped"
     if payload.volume is not None:
         state.volume = payload.volume
     db.commit()

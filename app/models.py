@@ -57,6 +57,11 @@ class PlayerState(Base):
     queue_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     queue_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timeline_started_at_epoch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    current_item_started_at_epoch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    current_item_expected_end_at_epoch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    current_sequence_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    playout_mode: Mapped[str] = mapped_column(String, default="stopped", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 

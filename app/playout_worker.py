@@ -92,12 +92,16 @@ class PlayoutWorker:
             state_name = self._resolve_state(state)
 
             if state_name == PlayoutState.IDLE:
+                state.playout_mode = "stopped"
                 return
             if state_name == PlayoutState.RECOVERING:
+                state.playout_mode = "recovering"
                 self._recover_timing(db, state, config, now_epoch)
             elif state_name == PlayoutState.PLAYING_TRACK:
+                state.playout_mode = "live"
                 self._process_track_tick(db, state, config, now_epoch)
             elif state_name == PlayoutState.PLAYING_TRANSITION:
+                state.playout_mode = "live"
                 self._process_transition_tick(state, now_epoch)
 
             db.commit()
@@ -118,12 +122,14 @@ class PlayoutWorker:
         if not queue:
             state.is_playing = False
             state.current_track_id = None
+            state.playout_mode = "stopped"
             return
         if state.queue_index < 0:
             state.queue_index = 0
         if state.queue_index >= len(queue):
             state.is_playing = False
             state.current_track_id = None
+            state.playout_mode = "stopped"
             return
         self._ensure_planned_timing(db, state, config, now_epoch)
 
@@ -132,6 +138,7 @@ class PlayoutWorker:
         if not queue or not (0 <= state.queue_index < len(queue)):
             state.is_playing = False
             state.current_track_id = None
+            state.playout_mode = "recovering"
             return
         current = queue[state.queue_index]
         self._ensure_item_timing(db, current, state, config, now_epoch)
@@ -146,6 +153,7 @@ class PlayoutWorker:
         if not queue or not (0 <= state.queue_index < len(queue)):
             state.is_playing = False
             state.current_track_id = None
+            state.playout_mode = "recovering"
             return
         current = queue[state.queue_index]
         if now_epoch >= float(current.get("planned_end_epoch", now_epoch + 1)):
@@ -164,6 +172,8 @@ class PlayoutWorker:
         if item.get("planned_end_epoch") is None:
             duration = self._item_duration_seconds(db, item, state, config)
             item["planned_end_epoch"] = float(item["planned_start_epoch"]) + duration
+        state.current_item_started_at_epoch = float(item.get("planned_start_epoch", 0.0))
+        state.current_item_expected_end_at_epoch = float(item.get("planned_end_epoch", 0.0))
         state.queue_json = json.dumps(self._queue(state))
 
     def _item_duration_seconds(self, db: Session, item: dict, state: PlayerState, config: AppConfig) -> float:

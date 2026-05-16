@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -72,6 +74,11 @@ class PlayerStateResponse(BaseModel):
     now_playing_type: str | None = None
     now_playing_label: str | None = None
     last_error: str | None = None
+    timeline_started_at_epoch: float = 0.0
+    current_item_started_at_epoch: float = 0.0
+    current_item_expected_end_at_epoch: float = 0.0
+    current_sequence_id: int = 0
+    playout_mode: Literal["live", "stopped", "recovering"] = "stopped"
 
 
 class PlayerPlayRequest(BaseModel):
