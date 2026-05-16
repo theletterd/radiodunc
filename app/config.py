@@ -64,8 +64,8 @@ DEFAULT_STATION_PRESETS: list[StationPreset] = [
 
 class AppConfig(BaseModel):
     music_folder: str = "~/Music"
-    tts_provider: str = "openai"
-    script_provider: str = "openai"
+    tts_provider: str = "tone"
+    script_provider: str = "template"
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
     openai_tts_model: str = "gpt-4o-mini-tts"
@@ -73,6 +73,13 @@ class AppConfig(BaseModel):
     station_generation_count: int = 6
     station_generation_seed: int | None = None
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
+    radio_polish_enabled: bool = True
+    daypart_programming_enabled: bool = True
+    time_announcement_enabled: bool = False
+    time_announcement_every_breaks: int = Field(default=2, ge=1, le=20)
+    dj_break_every_tracks: int = Field(default=1, ge=1, le=10)
+    weather_insert_every_breaks: int = Field(default=3, ge=1, le=20)
+    news_insert_every_breaks: int = Field(default=5, ge=1, le=20)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     station_presets: list[StationPreset] = Field(default_factory=lambda: [preset.model_copy() for preset in DEFAULT_STATION_PRESETS])
 

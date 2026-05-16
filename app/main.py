@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -36,6 +38,30 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
+
+
+def _daypart_greeting(config: AppConfig) -> str:
+    try:
+        zone = ZoneInfo(config.alerts.local_time_zone)
+    except Exception:  # noqa: BLE001
+        zone = ZoneInfo("UTC")
+    hour = datetime.now(zone).hour
+    if 5 <= hour < 12:
+        return "Good morning"
+    if 12 <= hour < 17:
+        return "Good afternoon"
+    if 17 <= hour < 22:
+        return "Good evening"
+    return "Late night vibes"
+
+
+def _local_time_announcement(config: AppConfig) -> str:
+    try:
+        zone = ZoneInfo(config.alerts.local_time_zone)
+    except Exception:  # noqa: BLE001
+        zone = ZoneInfo("UTC")
+    stamp = datetime.now(zone).strftime("%-I:%M%p").lower()
+    return f"It's {stamp}"
 
 
 @app.get("/health")
@@ -192,7 +218,11 @@ def player_current_media(db: Session = Depends(get_db)):
     if item.get("type") == "dj":
         script_text = item.get("script_text") or item.get("label") or "Station ID"
         voice = item.get("voice")
-        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice, provider=build_tts_provider(config))
+        try:
+            provider = build_tts_provider(config)
+        except ValueError:
+            provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice, provider=provider)
         media_path = _safe_media_path(clip.audio_path, config)
         return FileResponse(str(media_path), filename=media_path.name)
 
@@ -202,15 +232,58 @@ def player_current_media(db: Session = Depends(get_db)):
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
+    config = load_config()
     station = db.query(Station).filter(Station.id == payload.station_id).first()
     if not station:
         raise HTTPException(status_code=404, detail=f"Station {payload.station_id} not found")
 
-    queue = build_station_queue(db=db, station_id=payload.station_id, config=load_config(), size=payload.queue_size, seed=payload.seed)
+    queue = build_station_queue(db=db, station_id=payload.station_id, config=config, size=payload.queue_size, seed=payload.seed)
     sequence = []
-    for track in queue["tracks"]:
+    breaks_since_weather = 0
+    breaks_since_news = 0
+    breaks_since_time_check = 0
+    tracks_since_break = 0
+    for idx, track in enumerate(queue["tracks"]):
         sequence.append({"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"})
-        sequence.append({"type": "dj", "label": f"{station.dj_name or 'DJ'} break", "script_text": f"{station.dj_name or 'DJ'} here on {station.name}."})
+        tracks_since_break += 1
+        if tracks_since_break < config.dj_break_every_tracks:
+            continue
+
+        breaks_since_weather += 1
+        breaks_since_news += 1
+        breaks_since_time_check += 1
+        payload_script = DJScriptGenerateRequest(
+            previous_track_id=track.id,
+            next_track_id=queue["tracks"][idx + 1].id if idx + 1 < len(queue["tracks"]) else None,
+            include_weather=breaks_since_weather >= config.weather_insert_every_breaks,
+            include_news=breaks_since_news >= config.news_insert_every_breaks,
+            include_fake_ad=(idx % 4 == 0),
+            max_sentences=3,
+        )
+        if payload_script.include_weather:
+            breaks_since_weather = 0
+        if payload_script.include_news:
+            breaks_since_news = 0
+        script = generate_dj_script(
+            station=station,
+            payload=payload_script,
+            previous_track=track,
+            next_track=queue["tracks"][idx + 1] if idx + 1 < len(queue["tracks"]) else None,
+            config=config if config.radio_polish_enabled else None,
+        )
+        opener = f"{_daypart_greeting(config)} from {station.name}. " if config.daypart_programming_enabled else ""
+        time_check = ""
+        if config.time_announcement_enabled and breaks_since_time_check >= config.time_announcement_every_breaks:
+            time_check = f"{_local_time_announcement(config)} and you're listening to {station.name}. "
+            breaks_since_time_check = 0
+        sequence.append(
+            {
+                "type": "dj",
+                "label": f"{station.dj_name or 'DJ'} break",
+                "script_text": f"{time_check}{opener}{script.script_text}",
+            }
+        )
+        tracks_since_break = 0
 
     state.current_station_id = payload.station_id
     state.is_playing = True
@@ -307,5 +380,10 @@ def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest
     if not station:
         raise HTTPException(status_code=404, detail=f"Station {station_id} not found")
 
-    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=build_tts_provider(load_config()))
+    config = load_config()
+    try:
+        provider = build_tts_provider(config)
+    except ValueError:
+        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider)
     return DJClipResponse(clip_id=clip.id, audio_path=clip.audio_path, voice=clip.voice, cached=cached)
