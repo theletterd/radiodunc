@@ -62,6 +62,7 @@ class PlayerState(Base):
     current_item_expected_end_at_epoch: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     current_sequence_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     playout_mode: Mapped[str] = mapped_column(String, default="stopped", nullable=False)
+    admin_commands_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 

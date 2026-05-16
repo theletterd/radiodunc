@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -85,6 +85,15 @@ class PlayerPlayRequest(BaseModel):
     station_id: int
     queue_size: int = Field(default=12, ge=1, le=200)
     seed: int | None = None
+
+
+
+class PlayerAdminCommandRequest(BaseModel):
+    command: Literal["force_station_change"]
+    station_id: int | None = None
+    queue_size: int = Field(default=12, ge=1, le=200)
+    seed: int | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class PlayerActionResponse(BaseModel):
