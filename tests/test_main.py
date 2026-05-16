@@ -25,8 +25,9 @@ from app.main import (
     player_play,
     player_next,
     player_stop,
+    player_current_media,
 )
-from app.models import DJClip, FavoriteStation, RecentStation, Station, Track
+from app.models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
 from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
@@ -294,3 +295,50 @@ def test_player_play_next_stop_flow(monkeypatch):
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False
+
+
+def test_player_current_media_returns_track_file(tmp_path, monkeypatch):
+    db = _make_db_session()
+    station = Station(name="Media FM", dj_name="DJ Media")
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"fake-audio")
+    track = Track(file_path=str(audio), title="Song", artist="Artist")
+    db.add_all([station, track])
+    db.commit()
+    db.refresh(station)
+    db.refresh(track)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(music_folder=str(tmp_path)))
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: {"tracks": [track]})
+
+    player_play(PlayerPlayRequest(station_id=station.id, queue_size=1), db)
+    response = player_current_media(db)
+
+    assert response.path == str(audio)
+
+
+def test_player_current_media_serves_dj_clip():
+    db = _make_db_session()
+    state = PlayerState(current_station_id=None, is_playing=True, queue_json='[{"type":"dj","label":"break","script_text":"DJ break"}]', queue_index=0)
+    db.add(state)
+    db.commit()
+
+    response = player_current_media(db)
+    assert response.path.endswith('.wav')
+
+
+def test_player_current_media_rejects_path_outside_allowed_root(monkeypatch):
+    db = _make_db_session()
+    station = Station(name="Unsafe FM", dj_name="DJ Unsafe")
+    track = Track(file_path="/tmp/not-allowed.mp3", title="Nope", artist="X")
+    db.add_all([station, track])
+    db.commit()
+    db.refresh(station)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(music_folder="/workspace/radiodunc/tests"))
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: {"tracks": [track]})
+
+    player_play(PlayerPlayRequest(station_id=station.id, queue_size=1), db)
+    with pytest.raises(HTTPException) as exc:
+        player_current_media(db)
+    assert exc.value.status_code == 403

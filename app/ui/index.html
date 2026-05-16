@@ -3,106 +3,244 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RadioDunc</title>
+  <title>RadioDunc — Local Radio Control</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .layout { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
-    .panel { padding: 16px; border-right: 1px solid #1e293b; }
-    .main { padding: 24px; }
-    input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #020617; color: #e2e8f0; }
-    .station { padding: 10px; border: 1px solid #334155; border-radius: 10px; margin-top: 10px; cursor: pointer; background: #111827; }
-    .station.active { border-color: #38bdf8; }
-    button { padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; cursor: pointer; }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #0b1220; color: #e5e7eb; }
+    .wrap { display: grid; grid-template-columns: 330px 1fr; min-height: 100vh; }
+    aside, main { padding: 16px; }
+    aside { border-right: 1px solid #1f2937; background: #0f172a; }
+    .card { background: #111827; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+    .station { cursor: pointer; }
+    .station.active { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8 inset; }
     .muted { color: #94a3b8; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    input, button { border-radius: 8px; border: 1px solid #334155; background: #020617; color: #e5e7eb; }
+    input { padding: 8px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    button.primary { background: #0ea5e9; color: #082f49; border-color: #38bdf8; font-weight: 600; }
+    ul { margin: 8px 0; padding-left: 18px; }
+    .status { font-size: 0.9rem; margin-top: 4px; }
   </style>
 </head>
 <body>
-  <div class="layout">
-    <aside class="panel">
+  <div class="wrap">
+    <aside>
+      <h2>Library Setup</h2>
+      <div class="card">
+        <label class="muted" for="libraryPath">Music folder</label>
+        <input id="libraryPath" placeholder="/path/to/music" />
+        <div class="row" style="margin-top:10px;">
+          <button id="scanBtn" class="primary">Scan Library</button>
+          <button id="refreshStationsBtn">Refresh Stations</button>
+        </div>
+        <p id="scanStatus" class="status muted">Idle</p>
+      </div>
+
       <h2>Stations</h2>
-      <input id="search" placeholder="Search stations" />
+      <input id="search" placeholder="Search stations" style="width:100%; margin-bottom:8px;" />
       <div id="stations"></div>
     </aside>
-    <main class="main">
+
+    <main>
       <h1 id="stationName">No station selected</h1>
-      <p class="muted" id="stationMeta">Pick a station from the left to start.</p>
-      <div class="row">
-        <button id="playPause">Play</button>
-        <label>Volume <input id="volume" type="range" min="0" max="100" value="80" style="width:220px; vertical-align: middle;" /></label>
+      <p id="stationMeta" class="muted">Pick a station, then press Play Station.</p>
+
+      <div class="card">
+        <div class="row">
+          <button id="playBtn" class="primary">Play Station</button>
+          <button id="nextBtn">Next</button>
+          <button id="stopBtn">Stop</button>
+          <label>Volume <input id="volume" type="range" min="0" max="100" value="80" /></label>
+        </div>
       </div>
-      <h3>Recent</h3>
-      <p id="recent" class="muted">-</p>
-      <h3>Favorites</h3>
-      <p id="favorites" class="muted">-</p>
+
+      <div class="card">
+        <h3>Now Playing</h3>
+        <p id="nowPlaying">-</p>
+        <p id="playerFlags" class="muted">-</p>
+      </div>
+
+      <div class="card">
+        <h3>Up Next</h3>
+        <p id="upNext">Queue depth: 0</p>
+        <audio id="playerAudio" controls style="width:100%; margin-top:8px;"></audio>
+      </div>
+
+      <div class="card">
+        <h3>Favorites</h3>
+        <p id="favorites" class="muted">-</p>
+        <h3>Recent Stations</h3>
+        <p id="recent" class="muted">-</p>
+      </div>
     </main>
   </div>
+
 <script>
 let stations = [];
 let state = null;
+const audioEl = document.getElementById('playerAudio');
+let loadedQueuePosition = null;
 
-async function api(path, options={}) {
-  const res = await fetch(path, {headers: {'Content-Type':'application/json'}, ...options});
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+async function api(path, options = {}) {
+  const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
 }
 
-function render() {
+function stationName(id) {
+  return stations.find((s) => s.id === id)?.name || `#${id}`;
+}
+
+function renderStations() {
   const q = document.getElementById('search').value.toLowerCase();
-  const list = document.getElementById('stations');
-  list.innerHTML = '';
-  const filtered = stations.filter(s => s.name.toLowerCase().includes(q));
-  filtered.forEach(s => {
-    const el = document.createElement('div');
-    el.className = 'station' + (state?.station_id === s.id ? ' active' : '');
-    el.innerHTML = `<div><strong>${s.name}</strong></div><div class="muted">${s.tagline || s.format || ''}</div>`;
-    el.onclick = async () => {
-      state = await api('/player/state', {method:'PUT', body: JSON.stringify({station_id:s.id, is_playing:true})});
-      renderNowPlaying();
-      render();
+  const el = document.getElementById('stations');
+  el.innerHTML = '';
+  stations.filter((s) => s.name.toLowerCase().includes(q)).forEach((s) => {
+    const card = document.createElement('div');
+    card.className = `card station${state?.station_id === s.id ? ' active' : ''}`;
+    card.innerHTML = `<strong>${s.name}</strong><div class="muted">${s.tagline || s.format || 'Local station'}</div>`;
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    const favBtn = document.createElement('button');
+    favBtn.textContent = state?.favorites?.includes(s.id) ? '★ Favorited' : '☆ Favorite';
+    favBtn.onclick = async (event) => {
+      event.stopPropagation();
+      const target = !state?.favorites?.includes(s.id);
+      await api(`/stations/${s.id}/favorite`, { method: 'PUT', body: JSON.stringify({ favorite: target }) });
+      await refreshState();
     };
-    const fav = document.createElement('button');
-    fav.textContent = state?.favorites?.includes(s.id) ? '★' : '☆';
-    fav.onclick = async (e) => {
-      e.stopPropagation();
-      const makeFav = !state?.favorites?.includes(s.id);
-      await api(`/stations/${s.id}/favorite`, {method:'PUT', body: JSON.stringify({favorite: makeFav})});
-      state = await api('/player/state');
-      renderNowPlaying();
-      render();
+    row.appendChild(favBtn);
+    card.appendChild(row);
+
+    card.onclick = async () => {
+      state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: s.id }) });
+      renderAll();
     };
-    el.appendChild(fav);
-    list.appendChild(el);
+    el.appendChild(card);
   });
 }
 
-function renderNowPlaying() {
-  const current = stations.find(s => s.id === state?.station_id);
-  document.getElementById('stationName').textContent = current ? current.name : 'No station selected';
-  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station from the left to start.';
-  document.getElementById('playPause').textContent = state?.is_playing ? 'Pause' : 'Play';
+function renderPlayer() {
+  const current = stations.find((s) => s.id === state?.station_id);
+  document.getElementById('stationName').textContent = current?.name || 'No station selected';
+  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
   document.getElementById('volume').value = state?.volume ?? 80;
-  const resolveName = (id) => stations.find(s => s.id === id)?.name || `#${id}`;
-  document.getElementById('recent').textContent = (state?.recent_station_ids || []).map(resolveName).join(', ') || '-';
-  document.getElementById('favorites').textContent = (state?.favorites || []).map(resolveName).join(', ') || '-';
+
+  const label = state?.now_playing_label || '-';
+  document.getElementById('nowPlaying').textContent = label;
+  document.getElementById('playerFlags').textContent = `State: ${state?.is_playing ? 'Playing' : 'Stopped'} · Type: ${state?.now_playing_type || '-'} · Queue position: ${state?.queue_position ?? '-'} `;
+  document.getElementById('upNext').textContent = `Queue depth: ${state?.queue_depth ?? 0}`;
+  document.getElementById('favorites').textContent = (state?.favorites || []).map(stationName).join(', ') || '-';
+  document.getElementById('recent').textContent = (state?.recent_station_ids || []).map(stationName).join(', ') || '-';
 }
+
+function renderAll() {
+  renderStations();
+  renderPlayer();
+}
+
+
+async function syncAudioToState() {
+  if (!state?.is_playing) {
+    audioEl.pause();
+    audioEl.removeAttribute('src');
+    audioEl.load();
+    loadedQueuePosition = null;
+    return;
+  }
+
+  if (!state?.now_playing_type) {
+    return;
+  }
+
+  if (loadedQueuePosition !== state.queue_position) {
+    audioEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
+    loadedQueuePosition = state.queue_position;
+  }
+  try { await audioEl.play(); } catch (_err) { }
+}
+
+async function refreshState() {
+  state = await api('/player/status');
+  renderAll();
+  await syncAudioToState();
+}
+
+async function loadConfigDefaults() {
+  const config = await api('/config');
+  document.getElementById('libraryPath').value = config.music_folder || '';
+}
+
+async function loadStations() {
+  stations = await api('/stations');
+}
+
+document.getElementById('search').addEventListener('input', renderStations);
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  const status = document.getElementById('scanStatus');
+  const folderPath = document.getElementById('libraryPath').value;
+  status.textContent = 'Scanning...';
+  try {
+    const result = await api('/library/scan', { method: 'POST', body: JSON.stringify({ folder_path: folderPath }) });
+    status.textContent = `Scanned ${result.scanned} files, added ${result.inserted}, updated ${result.updated}.`;
+  } catch (error) {
+    status.textContent = `Scan failed: ${error.message}`;
+  }
+});
+
+document.getElementById('refreshStationsBtn').addEventListener('click', async () => {
+  await loadStations();
+  renderStations();
+});
+
+document.getElementById('playBtn').addEventListener('click', async () => {
+  if (!state?.station_id) return;
+  const response = await api('/player/play', { method: 'POST', body: JSON.stringify({ station_id: state.station_id, queue_size: 10 }) });
+  state = response.state;
+  renderAll();
+  await syncAudioToState();
+});
+
+document.getElementById('nextBtn').addEventListener('click', async () => {
+  const response = await api('/player/next', { method: 'POST' });
+  state = response.state;
+  renderAll();
+  await syncAudioToState();
+});
+
+document.getElementById('stopBtn').addEventListener('click', async () => {
+  const response = await api('/player/stop', { method: 'POST' });
+  state = response.state;
+  renderAll();
+  await syncAudioToState();
+});
+
+audioEl.addEventListener('ended', async () => {
+  const response = await api('/player/next', { method: 'POST' });
+  state = response.state;
+  renderAll();
+  await syncAudioToState();
+});
+
+document.getElementById('volume').addEventListener('change', async (event) => {
+  state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: Number(event.target.value) }) });
+  renderAll();
+  await syncAudioToState();
+});
 
 async function init() {
-  stations = await api('/stations');
-  state = await api('/player/state');
-  renderNowPlaying();
-  render();
+  await loadConfigDefaults();
+  await loadStations();
+  state = await api('/player/status');
+  renderAll();
+  await syncAudioToState();
+  setInterval(refreshState, 5000);
 }
 
-document.getElementById('search').addEventListener('input', render);
-document.getElementById('playPause').addEventListener('click', async () => {
-  state = await api('/player/state', {method:'PUT', body: JSON.stringify({is_playing: !state.is_playing})});
-  renderNowPlaying();
-});
-document.getElementById('volume').addEventListener('change', async (e) => {
-  state = await api('/player/state', {method:'PUT', body: JSON.stringify({volume: Number(e.target.value)})});
-  renderNowPlaying();
-});
 init();
 </script>
 </body>
