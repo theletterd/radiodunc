@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from .config import AppConfig, load_config, save_config
 from .database import Base, engine, get_db
-from .models import FavoriteStation, PlayerState, RecentStation, Station, Track
+from .models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
 from .dj_scripts import generate_dj_script
 from .scanner import scan_library
 from .schemas import (
@@ -16,12 +16,15 @@ from .schemas import (
     FavoriteStationRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
+    DJClipSynthesizeRequest,
+    DJClipResponse,
     StationGenerateRequest,
     StationOut,
     TrackOut,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
+from .tts import get_or_create_dj_clip
 
 Base.metadata.create_all(bind=engine)
 
@@ -178,3 +181,13 @@ def generate_station_dj_script(station_id: int, payload: DJScriptGenerateRequest
             raise HTTPException(status_code=404, detail=f"Track {payload.next_track_id} not found")
 
     return generate_dj_script(station, payload, previous_track, next_track)
+
+
+@app.post("/stations/{station_id}/dj-clip", response_model=DJClipResponse)
+def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest, db: Session = Depends(get_db)):
+    station = db.query(Station).filter(Station.id == station_id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail=f"Station {station_id} not found")
+
+    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice)
+    return DJClipResponse(clip_id=clip.id, audio_path=clip.audio_path, voice=clip.voice, cached=cached)

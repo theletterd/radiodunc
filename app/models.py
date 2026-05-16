@@ -42,6 +42,7 @@ class DJClip(Base):
     script_text: Mapped[str] = mapped_column(Text, nullable=False)
     audio_path: Mapped[str] = mapped_column(String, nullable=False)
     voice: Mapped[str | None] = mapped_column(String, nullable=True)
+    script_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
