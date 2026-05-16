@@ -1,505 +1,442 @@
-let stations = [];
-let state = null;
-const audioEl = document.getElementById('playerAudio');
-let loadedQueuePosition = null;
-let playbackRetryTimer = null;
-let autoplayBlocked = false;
-let autoplayUnlockHandlerBound = false;
-let playbackPrimed = false;
-let syncInFlight = null;
-let refreshStateInFlight = null;
-let refreshIntervalId = null;
-let lastStreamReloadAtMs = 0;
-let hlsController = null;
+'use strict';
 
-function destroyHlsController() {
-  if (!hlsController) return;
-  try {
-    hlsController.destroy();
-  } catch (err) {
-    console.warn('[ui][audio] failed to destroy hls controller', { err });
-  }
-  hlsController = null;
-}
+// ── Timing constants ─────────────────────────────────────────────────────────
+// Adjust these to taste; all audio scheduling uses AudioContext time (sample-accurate).
+const FADE_OUT_S     = 2.5;  // current track fades 1→0 over this many seconds
+const DJ_OVERLAP_S   = 0.5;  // DJ clip starts this far before the fade-out ends
+const FADE_IN_S      = 1.2;  // next track fades 0→1 over this many seconds
+const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
+const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
-function ensureLiveStreamLoaded(forceReload = false) {
-  const streamUrl = '/broadcast/live.m3u8';
-  const hasNativeHls = audioEl.canPlayType('application/vnd.apple.mpegurl') !== '';
-  const HlsCtor = window.Hls;
-  const canUseHlsJs = Boolean(HlsCtor && HlsCtor.isSupported && HlsCtor.isSupported());
+// ── App state ────────────────────────────────────────────────────────────────
+let stations    = [];
+let serverState = null;
 
-  if (hasNativeHls) {
-    if (!audioEl.src || forceReload) {
-      destroyHlsController();
-      audioEl.src = streamUrl;
-      audioEl.load();
-      console.log('[ui][audio] native HLS stream assigned', { streamUrl, forceReload });
-    }
-    return;
-  }
+// ── Web Audio ────────────────────────────────────────────────────────────────
+// Created lazily on first user gesture (autoplay policy).
+let ctx        = null;
+let masterGain = null;
 
-  if (canUseHlsJs) {
-    if (!hlsController || forceReload) {
-      destroyHlsController();
-      hlsController = new HlsCtor({
-        lowLatencyMode: false,
-        backBufferLength: 90,
-        maxLiveSyncPlaybackRate: 1.0,
-      });
-      hlsController.attachMedia(audioEl);
-      hlsController.on(HlsCtor.Events.MEDIA_ATTACHED, () => {
-        hlsController.loadSource(streamUrl);
-      });
-      hlsController.on(HlsCtor.Events.ERROR, (_event, data) => {
-        console.warn('[ui][audio] hls.js error', data);
-      });
-      console.log('[ui][audio] hls.js stream attached', { streamUrl, forceReload });
-    }
-    return;
-  }
+// Two audio slots. We alternate which is "active" on each transition.
+//   slot: { el: HTMLAudioElement, gainNode: GainNode }
+const slots = { A: null, B: null };
+let activeSlot = 'A';  // 'A' or 'B'
 
-  if (!audioEl.src || forceReload) {
-    audioEl.src = streamUrl;
-    audioEl.load();
-    console.warn('[ui][audio] fallback src assignment without native HLS or hls.js support');
-  }
-}
+function curSlot()  { return slots[activeSlot]; }
+function altSlot()  { return slots[activeSlot === 'A' ? 'B' : 'A']; }
+function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 
+// ── Transition guard ─────────────────────────────────────────────────────────
+let transitioning    = false;
+let autoTriggerTimer = null;
 
-let endedRecoveryInFlight = false;
-let lastRefreshTriggerAtMs = 0;
-const REFRESH_TRIGGER_COOLDOWN_MS = 1500;
-const PLAYBACK_RETRY_DELAY_MS = 750;
-const STREAM_RELOAD_COOLDOWN_MS = 4000;
-const STREAM_RECOVERY_WINDOW_MS = 30000;
-const MAX_STREAM_RECOVERIES_PER_WINDOW = 3;
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function musicVolume()    { return Math.max(0, Math.min(1, (serverState?.volume ?? 80) / 100)); }
+function stationLabel(id) { return stations.find(s => s.id === id)?.name || `#${id}`; }
 
-
-function bindAutoplayUnlockHandler() {
-  if (autoplayUnlockHandlerBound) return;
-  autoplayUnlockHandlerBound = true;
-  const unlockPlayback = async () => {
-    if (!autoplayBlocked) return;
-    autoplayBlocked = false;
-    console.log('[ui][audio] user interaction detected; retrying playback');
-    await syncAudioToState();
-  };
-  document.addEventListener('pointerdown', unlockPlayback, { passive: true });
-  document.addEventListener('keydown', unlockPlayback, { passive: true });
-}
-
-
-async function primePlaybackFromGesture() {
-  if (playbackPrimed) return;
-  const previousMuted = audioEl.muted;
-  const previousVolume = audioEl.volume;
-  try {
-    audioEl.muted = true;
-    audioEl.volume = 0;
-    await audioEl.play();
-    audioEl.pause();
-    audioEl.currentTime = 0;
-    playbackPrimed = true;
-    console.log('[ui][audio] playback primed from user gesture');
-  } catch (err) {
-    console.warn('[ui][audio] playback prime attempt failed', { err });
-  } finally {
-    audioEl.muted = previousMuted;
-    audioEl.volume = previousVolume;
-  }
-}
-
-function musicTargetVolume() {
-  return Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
-}
-
-async function api(path, options = {}) {
-  const method = options.method || 'GET';
-  const isGet = method.toUpperCase() === 'GET';
-  const requestPath = isGet ? `${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}` : path;
-  console.log('[ui][api] request', { path: requestPath, method });
-  const response = await fetch(requestPath, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    cache: isGet ? 'no-store' : options.cache,
-    ...options,
-    method,
+async function api(path, opts = {}) {
+  const method = opts.method || 'GET';
+  const isGet  = method === 'GET';
+  const url    = isGet ? `${path}${path.includes('?') ? '&' : '?'}_=${Date.now()}` : path;
+  const resp   = await fetch(url, {
+    ...opts, method,
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    cache: isGet ? 'no-store' : opts.cache,
   });
-  if (!response.ok) {
-    console.error('[ui][api] response error', { path, status: response.status });
-    throw new Error(await response.text());
+  if (!resp.ok) throw new Error(`${method} ${path} → ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+// ── AudioContext bootstrap ────────────────────────────────────────────────────
+// Call from a user-gesture handler so the context starts in "running" state.
+function initAudio() {
+  if (ctx) return;
+  ctx        = new AudioContext();
+  masterGain = ctx.createGain();
+  masterGain.gain.value = musicVolume();
+  masterGain.connect(ctx.destination);
+
+  for (const key of ['A', 'B']) {
+    const el       = new Audio();
+    el.crossOrigin = 'anonymous';
+    const source   = ctx.createMediaElementSource(el);
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 0;
+    source.connect(gainNode);
+    gainNode.connect(masterGain);
+    slots[key] = { el, gainNode };
   }
-  console.log('[ui][api] response ok', { path, status: response.status });
-  return response.json();
 }
 
-function stationName(id) {
-  return stations.find((s) => s.id === id)?.name || `#${id}`;
+// ── Fetch + decode audio into an AudioBuffer ─────────────────────────────────
+// Used for DJ clips: AudioBufferSourceNode.start(when) is frame-accurate.
+async function fetchAndDecode(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`fetch ${url} → ${resp.status}`);
+  return ctx.decodeAudioData(await resp.arrayBuffer());
 }
 
+// ── Auto-trigger scheduling ──────────────────────────────────────────────────
+function clearAutoTrigger() {
+  clearTimeout(autoTriggerTimer);
+  autoTriggerTimer = null;
+}
 
-async function ensureStationSelectedForPlayback() {
-  if (state?.station_id) return;
-  const fallbackStationId = state?.recent_station_ids?.[0] ?? state?.favorites?.[0] ?? stations?.[0]?.id;
-  if (!fallbackStationId) {
-    throw new Error('No station available. Scan library and generate stations first.');
+function scheduleAutoTrigger(trackDurationSec) {
+  clearAutoTrigger();
+  if (!trackDurationSec) return;
+  const elapsed  = curSlot().el.currentTime || 0;
+  const delaySec = Math.max(0, trackDurationSec - elapsed - AUTO_PREROLL_S);
+  console.log(`[audio] auto-trigger in ${delaySec.toFixed(1)}s`);
+  autoTriggerTimer = setTimeout(() => triggerTransition('auto'), delaySec * 1000);
+}
+
+// ── Core crossfade transition ────────────────────────────────────────────────
+//
+// Timeline (happy path — API returns in < FADE_OUT_S):
+//
+//   t=0               t=FADE_OUT_S-DJ_OVERLAP_S        t=FADE_OUT_S
+//   ├── current track fading out ──────────────────────────────────►
+//                       ├── DJ clip playing ──────────────────────────── ► djEnd
+//                                                    ├── next track fading in ──►
+//
+// If the API or decode takes longer than FADE_OUT_S, the current track has
+// already gone silent; we just start the DJ clip the moment it's decoded.
+// There may be a brief silence, but there's no crackle or restart.
+async function triggerTransition(reason) {
+  if (transitioning) {
+    console.log('[audio] transition suppressed (already in progress)');
+    return;
   }
-  console.log('[ui][station] auto-selecting fallback station', { stationId: fallbackStationId });
-  state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: fallbackStationId }) });
+  transitioning = true;
+  clearAutoTrigger();
+  console.log('[audio] transition start:', reason);
+
+  try {
+    await ctx.resume();
+    const t = ctx.currentTime;
+
+    // 1. Schedule current track fade-out immediately (sample-accurate ramp).
+    const curGain = curSlot().gainNode.gain;
+    curGain.cancelScheduledValues(t);
+    curGain.setValueAtTime(curGain.value, t);
+    curGain.linearRampToValueAtTime(0, t + FADE_OUT_S);
+
+    // 2. Advance queue on server, get DJ clip + next track URLs.
+    let next;
+    try {
+      next = await api('/player/next', { method: 'POST' });
+    } catch (err) {
+      console.error('[audio] /player/next failed — restoring gain:', err);
+      const now = ctx.currentTime;
+      curGain.cancelScheduledValues(now);
+      curGain.setValueAtTime(curGain.value, now);
+      curGain.linearRampToValueAtTime(1.0, now + 0.3);
+      return;
+    }
+
+    // 3. Decode DJ clip and start loading next track (parallel work).
+    //    The gainNode on the alt slot is already at 0 from the previous transition
+    //    or from init; just make sure.
+    const alt = altSlot();
+    alt.gainNode.gain.cancelScheduledValues(ctx.currentTime);
+    alt.gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    alt.el.src = next.current_track_url;
+    alt.el.load();
+
+    let djBuf = null;
+    try {
+      djBuf = await fetchAndDecode(next.dj_clip_url);
+    } catch (err) {
+      console.warn('[audio] DJ clip unavailable, crossfading without it:', err);
+    }
+
+    // 4. Place the DJ clip on the AudioContext timeline.
+    //    djStart adapts: if we're on time, it overlaps the fade-out tail;
+    //    if we're late, it fires immediately.
+    const djStart = Math.max(ctx.currentTime + 0.05, t + FADE_OUT_S - DJ_OVERLAP_S);
+    let djEnd = djStart; // advances to djStart + clip duration if we have a clip
+
+    if (djBuf) {
+      const djSrc  = ctx.createBufferSource();
+      djSrc.buffer = djBuf;
+      const djGain = ctx.createGain();
+      djSrc.connect(djGain);
+      djGain.connect(masterGain);
+
+      // Short in/out fades on the DJ clip itself to avoid clicks.
+      djGain.gain.setValueAtTime(0, djStart);
+      djGain.gain.linearRampToValueAtTime(1.0, djStart + DJ_EDGE_S);
+      djGain.gain.setValueAtTime(1.0, djStart + djBuf.duration - DJ_EDGE_S);
+      djGain.gain.linearRampToValueAtTime(0, djStart + djBuf.duration);
+
+      // AudioBufferSourceNode.start(when) is sample-accurate.
+      djSrc.start(djStart);
+      djEnd = djStart + djBuf.duration;
+      console.log(`[audio] DJ clip: start=${djStart.toFixed(3)} dur=${djBuf.duration.toFixed(2)}`);
+    }
+
+    // 5. Schedule next track gain ramp and el.play().
+    //    We start the ramp slightly before djEnd so the tracks overlap a little.
+    //    We call el.play() just 100ms before the gain opens to avoid burning
+    //    through the start of the track during the DJ clip.
+    const trackGainStart = Math.max(ctx.currentTime + 0.1, djEnd - FADE_IN_S * 0.3);
+    const trackPlayAt    = trackGainStart - 0.1; // 100ms before gain opens
+
+    alt.gainNode.gain.setValueAtTime(0, trackGainStart);
+    alt.gainNode.gain.linearRampToValueAtTime(1.0, trackGainStart + FADE_IN_S);
+
+    const playDelayMs = Math.max(0, (trackPlayAt - ctx.currentTime) * 1000);
+    setTimeout(() => {
+      alt.el.currentTime = 0;
+      alt.el.play().catch(e => console.warn('[audio] next track play() failed:', e));
+    }, playDelayMs);
+
+    // 6. Swap slots: alt becomes the new active track.
+    //    After the swap, altSlot() returns the old active slot (now fading out).
+    swapSlot();
+    const oldSlot    = altSlot();
+    const cleanupMs  = Math.max(100, (t + FADE_OUT_S + 0.5 - ctx.currentTime) * 1000);
+    setTimeout(() => {
+      oldSlot.gainNode.gain.cancelScheduledValues(ctx.currentTime);
+      oldSlot.gainNode.gain.setValueAtTime(0, ctx.currentTime);
+      oldSlot.el.pause();
+      oldSlot.el.src = '';
+    }, cleanupMs);
+
+    // 7. Schedule auto-trigger for the new track.
+    //    next.next_track_metadata.duration_seconds is the *new current* track's duration
+    //    (the one at current_track_url), returned by the server for exactly this purpose.
+    const triggerSetupMs = Math.max(0, (trackGainStart + 0.3 - ctx.currentTime) * 1000);
+    if (next.next_track_metadata?.duration_seconds) {
+      setTimeout(() => scheduleAutoTrigger(next.next_track_metadata.duration_seconds), triggerSetupMs);
+    } else {
+      // Fall back to the audio element's own loadedmetadata
+      curSlot().el.addEventListener('loadedmetadata', () => {
+        scheduleAutoTrigger(curSlot().el.duration);
+      }, { once: true });
+    }
+
+    // 8. Refresh display after the new track has settled.
+    setTimeout(async () => {
+      try { serverState = await api('/player/status'); renderAll(); } catch (_) {}
+    }, triggerSetupMs + 500);
+
+  } finally {
+    transitioning = false;
+  }
 }
 
+// ── Start playback ────────────────────────────────────────────────────────────
+async function startPlayback() {
+  initAudio();
+  await ctx.resume();
+
+  // Ensure a station is selected
+  if (!serverState?.station_id) {
+    const id =
+      serverState?.recent_station_ids?.[0] ??
+      serverState?.favorites?.[0] ??
+      stations?.[0]?.id;
+    if (!id) throw new Error('No station available. Scan library and generate stations first.');
+    serverState = await api('/player/state', {
+      method: 'PUT',
+      body: JSON.stringify({ station_id: id }),
+    });
+  }
+
+  const resp = await api('/player/play', {
+    method: 'POST',
+    body: JSON.stringify({ station_id: serverState.station_id, queue_size: 12 }),
+  });
+  serverState = resp.state;
+  if (!serverState.current_track_id) throw new Error('Server returned no current track');
+
+  // Reset slots for a clean start
+  for (const key of ['A', 'B']) {
+    slots[key].gainNode.gain.cancelScheduledValues(ctx.currentTime);
+    slots[key].gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    slots[key].el.pause();
+    slots[key].el.src = '';
+  }
+  activeSlot = 'A';
+
+  const cur = curSlot();
+  cur.el.src = `/media/track/${serverState.current_track_id}`;
+  cur.el.load();
+  await cur.el.play();
+
+  // Fade in gently
+  cur.gainNode.gain.setValueAtTime(0, ctx.currentTime);
+  cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
+
+  cur.el.addEventListener('loadedmetadata', () => {
+    scheduleAutoTrigger(cur.el.duration);
+  }, { once: true });
+
+  renderAll();
+}
+
+// ── Stop playback ─────────────────────────────────────────────────────────────
+async function stopPlayback() {
+  clearAutoTrigger();
+  transitioning = false;
+  const t = ctx?.currentTime ?? 0;
+  for (const s of Object.values(slots)) {
+    if (!s) continue;
+    s.gainNode?.gain.cancelScheduledValues(t);
+    s.gainNode?.gain.setValueAtTime(0, t);
+    s.el?.pause();
+    if (s.el) s.el.src = '';
+  }
+  try {
+    const resp = await api('/player/stop', { method: 'POST' });
+    serverState = resp.state;
+  } catch (_) {
+    if (serverState) serverState = { ...serverState, is_playing: false };
+  }
+  renderAll();
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
 function renderStations() {
-  const q = document.getElementById('search').value.toLowerCase();
-  const el = document.getElementById('stations');
-  el.innerHTML = '';
-  stations.filter((s) => s.name.toLowerCase().includes(q)).forEach((s) => {
+  const q         = document.getElementById('search').value.toLowerCase();
+  const container = document.getElementById('stations');
+  container.innerHTML = '';
+  stations.filter(s => s.name.toLowerCase().includes(q)).forEach(s => {
     const card = document.createElement('div');
-    card.className = `card station${state?.station_id === s.id ? ' active' : ''}`;
+    card.className = `card station${serverState?.station_id === s.id ? ' active' : ''}`;
     card.innerHTML = `<strong>${s.name}</strong><div class="muted">${s.tagline || s.format || 'Local station'}</div>`;
 
-    const row = document.createElement('div');
+    const row    = document.createElement('div');
     row.className = 'row';
     const favBtn = document.createElement('button');
-    favBtn.textContent = state?.favorites?.includes(s.id) ? '★ Favorited' : '☆ Favorite';
-    favBtn.onclick = async (event) => {
-      console.log('[ui][button] favorite clicked', { stationId: s.id });
-      event.stopPropagation();
-      const target = !state?.favorites?.includes(s.id);
-      console.log('[ui][button] favorite target', { stationId: s.id, favorite: target });
-      await api(`/stations/${s.id}/favorite`, { method: 'PUT', body: JSON.stringify({ favorite: target }) });
-      await refreshState();
+    favBtn.textContent = serverState?.favorites?.includes(s.id) ? '★ Favorited' : '☆ Favorite';
+    favBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const want = !serverState?.favorites?.includes(s.id);
+      await api(`/stations/${s.id}/favorite`, { method: 'PUT', body: JSON.stringify({ favorite: want }) });
+      await refreshServerState();
     };
     row.appendChild(favBtn);
     card.appendChild(row);
 
     card.onclick = async () => {
-      console.log('[ui][station] card clicked', { stationId: s.id });
-      state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: s.id }) });
-      console.log('[ui][station] card select complete', { stationId: s.id });
+      serverState = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: s.id }) });
       renderAll();
     };
-    el.appendChild(card);
+    container.appendChild(card);
   });
 }
 
 function renderPlayer() {
-  const current = stations.find((s) => s.id === state?.station_id);
-  document.getElementById('stationName').textContent = current?.name || 'No station selected';
-  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play.';
-  const sliderValue = state?.volume ?? 80;
-  document.getElementById('volume').value = sliderValue;
-  audioEl.volume = musicTargetVolume();
+  const cur = stations.find(s => s.id === serverState?.station_id);
+  document.getElementById('stationName').textContent = cur?.name || 'No station selected';
+  document.getElementById('stationMeta').textContent = cur
+    ? (cur.tagline || cur.format || 'Live radio')
+    : 'Pick a station, then press Play.';
+  document.getElementById('volume').value = serverState?.volume ?? 80;
+  if (masterGain) masterGain.gain.value = musicVolume();
 
-  const label = state?.now_playing_label || '-';
+  const label = serverState?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
-  document.getElementById('playerFlags').textContent = `State: ${state?.is_playing ? 'Playing' : 'Stopped'} · Type: ${state?.now_playing_type || '-'} `;
-  document.getElementById('upNext').textContent = 'Live HLS broadcast';
-  document.getElementById('favorites').textContent = (state?.favorites || []).map(stationName).join(', ') || '-';
-  document.getElementById('recent').textContent = (state?.recent_station_ids || []).map(stationName).join(', ') || '-';
+  document.getElementById('playerFlags').textContent =
+    serverState?.is_playing
+      ? (transitioning ? 'Transitioning…' : 'Playing')
+      : 'Stopped';
+  document.getElementById('upNext').textContent =
+    serverState?.is_playing ? 'Web Audio — direct file playback' : '-';
+  document.getElementById('favorites').textContent =
+    (serverState?.favorites || []).map(stationLabel).join(', ') || '-';
+  document.getElementById('recent').textContent =
+    (serverState?.recent_station_ids || []).map(stationLabel).join(', ') || '-';
 }
 
-function renderAll() {
-  renderStations();
-  renderPlayer();
+function renderAll() { renderStations(); renderPlayer(); }
+
+// ── Server state refresh ──────────────────────────────────────────────────────
+let refreshInFlight = null;
+async function refreshServerState() {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = api('/player/status')
+    .then(s => { serverState = s; renderAll(); })
+    .catch(() => {})
+    .finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
 }
 
-
-function clearPlaybackRetry() {
-  if (playbackRetryTimer !== null) {
-    clearTimeout(playbackRetryTimer);
-    playbackRetryTimer = null;
-  }
-}
-
-function schedulePlaybackRetry() {
-  if (playbackRetryTimer !== null || !state?.is_playing) return;
-  playbackRetryTimer = window.setTimeout(async () => {
-    playbackRetryTimer = null;
-    await syncAudioToState();
-  }, PLAYBACK_RETRY_DELAY_MS);
-}
-
-async function syncAudioToState(options = {}) {
-  if (syncInFlight) return syncInFlight;
-  syncInFlight = (async () => {
-  console.log('[ui][audio] sync start', {
-    isPlaying: state?.is_playing,
-    queuePosition: state?.queue_position,
-    nowPlayingType: state?.now_playing_type,
-    loadedQueuePosition,
-  });
-  if (!state?.is_playing) {
-    console.log('[ui][audio] sync stopping playback because state is not playing');
-    audioEl.pause();
-    destroyHlsController();
-    audioEl.removeAttribute('src');
-    audioEl.load();
-    loadedQueuePosition = null;
-    clearPlaybackRetry();
-    return;
-  }
-
-  if (!state?.now_playing_type) {
-    return;
-  }
-
-  const forceReload = Boolean(options.forceReload);
-  const shouldLoadInitialStream = !audioEl.src;
-  const canReloadNow = (Date.now() - lastStreamReloadAtMs) >= STREAM_RELOAD_COOLDOWN_MS;
-  if (shouldLoadInitialStream || (forceReload && canReloadNow)) {
-    console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8', forceReload });
-    ensureLiveStreamLoaded(forceReload);
-    lastStreamReloadAtMs = Date.now();
-  }
-  loadedQueuePosition = state.queue_position;
-  audioEl.volume = musicTargetVolume();
-  try {
-    clearPlaybackRetry();
-    await audioEl.play();
-    console.log('[ui][audio] play() resolved');
-  } catch (err) {
-    if (err?.name === 'NotAllowedError') {
-      if (!autoplayBlocked) {
-        autoplayBlocked = true;
-        console.warn('[ui][audio] play() blocked by browser autoplay policy; waiting for user interaction', { err });
-      }
-      return;
-    }
-    console.warn('[ui][audio] play() failed, scheduling retry', { err });
-    schedulePlaybackRetry();
-  }
-  })();
-  try {
-    await syncInFlight;
-  } finally {
-    syncInFlight = null;
-  }
-}
-
-
-
-async function startPlayback() {
-  await ensureStationSelectedForPlayback();
-  await primePlaybackFromGesture();
-  const response = await api('/player/play', {
-    method: 'POST',
-    body: JSON.stringify({ station_id: state.station_id, queue_size: 12 }),
-  });
-  state = response.state;
-  loadedQueuePosition = null;
-  renderAll();
-  await syncAudioToState();
-}
-
-
-async function advanceToNextQueueItem() {
-  const response = await api('/player/next', { method: 'POST' });
-  state = response.state;
-  renderAll();
-  loadedQueuePosition = null;
-  await syncAudioToState();
-}
-
-async function stopPlayback() {
-  try {
-    const response = await api('/player/stop', { method: 'POST' });
-    state = response.state;
-  } catch (_err) {
-    if (state) {
-      state.is_playing = false;
-    }
-  }
-  audioEl.pause();
-  audioEl.removeAttribute('src');
-  audioEl.load();
-  loadedQueuePosition = null;
-  clearPlaybackRetry();
-  renderAll();
-}
-
-async function refreshState() {
-  if (refreshStateInFlight) return refreshStateInFlight;
-  refreshStateInFlight = (async () => {
-    state = await api('/player/status');
-    renderAll();
-    await syncAudioToState();
-  })();
-  try {
-    await refreshStateInFlight;
-  } finally {
-    refreshStateInFlight = null;
-  }
-}
-
-async function loadConfigDefaults() {
-  const config = await api('/config');
-  document.getElementById('libraryPath').value = config.music_folder || '';
-}
-
-async function loadStations() {
-  stations = await api('/stations');
-}
-
+// ── Event bindings ────────────────────────────────────────────────────────────
 document.getElementById('search').addEventListener('input', renderStations);
+
 document.getElementById('scanBtn').addEventListener('click', async () => {
-  console.log('[ui][button] scan clicked');
-  const status = document.getElementById('scanStatus');
+  const status     = document.getElementById('scanStatus');
   const folderPath = document.getElementById('libraryPath').value;
-  console.log('[ui][button] scan params', { folderPath });
-  status.textContent = 'Scanning...';
+  status.textContent = 'Scanning…';
   try {
-    const result = await api('/library/scan', { method: 'POST', body: JSON.stringify({ folder_path: folderPath }) });
+    const result = await api('/library/scan', {
+      method: 'POST',
+      body: JSON.stringify({ folder_path: folderPath }),
+    });
     status.textContent = `Scanned ${result.scanned} files, added ${result.inserted}, updated ${result.updated}.`;
-  } catch (error) {
-    console.error('[ui][button] scan failed', { error: error.message });
-    status.textContent = `Scan failed: ${error.message}`;
+  } catch (err) {
+    status.textContent = `Scan failed: ${err.message}`;
   }
 });
 
 document.getElementById('refreshStationsBtn').addEventListener('click', async () => {
-  console.log('[ui][button] refresh stations clicked');
   const status = document.getElementById('scanStatus');
-  status.textContent = 'Generating stations...';
+  status.textContent = 'Generating stations…';
   try {
     const result = await api('/stations/generate', { method: 'POST', body: JSON.stringify({}) });
-    await loadStations();
-    await refreshState();
-    console.log('[ui][button] refresh stations complete', {
-      generated: result?.generated,
-      stationCount: stations.length,
-    });
+    stations     = await api('/stations');
+    await refreshServerState();
     status.textContent = `Generated ${result?.generated ?? stations.length} stations.`;
-  } catch (error) {
-    console.error('[ui][button] refresh stations failed', { error: error.message });
-    status.textContent = `Refresh failed: ${error.message}`;
+  } catch (err) {
+    status.textContent = `Refresh failed: ${err.message}`;
   }
 });
 
 document.getElementById('playBtn').addEventListener('click', async () => {
-  console.log('[ui][button] play clicked', { stationId: state?.station_id });
-  await startPlayback();
-});
-
-
-
-
-document.getElementById('nextBtn').addEventListener('click', async () => {
-  console.log('[ui][button] next clicked', {
-    queuePosition: state?.queue_position,
-    nowPlayingType: state?.now_playing_type,
-  });
-  await primePlaybackFromGesture();
-  await advanceToNextQueueItem();
-  console.log('[ui][button] next flow complete');
-});
-
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  console.log('[ui][button] stop clicked');
-  await stopPlayback();
-});
-
-
-let lastEndedRecoveryAtMs = 0;
-let streamRecoveryAttemptTimes = [];
-
-function canAttemptStreamRecovery() {
-  const now = Date.now();
-  streamRecoveryAttemptTimes = streamRecoveryAttemptTimes.filter((ts) => (now - ts) < STREAM_RECOVERY_WINDOW_MS);
-  if (streamRecoveryAttemptTimes.length >= MAX_STREAM_RECOVERIES_PER_WINDOW) {
-    console.warn('[ui][audio] stream recovery suppressed; too many attempts in time window', {
-      attempts: streamRecoveryAttemptTimes.length,
-      windowMs: STREAM_RECOVERY_WINDOW_MS,
-    });
-    return false;
-  }
-  streamRecoveryAttemptTimes.push(now);
-  return true;
-}
-
-audioEl.addEventListener('ended', async () => {
-  if (endedRecoveryInFlight) {
-    console.warn('[ui][audio] ended event ignored; recovery already in flight');
-    return;
-  }
-
-  const now = Date.now();
-  if (!state?.is_playing) return;
-  endedRecoveryInFlight = true;
-
+  const status = document.getElementById('scanStatus');
+  status.textContent = '';
   try {
-    try {
-      await audioEl.play();
-      console.warn('[ui][audio] ended event recovered via play() without stream reload');
-      return;
-    } catch (err) {
-      console.warn('[ui][audio] ended event play() retry failed; considering stream reload', { err });
-    }
-
-    if ((now - lastEndedRecoveryAtMs) < STREAM_RELOAD_COOLDOWN_MS) {
-      console.warn('[ui][audio] ended event recovery suppressed by cooldown');
-      return;
-    }
-    if (!canAttemptStreamRecovery()) {
-      return;
-    }
-
-    lastEndedRecoveryAtMs = now;
-    console.warn('[ui][audio] ended event received; attempting stream recovery');
-    await syncAudioToState({ forceReload: true });
-  } finally {
-    endedRecoveryInFlight = false;
+    await startPlayback();
+  } catch (err) {
+    status.textContent = `Play failed: ${err.message}`;
   }
 });
 
-
-document.getElementById('volume').addEventListener('input', async (event) => {
-  console.log('[ui][control] volume input', { value: Number(event.target.value) });
-  state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: Number(event.target.value) }) });
-  console.log('[ui][control] volume update response', { volume: state?.volume });
-  renderAll();
-  await syncAudioToState();
+document.getElementById('nextBtn').addEventListener('click', () => {
+  if (!ctx || transitioning) return;
+  triggerTransition('user');
 });
 
+document.getElementById('stopBtn').addEventListener('click', () => stopPlayback());
 
-function shouldRunRefreshTrigger() {
-  const now = Date.now();
-  if ((now - lastRefreshTriggerAtMs) < REFRESH_TRIGGER_COOLDOWN_MS) {
-    return false;
-  }
-  lastRefreshTriggerAtMs = now;
-  return true;
-}
-
-document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && state?.is_playing && audioEl.paused && shouldRunRefreshTrigger()) {
-    await refreshState();
-  }
+document.getElementById('volume').addEventListener('input', async (e) => {
+  const vol = Number(e.target.value);
+  // Update gain immediately — no round-trip latency.
+  if (masterGain) masterGain.gain.value = vol / 100;
+  // Persist to server (best effort; we don't block on it).
+  try {
+    const resp = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: vol }) });
+    serverState = resp;
+  } catch (_) {}
 });
 
-window.addEventListener('focus', async () => {
-  if (state?.is_playing && audioEl.paused && shouldRunRefreshTrigger()) {
-    await refreshState();
-  }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && serverState?.is_playing) refreshServerState();
 });
 
+// ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
-  bindAutoplayUnlockHandler();
-  console.log('[ui][init] start');
-  await loadConfigDefaults();
-  await loadStations();
-  state = await api('/player/status');
-  console.log('[ui][init] initial state loaded', {
-    stationId: state?.station_id,
-    isPlaying: state?.is_playing,
-    queuePosition: state?.queue_position,
-    stationCount: stations.length,
-  });
+  const config = await api('/config');
+  document.getElementById('libraryPath').value = config.music_folder || '';
+  stations    = await api('/stations');
+  serverState = await api('/player/status');
   renderAll();
-  await syncAudioToState();
-  if (refreshIntervalId !== null) {
-    clearInterval(refreshIntervalId);
-  }
-  refreshIntervalId = window.setInterval(refreshState, 5000);
-  console.log('[ui][init] complete; refresh interval set to 5000ms');
+  // Light polling — client drives playback now, so we don't need frequent syncs.
+  setInterval(refreshServerState, 10_000);
 }
 
 init();
