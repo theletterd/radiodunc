@@ -76,6 +76,7 @@ class PlayoutWorker:
         self._thread: threading.Thread | None = None
         self._broadcast_engine = broadcast_engine
         self._safe_media_path = safe_media_path
+        self._last_observed_signature: tuple | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -107,6 +108,7 @@ class PlayoutWorker:
             now_epoch = time.time()
             self._consume_admin_commands(db, state)
             state_name = self._resolve_state(state)
+            self._log_state_snapshot(state, state_name)
 
             if state_name == PlayoutState.IDLE:
                 state.playout_mode = "stopped"
@@ -127,12 +129,37 @@ class PlayoutWorker:
 
 
 
+
+    def _log_state_snapshot(self, state: PlayerState, state_name: str) -> None:
+        queue = self._queue(state)
+        current_type = None
+        planned_end = None
+        if queue and 0 <= state.queue_index < len(queue):
+            item = queue[state.queue_index]
+            current_type = item.get("type")
+            planned_end = item.get("planned_end_epoch")
+        signature = (state_name, bool(state.is_playing), state.queue_index, current_type, state.current_sequence_id)
+        if signature == self._last_observed_signature:
+            return
+        self._last_observed_signature = signature
+        logger.info(
+            "playout.state state=%s is_playing=%s queue_index=%s current_type=%s planned_end_epoch=%s now_epoch=%s current_track_id=%s",
+            state_name,
+            state.is_playing,
+            state.queue_index,
+            current_type,
+            planned_end,
+            round(time.time(), 3),
+            state.current_track_id,
+        )
+
     def _consume_admin_commands(self, db: Session, state: PlayerState) -> None:
         commands = self._admin_commands(state)
         if not commands:
             return
         command = commands.pop(0)
         name = command.get("command")
+        logger.info("playout.admin.command command=%s station_id=%s", name, command.get("station_id"))
         if name == "force_station_change":
             station_id = command.get("station_id")
             if station_id is None:
@@ -186,8 +213,10 @@ class PlayoutWorker:
         current = queue[state.queue_index]
         self._ensure_item_timing(db, current, state, config, now_epoch)
         self._orchestrate_transition_window(db, state, config, queue, now_epoch)
-        if now_epoch < float(current.get("planned_end_epoch", now_epoch + 1)):
+        planned_end = float(current.get("planned_end_epoch", now_epoch + 1))
+        if now_epoch < planned_end:
             return
+        logger.info("playout.track.expired queue_index=%s now_epoch=%s planned_end_epoch=%s label=%s", state.queue_index, round(now_epoch, 3), round(planned_end, 3), current.get("label"))
         self._advance(state, queue, now_epoch)
 
     def _process_transition_tick(self, state: PlayerState, now_epoch: float) -> None:
@@ -198,7 +227,9 @@ class PlayoutWorker:
             state.playout_mode = "recovering"
             return
         current = queue[state.queue_index]
-        if now_epoch >= float(current.get("planned_end_epoch", now_epoch + 1)):
+        planned_end = float(current.get("planned_end_epoch", now_epoch + 1))
+        if now_epoch >= planned_end:
+            logger.info("playout.transition.expired queue_index=%s now_epoch=%s planned_end_epoch=%s", state.queue_index, round(now_epoch, 3), round(planned_end, 3))
             self._advance(state, queue, now_epoch)
 
     def _ensure_planned_timing(self, db: Session, state: PlayerState, config: AppConfig, now_epoch: float) -> None:
@@ -211,9 +242,11 @@ class PlayoutWorker:
     def _ensure_item_timing(self, db: Session, item: dict, state: PlayerState, config: AppConfig, now_epoch: float) -> None:
         if item.get("planned_start_epoch") is None:
             item["planned_start_epoch"] = now_epoch
+            logger.info("playout.timing.start_assigned queue_index=%s type=%s planned_start_epoch=%s", state.queue_index, item.get("type"), round(float(item["planned_start_epoch"]), 3))
         if item.get("planned_end_epoch") is None:
             duration = self._item_duration_seconds(db, item, state, config)
             item["planned_end_epoch"] = float(item["planned_start_epoch"]) + duration
+            logger.info("playout.timing.end_assigned queue_index=%s type=%s duration_s=%s planned_end_epoch=%s", state.queue_index, item.get("type"), round(duration, 3), round(float(item["planned_end_epoch"]), 3))
         state.current_item_started_at_epoch = float(item.get("planned_start_epoch", 0.0))
         state.current_item_expected_end_at_epoch = float(item.get("planned_end_epoch", 0.0))
         state.queue_json = json.dumps(self._queue(state))
@@ -354,9 +387,11 @@ class PlayoutWorker:
     def _advance(self, state: PlayerState, queue: list[dict], now_epoch: float) -> None:
         next_idx = state.queue_index + 1
         if next_idx >= len(queue):
+            logger.info("playout.advance.stop reason=end_of_queue queue_size=%s", len(queue))
             state.is_playing = False
             state.current_track_id = None
             return
+        logger.info("playout.advance queue_index=%s->%s next_type=%s next_track_id=%s", state.queue_index, next_idx, queue[next_idx].get("type"), queue[next_idx].get("track_id"))
         state.queue_index = next_idx
         next_item = queue[next_idx]
         state.current_track_id = next_item.get("track_id") if next_item.get("type") == "track" else None
