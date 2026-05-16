@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 import hashlib
 from pathlib import Path
@@ -43,15 +44,40 @@ Base.metadata.create_all(bind=engine)
 
 logger = logging.getLogger(__name__)
 
+_RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
+
+
+class ContextFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        extras = {
+            key: value
+            for key, value in record.__dict__.items()
+            if key not in _RESERVED_LOG_RECORD_FIELDS and not key.startswith("_")
+        }
+        if not extras:
+            return base
+        extra_text = " ".join(f"{key}={value}" for key, value in sorted(extras.items()))
+        return f"{base} {extra_text}"
+
 
 def _configure_logging() -> None:
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    formatter = ContextFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+
     root_logger = logging.getLogger()
-    if root_logger.handlers:
+    root_logger.setLevel(level)
+
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
         return
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+
+    for handler in root_logger.handlers:
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
 
 
 def _log_event(event: str, **fields: object) -> None:
