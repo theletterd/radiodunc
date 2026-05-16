@@ -128,7 +128,9 @@ function renderPlayer() {
   const current = stations.find((s) => s.id === state?.station_id);
   document.getElementById('stationName').textContent = current?.name || 'No station selected';
   document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
-  document.getElementById('volume').value = state?.volume ?? 80;
+  const sliderValue = state?.volume ?? 80;
+  document.getElementById('volume').value = sliderValue;
+  audioEl.volume = Math.max(0, Math.min(1, sliderValue / 100));
 
   const label = state?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
@@ -226,7 +228,7 @@ audioEl.addEventListener('ended', async () => {
   await syncAudioToState();
 });
 
-document.getElementById('volume').addEventListener('change', async (event) => {
+document.getElementById('volume').addEventListener('input', async (event) => {
   state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: Number(event.target.value) }) });
   renderAll();
   await syncAudioToState();

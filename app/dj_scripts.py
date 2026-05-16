@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import urllib.error
+import urllib.request
 
+from .config import AppConfig
 from .models import Station, Track
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 
@@ -14,7 +17,46 @@ def _track_ref(track: Track | None) -> str:
     return f"{title} by {artist}"
 
 
-def generate_dj_script(station: Station, payload: DJScriptGenerateRequest, previous_track: Track | None, next_track: Track | None) -> DJScriptResponse:
+def _generate_openai_script(
+    station: Station,
+    payload: DJScriptGenerateRequest,
+    previous_track: Track | None,
+    next_track: Track | None,
+    config: AppConfig,
+) -> str | None:
+    if config.script_provider != "openai" or not config.openai_api_key:
+        return None
+
+    prompt = (
+        f"Write a {payload.max_sentences}-sentence radio DJ break for station {station.name}. "
+        f"DJ name: {station.dj_name or 'DJ'}. Style: {station.dj_style or 'friendly'}. "
+        f"Previous track: {_track_ref(previous_track)}. Next track: {_track_ref(next_track)}. "
+        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}. "
+        "Return plain text only."
+    )
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps({"model": config.openai_text_model, "input": prompt}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.openai_api_key}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
+            data = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    output_text = data.get("output_text")
+    return output_text if isinstance(output_text, str) and output_text.strip() else None
+
+
+def generate_dj_script(
+    station: Station,
+    payload: DJScriptGenerateRequest,
+    previous_track: Track | None,
+    next_track: Track | None,
+    config: AppConfig | None = None,
+) -> DJScriptResponse:
     dj_name = station.dj_name or "DJ"
     style = station.dj_style or "friendly"
 
@@ -40,6 +82,20 @@ def generate_dj_script(station: Station, payload: DJScriptGenerateRequest, previ
 
     if payload.include_fake_ad:
         sentence_pool.append("This set is sponsored by Midnight Coffee Co.—brew loud, drive smooth.")
+
+    if config is not None:
+        scripted = _generate_openai_script(station, payload, previous_track, next_track, config)
+        if scripted:
+            parts = [part.strip() for part in scripted.replace("\n", " ").split(".") if part.strip()]
+            sentences = [f"{part}." for part in parts[: payload.max_sentences]]
+            if sentences:
+                return DJScriptResponse(
+                    station_id=station.id,
+                    station_name=station.name,
+                    dj_name=dj_name,
+                    sentences=sentences,
+                    script_text=" ".join(sentences),
+                )
 
     sentences = sentence_pool[: payload.max_sentences]
     return DJScriptResponse(
