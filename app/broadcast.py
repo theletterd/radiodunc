@@ -101,7 +101,7 @@ class BroadcastEngine:
             cmd = [
                 "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source_track_path), "-vn",
                 "-c:a", "aac", "-b:a", "192k", "-f", "hls", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "12",
-                "-hls_flags", "delete_segments+append_list", str(out_manifest),
+                "-hls_flags", "delete_segments+independent_segments", str(out_manifest),
             ]
             logger.info("broadcast.start station_id=%s source=%s slot=%s", station_id, source_track_path, target_slot)
             self._start_proc(cmd, target_slot)
@@ -131,7 +131,7 @@ class BroadcastEngine:
                 "ffmpeg", "-y", "-sseof", f"-{tail_seconds}", "-i", str(current_track_path), "-i", str(dj_clip_path),
                 "-stream_loop", "-1", "-i", str(next_track_path), "-vn", "-filter_complex", filter_complex,
                 "-map", "[out]", "-c:a", "aac", "-b:a", "192k", "-f", "hls", "-hls_time", "2",
-                "-hls_list_size", "6", "-hls_delete_threshold", "12", "-hls_flags", "delete_segments+append_list", str(out_manifest),
+                "-hls_list_size", "6", "-hls_delete_threshold", "12", "-hls_flags", "delete_segments+independent_segments", str(out_manifest),
             ]
             logger.info("broadcast.transition.start station_id=%s current=%s dj=%s next=%s slot=%s", station_id, current_track_path, dj_clip_path, next_track_path, target_slot)
             self._start_proc(cmd, target_slot)
