@@ -23,10 +23,13 @@ function musicTargetVolume() {
 }
 
 async function api(path, options = {}) {
+  console.log('[ui][api] request', { path, method: options.method || 'GET' });
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   if (!response.ok) {
+    console.error('[ui][api] response error', { path, status: response.status });
     throw new Error(await response.text());
   }
+  console.log('[ui][api] response ok', { path, status: response.status });
   return response.json();
 }
 
@@ -48,8 +51,10 @@ function renderStations() {
     const favBtn = document.createElement('button');
     favBtn.textContent = state?.favorites?.includes(s.id) ? '★ Favorited' : '☆ Favorite';
     favBtn.onclick = async (event) => {
+      console.log('[ui][button] favorite clicked', { stationId: s.id });
       event.stopPropagation();
       const target = !state?.favorites?.includes(s.id);
+      console.log('[ui][button] favorite target', { stationId: s.id, favorite: target });
       await api(`/stations/${s.id}/favorite`, { method: 'PUT', body: JSON.stringify({ favorite: target }) });
       await refreshState();
     };
@@ -57,7 +62,9 @@ function renderStations() {
     card.appendChild(row);
 
     card.onclick = async () => {
+      console.log('[ui][station] card clicked', { stationId: s.id });
       state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: s.id }) });
+      console.log('[ui][station] card select complete', { stationId: s.id });
       renderAll();
     };
     el.appendChild(card);
@@ -133,7 +140,14 @@ function schedulePlaybackRetry() {
 }
 
 async function syncAudioToState() {
+  console.log('[ui][audio] sync start', {
+    isPlaying: state?.is_playing,
+    queuePosition: state?.queue_position,
+    nowPlayingType: state?.now_playing_type,
+    loadedQueuePosition,
+  });
   if (!state?.is_playing) {
+    console.log('[ui][audio] sync stopping playback because state is not playing');
     audioEl.pause();
     overlayEl.pause();
     audioEl.removeAttribute('src');
@@ -150,6 +164,7 @@ async function syncAudioToState() {
   }
 
   if (loadedQueuePosition !== state.queue_position) {
+    console.log('[ui][audio] loading queue position', { from: loadedQueuePosition, to: state.queue_position });
     audioEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
     loadedQueuePosition = state.queue_position;
     djPreparedForTrackQueuePosition = null;
@@ -158,11 +173,13 @@ async function syncAudioToState() {
   try {
     clearPlaybackRetry();
     await audioEl.play();
+    console.log('[ui][audio] play() resolved');
     const targetVolume = musicTargetVolume();
     if (audioEl.volume < targetVolume - 0.01) {
       await fadeToVolume(targetVolume, FADE_DURATION_MS);
     }
   } catch (_err) {
+    console.warn('[ui][audio] play() failed, scheduling retry');
     schedulePlaybackRetry();
   }
 }
@@ -299,36 +316,58 @@ async function loadStations() {
 
 document.getElementById('search').addEventListener('input', renderStations);
 document.getElementById('scanBtn').addEventListener('click', async () => {
+  console.log('[ui][button] scan clicked');
   const status = document.getElementById('scanStatus');
   const folderPath = document.getElementById('libraryPath').value;
+  console.log('[ui][button] scan params', { folderPath });
   status.textContent = 'Scanning...';
   try {
     const result = await api('/library/scan', { method: 'POST', body: JSON.stringify({ folder_path: folderPath }) });
     status.textContent = `Scanned ${result.scanned} files, added ${result.inserted}, updated ${result.updated}.`;
   } catch (error) {
+    console.error('[ui][button] scan failed', { error: error.message });
     status.textContent = `Scan failed: ${error.message}`;
   }
 });
 
 document.getElementById('refreshStationsBtn').addEventListener('click', async () => {
+  console.log('[ui][button] refresh stations clicked');
   await loadStations();
+  console.log('[ui][button] refresh stations complete', { stationCount: stations.length });
   renderStations();
 });
 
 document.getElementById('playBtn').addEventListener('click', async () => {
-  if (!state?.station_id) return;
+  console.log('[ui][button] play clicked', { stationId: state?.station_id });
+  if (!state?.station_id) {
+    console.warn('[ui][button] play ignored: no station selected');
+    return;
+  }
   const response = await api('/player/play', { method: 'POST', body: JSON.stringify({ station_id: state.station_id, queue_size: 10 }) });
   state = response.state;
+  console.log('[ui][button] play response', {
+    isPlaying: state?.is_playing,
+    queuePosition: state?.queue_position,
+    nowPlayingType: state?.now_playing_type,
+  });
   renderAll();
   await syncAudioToState();
 });
 
 document.getElementById('nextBtn').addEventListener('click', async () => {
+  console.log('[ui][button] next clicked', {
+    transitionInFlight,
+    queuePosition: state?.queue_position,
+    nowPlayingType: state?.now_playing_type,
+  });
   await runDjOverlapTransition();
+  console.log('[ui][button] next flow complete');
 });
 
 document.getElementById('stopBtn').addEventListener('click', async () => {
+  console.log('[ui][button] stop clicked');
   await stopPlayback();
+  console.log('[ui][button] stop flow complete');
 });
 
 audioEl.addEventListener('timeupdate', async () => {
@@ -374,7 +413,9 @@ overlayEl.addEventListener('ended', async () => {
 });
 
 document.getElementById('volume').addEventListener('input', async (event) => {
+  console.log('[ui][control] volume input', { value: Number(event.target.value) });
   state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: Number(event.target.value) }) });
+  console.log('[ui][control] volume update response', { volume: state?.volume });
   renderAll();
   await syncAudioToState();
 });
@@ -392,12 +433,20 @@ window.addEventListener('focus', async () => {
 });
 
 async function init() {
+  console.log('[ui][init] start');
   await loadConfigDefaults();
   await loadStations();
   state = await api('/player/status');
+  console.log('[ui][init] initial state loaded', {
+    stationId: state?.station_id,
+    isPlaying: state?.is_playing,
+    queuePosition: state?.queue_position,
+    stationCount: stations.length,
+  });
   renderAll();
   await syncAudioToState();
   setInterval(refreshState, 5000);
+  console.log('[ui][init] complete; refresh interval set to 5000ms');
 }
 
 init();
