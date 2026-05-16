@@ -6,6 +6,12 @@ import urllib.request
 
 from .config import AppConfig
 from .models import Station, Track
+from .prompt_library import (
+    render_ad_break_prompt,
+    render_news_prompt,
+    render_song_transition_prompt,
+    render_weather_prompt,
+)
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 
 
@@ -27,13 +33,19 @@ def _generate_openai_script(
     if config.script_provider != "openai" or not config.openai_api_key:
         return None
 
-    prompt = (
-        f"Write a {payload.max_sentences}-sentence radio DJ break for station {station.name}. "
-        f"DJ name: {station.dj_name or 'DJ'}. Style: {station.dj_style or 'friendly'}. "
-        f"Previous track: {_track_ref(previous_track)}. Next track: {_track_ref(next_track)}. "
-        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}. "
-        "Return plain text only."
-    )
+    prompt_sections = [
+        render_song_transition_prompt(station, previous_track, next_track, payload.max_sentences),
+        f"DJ name: {station.dj_name or 'DJ'}. Style: {station.dj_style or 'friendly'}.",
+        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}.",
+    ]
+    if payload.include_weather:
+        prompt_sections.append(render_weather_prompt(station, "your area"))
+    if payload.include_news:
+        prompt_sections.append(render_news_prompt(station))
+    if payload.include_fake_ad:
+        prompt_sections.append(render_ad_break_prompt(station))
+    prompt_sections.append("Return plain text only.")
+    prompt = " ".join(prompt_sections)
     req = urllib.request.Request(
         "https://api.openai.com/v1/responses",
         data=json.dumps({"model": config.openai_text_model, "input": prompt}).encode("utf-8"),
@@ -75,12 +87,15 @@ def generate_dj_script(
 
     if payload.include_weather:
         location = cfg.get("weather_location") or "your area"
+        sentence_pool.append(render_weather_prompt(station, location))
         sentence_pool.append(f"Quick weather check for {location}: keep it locked here while we keep the soundtrack rolling.")
 
     if payload.include_news:
+        sentence_pool.append(render_news_prompt(station))
         sentence_pool.append("News flash is coming at the top of the hour, right after more hand-picked tracks.")
 
     if payload.include_fake_ad:
+        sentence_pool.append(render_ad_break_prompt(station))
         sentence_pool.append("This set is sponsored by Midnight Coffee Co.—brew loud, drive smooth.")
 
     if config is not None:
