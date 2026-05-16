@@ -268,7 +268,6 @@ document.getElementById('nextBtn').addEventListener('click', async () => {
     nowPlayingType: state?.now_playing_type,
   });
   await primePlaybackFromGesture();
-  await ensureStationSelectedForPlayback();
   await advanceToNextQueueItem();
   console.log('[ui][button] next flow complete');
 });
@@ -277,7 +276,6 @@ document.getElementById('nextBtn').addEventListener('click', async () => {
 
 audioEl.addEventListener('ended', async () => {
   await primePlaybackFromGesture();
-  await ensureStationSelectedForPlayback();
   await advanceToNextQueueItem();
 });
 
