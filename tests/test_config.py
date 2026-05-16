@@ -1,6 +1,7 @@
 import pytest
+from pathlib import Path
 
-from app.config import AppConfig, StationPreset, _validate_and_format_config
+from app.config import AppConfig, StationPreset, _validate_and_format_config, load_config, save_config
 
 
 def test_validate_and_format_config_rejects_blank_station_preset_format():
@@ -41,3 +42,24 @@ def test_station_preset_voice_hint_is_normalized_to_none_when_blank():
 def test_app_config_requires_at_least_one_station_preset():
     with pytest.raises(ValueError, match="must include at least one preset"):
         AppConfig(station_presets=[])
+
+
+def test_load_config_reads_openai_api_key_from_dotenv(tmp_path, monkeypatch):
+    (tmp_path / "radio_config.json").write_text('{"music_folder":"~/Music"}', encoding="utf-8")
+    (tmp_path / ".env").write_text('OPENAI_API_KEY="sk-test-123"\n', encoding="utf-8")
+    monkeypatch.setattr("app.config.CONFIG_PATH", tmp_path / "radio_config.json")
+    monkeypatch.setattr("app.config.EXAMPLE_CONFIG_PATH", tmp_path / "example-radio_config.json")
+    monkeypatch.setattr("app.config.DOTENV_PATH", tmp_path / ".env")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    loaded = load_config()
+    assert loaded.openai_api_key == "sk-test-123"
+
+
+def test_save_config_does_not_persist_openai_api_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "radio_config.json"
+    monkeypatch.setattr("app.config.CONFIG_PATH", config_path)
+    cfg = AppConfig(openai_api_key="sk-should-not-write")
+    save_config(cfg)
+    raw = config_path.read_text(encoding="utf-8")
+    assert "openai_api_key" not in raw

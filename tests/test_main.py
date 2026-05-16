@@ -297,6 +297,31 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert stopped.state.is_playing is False
 
 
+def test_player_play_can_include_time_announcement(monkeypatch):
+    db = _make_db_session()
+    station = Station(name="KWV 106", dj_name="Willy Banghole")
+    track1 = Track(file_path="/m/1.mp3", title="Bring Me to Life", artist="Evanescence")
+    track2 = Track(file_path="/m/2.mp3", title="Lithium", artist="Evanescence")
+    db.add_all([station, track1, track2])
+    db.commit()
+    db.refresh(station)
+
+    monkeypatch.setattr(
+        "app.main.load_config",
+        lambda: AppConfig(time_announcement_enabled=True, time_announcement_every_breaks=1),
+    )
+    monkeypatch.setattr(
+        "app.main.build_station_queue",
+        lambda **_kwargs: {"tracks": [track1, track2]},
+    )
+
+    player_play(PlayerPlayRequest(station_id=station.id, queue_size=2), db)
+    state = db.query(PlayerState).order_by(PlayerState.id.asc()).first()
+    assert state is not None
+    queue = state.queue_json or ""
+    assert "It's " in queue
+
+
 def test_player_current_media_returns_track_file(tmp_path, monkeypatch):
     db = _make_db_session()
     station = Station(name="Media FM", dj_name="DJ Media")

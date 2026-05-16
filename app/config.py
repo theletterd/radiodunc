@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -64,8 +65,8 @@ DEFAULT_STATION_PRESETS: list[StationPreset] = [
 
 class AppConfig(BaseModel):
     music_folder: str = "~/Music"
-    tts_provider: str = "openai"
-    script_provider: str = "openai"
+    tts_provider: str = "tone"
+    script_provider: str = "template"
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
     openai_tts_model: str = "gpt-4o-mini-tts"
@@ -73,6 +74,13 @@ class AppConfig(BaseModel):
     station_generation_count: int = 6
     station_generation_seed: int | None = None
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
+    radio_polish_enabled: bool = True
+    daypart_programming_enabled: bool = True
+    time_announcement_enabled: bool = False
+    time_announcement_every_breaks: int = Field(default=2, ge=1, le=20)
+    dj_break_every_tracks: int = Field(default=1, ge=1, le=10)
+    weather_insert_every_breaks: int = Field(default=3, ge=1, le=20)
+    news_insert_every_breaks: int = Field(default=5, ge=1, le=20)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     station_presets: list[StationPreset] = Field(default_factory=lambda: [preset.model_copy() for preset in DEFAULT_STATION_PRESETS])
 
@@ -126,6 +134,25 @@ class AppConfig(BaseModel):
 
 CONFIG_PATH = Path("radio_config.json")
 EXAMPLE_CONFIG_PATH = Path("example-radio_config.json")
+DOTENV_PATH = Path(".env")
+
+
+def _load_dotenv_api_key() -> str | None:
+    env_value = os.getenv("OPENAI_API_KEY")
+    if env_value and env_value.strip():
+        return env_value.strip()
+    if not DOTENV_PATH.exists():
+        return None
+    for raw_line in DOTENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() != "OPENAI_API_KEY":
+            continue
+        normalized = value.strip().strip("'").strip('"')
+        return normalized or None
+    return None
 
 
 def _validate_and_format_config(source: str, raw_data: dict) -> AppConfig:
@@ -144,14 +171,23 @@ def load_config() -> AppConfig:
         else:
             config = AppConfig()
         save_config(config)
+        env_api_key = _load_dotenv_api_key()
+        if env_api_key:
+            config = config.model_copy(update={"openai_api_key": env_api_key})
         return config
 
     data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    return _validate_and_format_config(str(CONFIG_PATH), data)
+    config = _validate_and_format_config(str(CONFIG_PATH), data)
+    env_api_key = _load_dotenv_api_key()
+    if env_api_key:
+        config = config.model_copy(update={"openai_api_key": env_api_key})
+    return config
 
 
 def save_config(config: AppConfig) -> None:
+    serialized = config.model_dump()
+    serialized.pop("openai_api_key", None)
     CONFIG_PATH.write_text(
-        json.dumps(config.model_dump(), indent=2),
+        json.dumps(serialized, indent=2),
         encoding="utf-8",
     )

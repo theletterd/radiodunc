@@ -40,7 +40,6 @@
   "playlist_artist_repeat_window": 3,
   "tts_provider": "openai",
   "script_provider": "openai",
-  "openai_api_key": null,
   "openai_text_model": "gpt-4o-mini",
   "openai_tts_model": "gpt-4o-mini-tts",
   "openai_tts_voice": "alloy"

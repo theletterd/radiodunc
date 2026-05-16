@@ -192,9 +192,20 @@ You can use OpenAI for both DJ script generation and DJ clip TTS with these conf
 
 - `script_provider`: `"openai"` (or `"template"` for local fallback)
 - `tts_provider`: `"openai"` (or `"tone"` for local fallback)
-- `openai_api_key`: your OpenAI API key
 - optional `openai_text_model` (defaults to `gpt-4o-mini`)
 - optional `openai_tts_model` (defaults to `gpt-4o-mini-tts`)
 - optional `openai_tts_voice` (defaults to `alloy`)
+
+Set your API key via environment variable (recommended) or a local `.env` file (already gitignored):
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+or:
+
+```bash
+echo 'OPENAI_API_KEY="sk-..."' >> .env
+```
 
 The UI volume slider updates playback volume live while dragging.
