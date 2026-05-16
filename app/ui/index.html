@@ -65,6 +65,7 @@
         <h3>Up Next</h3>
         <p id="upNext">Queue depth: 0</p>
         <audio id="playerAudio" controls style="width:100%; margin-top:8px;"></audio>
+        <audio id="overlayAudio" style="display:none;"></audio>
       </div>
 
       <div class="card">
@@ -80,6 +81,7 @@
 let stations = [];
 let state = null;
 const audioEl = document.getElementById('playerAudio');
+const overlayEl = document.getElementById('overlayAudio');
 let loadedQueuePosition = null;
 let transitionInFlight = false;
 const FADE_DURATION_MS = 8000;
@@ -175,8 +177,11 @@ async function fadeToVolume(targetVolume, durationMs = FADE_DURATION_MS) {
 async function syncAudioToState() {
   if (!state?.is_playing) {
     audioEl.pause();
+    overlayEl.pause();
     audioEl.removeAttribute('src');
+    overlayEl.removeAttribute('src');
     audioEl.load();
+    overlayEl.load();
     loadedQueuePosition = null;
     return;
   }
@@ -208,6 +213,49 @@ async function fadeThenAdvance(actionFn) {
     }
     const response = await actionFn();
     state = response.state;
+    renderAll();
+    audioEl.volume = 0;
+    await syncAudioToState();
+    await fadeToVolume(targetVolume, FADE_DURATION_MS);
+  } finally {
+    transitionInFlight = false;
+  }
+}
+
+async function runDjOverlapTransition() {
+  if (!state?.is_playing || state?.now_playing_type !== 'track') {
+    await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
+    return;
+  }
+
+  if (transitionInFlight) return;
+  transitionInFlight = true;
+  const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+  try {
+    const djResponse = await api('/player/next', { method: 'POST' });
+    if (djResponse?.state?.now_playing_type !== 'dj') {
+      state = djResponse.state;
+      renderAll();
+      audioEl.volume = 0;
+      await syncAudioToState();
+      await fadeToVolume(targetVolume, FADE_DURATION_MS);
+      return;
+    }
+
+    state = djResponse.state;
+    renderAll();
+    overlayEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
+    overlayEl.volume = targetVolume;
+    try {
+      await overlayEl.play();
+    } catch (_err) { }
+
+    if (!audioEl.paused) {
+      fadeToVolume(0, FADE_DURATION_MS);
+    }
+
+    const nextTrackResponse = await api('/player/next', { method: 'POST' });
+    state = nextTrackResponse.state;
     renderAll();
     audioEl.volume = 0;
     await syncAudioToState();
@@ -259,7 +307,7 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('nextBtn').addEventListener('click', async () => {
-  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
+  await runDjOverlapTransition();
 });
 
 document.getElementById('stopBtn').addEventListener('click', async () => {
@@ -279,7 +327,7 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 });
 
 audioEl.addEventListener('ended', async () => {
-  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
+  await runDjOverlapTransition();
 });
 
 document.getElementById('volume').addEventListener('input', async (event) => {
