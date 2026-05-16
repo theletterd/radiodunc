@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -35,6 +36,8 @@ from .stations import generate_stations
 from .tts import build_tts_provider, get_or_create_dj_clip
 
 Base.metadata.create_all(bind=engine)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
@@ -220,7 +223,8 @@ def player_current_media(db: Session = Depends(get_db)):
         voice = item.get("voice")
         try:
             provider = build_tts_provider(config)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning("Invalid OpenAI TTS config during playback; falling back to tone", extra={"error": str(exc)})
             provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
         clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice, provider=provider)
         media_path = _safe_media_path(clip.audio_path, config)
@@ -383,7 +387,8 @@ def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest
     config = load_config()
     try:
         provider = build_tts_provider(config)
-    except ValueError:
+    except ValueError as exc:
+        logger.warning("Invalid OpenAI TTS config during clip synthesis; falling back to tone", extra={"error": str(exc)})
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
     clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider)
     return DJClipResponse(clip_id=clip.id, audio_path=clip.audio_path, voice=clip.voice, cached=cached)
