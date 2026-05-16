@@ -261,7 +261,7 @@ class PlayoutWorker:
         return 10.0
 
     def _orchestrate_transition_window(self, db: Session, state: PlayerState, config: AppConfig, queue: list[dict], now_epoch: float) -> None:
-        trigger_seconds = 20.0
+        trigger_seconds = 35.0
         if state.current_station_id is None or state.queue_index + 1 >= len(queue):
             return
         current = queue[state.queue_index]

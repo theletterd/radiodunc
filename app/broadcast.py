@@ -131,7 +131,7 @@ class BroadcastEngine:
             self._clear_slot(target_slot)
             out_manifest = self._slot_dir(target_slot) / "live.m3u8"
             filter_complex = (
-                f"[0:a]afade=t=out:st=0:d={fade_seconds},volume=0.22[musicduck];"
+                f"[0:a]volume='if(lt(t,0.7),1,if(lt(t,{fade_seconds + 0.7}),1-0.78*(t-0.7)/{fade_seconds},0.22))'[musicduck];"
                 "[1:a]adelay=700|700[dj];"
                 "[musicduck][dj]amix=inputs=2:duration=longest:dropout_transition=0[transition];"
                 "[transition][2:a]concat=n=2:v=0:a=1[out]"
