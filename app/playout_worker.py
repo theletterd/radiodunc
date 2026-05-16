@@ -261,6 +261,9 @@ class PlayoutWorker:
         return 10.0
 
     def _orchestrate_transition_window(self, db: Session, state: PlayerState, config: AppConfig, queue: list[dict], now_epoch: float) -> None:
+        # Temporary stability guard: disable ffmpeg transition handoffs until
+        # timing/hls rollover behavior is fully stabilized.
+        return
         trigger_seconds = 20.0
         if state.current_station_id is None or state.queue_index + 1 >= len(queue):
             return
