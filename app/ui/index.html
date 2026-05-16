@@ -81,6 +81,8 @@ let stations = [];
 let state = null;
 const audioEl = document.getElementById('playerAudio');
 let loadedQueuePosition = null;
+let transitionInFlight = false;
+const FADE_DURATION_MS = 8000;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -146,6 +148,30 @@ function renderAll() {
 }
 
 
+async function fadeToVolume(targetVolume, durationMs = FADE_DURATION_MS) {
+  const clamped = Math.max(0, Math.min(1, targetVolume));
+  const start = audioEl.volume;
+  const delta = clamped - start;
+  if (Math.abs(delta) < 0.01 || durationMs <= 0) {
+    audioEl.volume = clamped;
+    return;
+  }
+
+  const startAt = performance.now();
+  await new Promise((resolve) => {
+    function step(now) {
+      const progress = Math.min(1, (now - startAt) / durationMs);
+      audioEl.volume = Math.max(0, Math.min(1, start + (delta * progress)));
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      } else {
+        resolve();
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
 async function syncAudioToState() {
   if (!state?.is_playing) {
     audioEl.pause();
@@ -163,7 +189,32 @@ async function syncAudioToState() {
     audioEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
     loadedQueuePosition = state.queue_position;
   }
-  try { await audioEl.play(); } catch (_err) { }
+  try {
+    await audioEl.play();
+    const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+    if (audioEl.volume < targetVolume - 0.01) {
+      await fadeToVolume(targetVolume, FADE_DURATION_MS);
+    }
+  } catch (_err) { }
+}
+
+async function fadeThenAdvance(actionFn) {
+  if (transitionInFlight) return;
+  transitionInFlight = true;
+  const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+  try {
+    if (state?.is_playing && !audioEl.paused) {
+      await fadeToVolume(0, FADE_DURATION_MS);
+    }
+    const response = await actionFn();
+    state = response.state;
+    renderAll();
+    audioEl.volume = 0;
+    await syncAudioToState();
+    await fadeToVolume(targetVolume, FADE_DURATION_MS);
+  } finally {
+    transitionInFlight = false;
+  }
 }
 
 async function refreshState() {
@@ -208,24 +259,27 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('nextBtn').addEventListener('click', async () => {
-  const response = await api('/player/next', { method: 'POST' });
-  state = response.state;
-  renderAll();
-  await syncAudioToState();
+  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
 });
 
 document.getElementById('stopBtn').addEventListener('click', async () => {
-  const response = await api('/player/stop', { method: 'POST' });
-  state = response.state;
-  renderAll();
-  await syncAudioToState();
+  if (transitionInFlight) return;
+  transitionInFlight = true;
+  try {
+    if (state?.is_playing && !audioEl.paused) {
+      await fadeToVolume(0, FADE_DURATION_MS);
+    }
+    const response = await api('/player/stop', { method: 'POST' });
+    state = response.state;
+    renderAll();
+    await syncAudioToState();
+  } finally {
+    transitionInFlight = false;
+  }
 });
 
 audioEl.addEventListener('ended', async () => {
-  const response = await api('/player/next', { method: 'POST' });
-  state = response.state;
-  renderAll();
-  await syncAudioToState();
+  await fadeThenAdvance(() => api('/player/next', { method: 'POST' }));
 });
 
 document.getElementById('volume').addEventListener('input', async (event) => {
