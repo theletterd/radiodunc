@@ -10,6 +10,8 @@ let syncInFlight = null;
 let lastStreamReloadAtMs = 0;
 const PLAYBACK_RETRY_DELAY_MS = 750;
 const STREAM_RELOAD_COOLDOWN_MS = 4000;
+const STREAM_RECOVERY_WINDOW_MS = 30000;
+const MAX_STREAM_RECOVERIES_PER_WINDOW = 3;
 
 
 function bindAutoplayUnlockHandler() {
@@ -318,7 +320,44 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
 });
 
 
+let lastEndedRecoveryAtMs = 0;
+let streamRecoveryAttemptTimes = [];
+
+function canAttemptStreamRecovery() {
+  const now = Date.now();
+  streamRecoveryAttemptTimes = streamRecoveryAttemptTimes.filter((ts) => (now - ts) < STREAM_RECOVERY_WINDOW_MS);
+  if (streamRecoveryAttemptTimes.length >= MAX_STREAM_RECOVERIES_PER_WINDOW) {
+    console.warn('[ui][audio] stream recovery suppressed; too many attempts in time window', {
+      attempts: streamRecoveryAttemptTimes.length,
+      windowMs: STREAM_RECOVERY_WINDOW_MS,
+    });
+    return false;
+  }
+  streamRecoveryAttemptTimes.push(now);
+  return true;
+}
+
 audioEl.addEventListener('ended', async () => {
+  const now = Date.now();
+  if (!state?.is_playing) return;
+
+  try {
+    await audioEl.play();
+    console.warn('[ui][audio] ended event recovered via play() without stream reload');
+    return;
+  } catch (err) {
+    console.warn('[ui][audio] ended event play() retry failed; considering stream reload', { err });
+  }
+
+  if ((now - lastEndedRecoveryAtMs) < STREAM_RELOAD_COOLDOWN_MS) {
+    console.warn('[ui][audio] ended event recovery suppressed by cooldown');
+    return;
+  }
+  if (!canAttemptStreamRecovery()) {
+    return;
+  }
+
+  lastEndedRecoveryAtMs = now;
   console.warn('[ui][audio] ended event received; attempting stream recovery');
   await syncAudioToState({ forceReload: true });
 });
