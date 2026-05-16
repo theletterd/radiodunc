@@ -165,11 +165,12 @@ async function syncAudioToState() {
     return;
   }
 
-  if (loadedQueuePosition !== state.queue_position) {
-    console.log('[ui][audio] loading queue position', { from: loadedQueuePosition, to: state.queue_position });
-    audioEl.src = `/player/stream?pos=${state.queue_position}&ts=${Date.now()}`;
-    loadedQueuePosition = state.queue_position;
+  if (!audioEl.src || loadedQueuePosition === null) {
+    console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8' });
+    audioEl.src = `/broadcast/live.m3u8?ts=${Date.now()}`;
   }
+  loadedQueuePosition = state.queue_position;
+  audioEl.volume = musicTargetVolume();
   try {
     clearPlaybackRetry();
     await audioEl.play();
