@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 
@@ -14,6 +15,8 @@ from .prompt_library import (
     render_weather_prompt,
 )
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
+
+logger = logging.getLogger(__name__)
 
 
 def _track_ref(track: Track | None) -> str:
@@ -31,9 +34,18 @@ def _generate_openai_script(
     next_track: Track | None,
     config: AppConfig,
 ) -> str | None:
-    if config.script_provider != "openai" or not config.openai_api_key:
+    if config.script_provider != "openai":
+        logger.info("Skipping OpenAI DJ script generation: script_provider=%s", config.script_provider)
+        return None
+    if not config.openai_api_key:
+        logger.warning("Skipping OpenAI DJ script generation: OPENAI_API_KEY is missing")
         return None
 
+    logger.info(
+        "Attempting OpenAI DJ script generation for station_id=%s with model=%s",
+        station.id,
+        config.openai_text_model,
+    )
     prompt_sections = [
         render_song_transition_prompt(station, previous_track, next_track, payload.max_sentences),
         f"DJ name: {station.dj_name or 'DJ'}. Style: {station.dj_style or 'friendly'}.",
@@ -57,12 +69,27 @@ def _generate_openai_script(
     )
     try:
         with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
+            logger.info("OpenAI DJ script request succeeded with status=%s", getattr(response, "status", "unknown"))
             data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+    except urllib.error.HTTPError as exc:
+        logger.warning("OpenAI DJ script request failed with HTTPError status=%s", exc.code)
+        return None
+    except urllib.error.URLError as exc:
+        logger.warning("OpenAI DJ script request failed with URLError reason=%s", exc.reason)
+        return None
+    except TimeoutError:
+        logger.warning("OpenAI DJ script request timed out")
+        return None
+    except json.JSONDecodeError:
+        logger.warning("OpenAI DJ script response was not valid JSON")
         return None
 
     output_text = data.get("output_text")
-    return output_text if isinstance(output_text, str) and output_text.strip() else None
+    if isinstance(output_text, str) and output_text.strip():
+        logger.info("OpenAI DJ script response included output_text")
+        return output_text
+    logger.warning("OpenAI DJ script response missing usable output_text; falling back to sentence pool")
+    return None
 
 
 def generate_dj_script(
@@ -114,7 +141,11 @@ def generate_dj_script(
                     sentences=sentences,
                     script_text=" ".join(sentences),
                 )
+            logger.warning("OpenAI DJ script produced no usable sentences after parsing; using sentence pool fallback")
+    else:
+        logger.info("No config provided to generate_dj_script; using sentence pool fallback")
 
+    logger.info("Using sentence pool fallback for station_id=%s", station.id)
     sentences = sentence_pool[: payload.max_sentences]
     return DJScriptResponse(
         station_id=station.id,
