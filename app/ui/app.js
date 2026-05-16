@@ -250,7 +250,7 @@ async function startPlayback() {
     body: JSON.stringify({ station_id: serverState.station_id, queue_size: 12 }),
   });
   serverState = resp.state;
-  if (!serverState.current_track_id) throw new Error('Server returned no current track');
+  if (!serverState.current_track?.id) throw new Error('Server returned no current track');
 
   // Reset slots for a clean start
   for (const key of ['A', 'B']) {
@@ -262,7 +262,7 @@ async function startPlayback() {
   activeSlot = 'A';
 
   const cur = curSlot();
-  cur.el.src = `/media/track/${serverState.current_track_id}`;
+  cur.el.src = `/media/track/${serverState.current_track?.id}`;
   cur.el.load();
   await cur.el.play();
 

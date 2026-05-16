@@ -538,13 +538,25 @@ def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_a
 
     station_config = json.loads(station.config_json) if station.config_json else {}
     voice = station_config.get("voice_hint") or None
-    clip, _audio_path, dj_cached = get_or_create_dj_clip(
-        db,
-        script_text=script_response.script_text,
-        voice=voice,
-        provider=provider,
-        persist=True,
-    )
+    try:
+        clip, _audio_path, dj_cached = get_or_create_dj_clip(
+            db,
+            script_text=script_response.script_text,
+            voice=voice,
+            provider=provider,
+            persist=True,
+        )
+    except RuntimeError:
+        logger.warning(
+            "DJ clip synthesis failed with voice=%r; retrying with default voice", voice
+        )
+        clip, _audio_path, dj_cached = get_or_create_dj_clip(
+            db,
+            script_text=script_response.script_text,
+            voice=None,
+            provider=provider,
+            persist=True,
+        )
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
