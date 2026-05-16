@@ -62,6 +62,17 @@ function stationName(id) {
   return stations.find((s) => s.id === id)?.name || `#${id}`;
 }
 
+
+async function ensureStationSelectedForPlayback() {
+  if (state?.station_id) return;
+  const fallbackStationId = state?.recent_station_ids?.[0] ?? state?.favorites?.[0] ?? stations?.[0]?.id;
+  if (!fallbackStationId) {
+    throw new Error('No station available. Scan library and generate stations first.');
+  }
+  console.log('[ui][station] auto-selecting fallback station', { stationId: fallbackStationId });
+  state = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: fallbackStationId }) });
+}
+
 function renderStations() {
   const q = document.getElementById('search').value.toLowerCase();
   const el = document.getElementById('stations');
@@ -99,7 +110,7 @@ function renderStations() {
 function renderPlayer() {
   const current = stations.find((s) => s.id === state?.station_id);
   document.getElementById('stationName').textContent = current?.name || 'No station selected';
-  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
+  document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Next.';
   const sliderValue = state?.volume ?? 80;
   document.getElementById('volume').value = sliderValue;
   audioEl.volume = musicTargetVolume();
@@ -251,42 +262,22 @@ document.getElementById('refreshStationsBtn').addEventListener('click', async ()
   }
 });
 
-document.getElementById('playBtn').addEventListener('click', async () => {
-  console.log('[ui][button] play clicked', { stationId: state?.station_id });
-  if (!state?.station_id) {
-    console.warn('[ui][button] play ignored: no station selected');
-    return;
-  }
-  await primePlaybackFromGesture();
-  const response = await api('/player/play', { method: 'POST', body: JSON.stringify({ station_id: state.station_id, queue_size: 10 }) });
-  state = response.state;
-  console.log('[ui][button] play response', {
-    isPlaying: state?.is_playing,
-    queuePosition: state?.queue_position,
-    nowPlayingType: state?.now_playing_type,
-  });
-  renderAll();
-  await syncAudioToState();
-});
-
 document.getElementById('nextBtn').addEventListener('click', async () => {
   console.log('[ui][button] next clicked', {
     queuePosition: state?.queue_position,
     nowPlayingType: state?.now_playing_type,
   });
+  await primePlaybackFromGesture();
+  await ensureStationSelectedForPlayback();
   await advanceToNextQueueItem();
   console.log('[ui][button] next flow complete');
-});
-
-document.getElementById('stopBtn').addEventListener('click', async () => {
-  console.log('[ui][button] stop clicked');
-  await stopPlayback();
-  console.log('[ui][button] stop flow complete');
 });
 
 
 
 audioEl.addEventListener('ended', async () => {
+  await primePlaybackFromGesture();
+  await ensureStationSelectedForPlayback();
   await advanceToNextQueueItem();
 });
 
