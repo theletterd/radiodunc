@@ -458,6 +458,7 @@ def player_next(db: Session = Depends(get_db)):
                         current_track_path=_safe_media_path(current_track.file_path, config),
                         dj_clip_path=_safe_media_path(audio_path, config),
                         next_track_path=_safe_media_path(next_track.file_path, config),
+                        current_stream_path=broadcast_engine.manifest_path(),
                     )
                 except Exception:
                     logger.exception("broadcast.transition.start.failed station_id=%s", station.id)
