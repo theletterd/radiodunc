@@ -85,10 +85,17 @@ const overlayEl = document.getElementById('overlayAudio');
 let loadedQueuePosition = null;
 let transitionInFlight = false;
 const FADE_DURATION_MS = 8000;
+const DJ_DUCK_FADE_DURATION_MS = 500;
+const DJ_DUCK_MULTIPLIER = 0.5;
+const DJ_FIXED_VOLUME = 1;
 const DJ_PREROLL_MIN_SECONDS = 5;
 const DJ_PREROLL_MAX_SECONDS = 10;
 let djPrerollQueuePosition = null;
 let djPrerollThresholdSeconds = null;
+
+function musicTargetVolume() {
+  return Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+}
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -138,7 +145,9 @@ function renderPlayer() {
   document.getElementById('stationMeta').textContent = current ? (current.tagline || current.format || 'Live radio') : 'Pick a station, then press Play Station.';
   const sliderValue = state?.volume ?? 80;
   document.getElementById('volume').value = sliderValue;
-  audioEl.volume = Math.max(0, Math.min(1, sliderValue / 100));
+  if (!transitionInFlight) {
+    audioEl.volume = musicTargetVolume();
+  }
 
   const label = state?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
@@ -202,7 +211,7 @@ async function syncAudioToState() {
   }
   try {
     await audioEl.play();
-    const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+    const targetVolume = musicTargetVolume();
     if (audioEl.volume < targetVolume - 0.01) {
       await fadeToVolume(targetVolume, FADE_DURATION_MS);
     }
@@ -212,7 +221,7 @@ async function syncAudioToState() {
 async function fadeThenAdvance(actionFn) {
   if (transitionInFlight) return;
   transitionInFlight = true;
-  const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+  const targetVolume = musicTargetVolume();
   try {
     if (state?.is_playing && !audioEl.paused) {
       await fadeToVolume(0, FADE_DURATION_MS);
@@ -236,7 +245,8 @@ async function runDjOverlapTransition() {
 
   if (transitionInFlight) return;
   transitionInFlight = true;
-  const targetVolume = Math.max(0, Math.min(1, (state?.volume ?? 80) / 100));
+  const targetVolume = musicTargetVolume();
+  const duckedMusicVolume = targetVolume * DJ_DUCK_MULTIPLIER;
   try {
     const djResponse = await api('/player/next', { method: 'POST' });
     if (djResponse?.state?.now_playing_type !== 'dj') {
@@ -251,13 +261,13 @@ async function runDjOverlapTransition() {
     state = djResponse.state;
     renderAll();
     overlayEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
-    overlayEl.volume = targetVolume;
+    overlayEl.volume = DJ_FIXED_VOLUME;
     try {
       await overlayEl.play();
     } catch (_err) { }
 
     if (!audioEl.paused) {
-      fadeToVolume(0, FADE_DURATION_MS);
+      fadeToVolume(duckedMusicVolume, DJ_DUCK_FADE_DURATION_MS);
     }
 
     const nextTrackResponse = await api('/player/next', { method: 'POST' });
