@@ -17,6 +17,7 @@ from .database import Base, engine, get_db
 from .models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
 from .dj_scripts import generate_dj_script
 from .scanner import scan_library
+from .broadcast import BroadcastEngine
 from .schemas import (
     LibraryScanRequest,
     QueueGenerateRequest,
@@ -33,6 +34,7 @@ from .schemas import (
     StationGenerateRequest,
     StationOut,
     TrackOut,
+    BroadcastStatusResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
@@ -62,6 +64,8 @@ _configure_logging()
 
 app = FastAPI(title="Local AI Radio Station Generator", version="0.2.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
+
+broadcast_engine = BroadcastEngine(Path("generated_audio") / "hls")
 
 
 @app.middleware("http")
@@ -340,6 +344,27 @@ def player_stream(db: Session = Depends(get_db)):
     return player_current_media(db)
 
 
+@app.get("/broadcast/status", response_model=BroadcastStatusResponse)
+def broadcast_status():
+    return broadcast_engine.status()
+
+
+@app.get("/broadcast/live.m3u8")
+def broadcast_live_manifest():
+    manifest = Path("generated_audio") / "hls" / "live.m3u8"
+    if not manifest.exists():
+        raise HTTPException(status_code=404, detail="Live stream is not running")
+    return FileResponse(str(manifest), media_type="application/vnd.apple.mpegurl", filename="live.m3u8")
+
+
+@app.get("/broadcast/{segment_name}")
+def broadcast_live_segment(segment_name: str):
+    segment = Path("generated_audio") / "hls" / segment_name
+    if not segment.exists() or segment.suffix != ".ts":
+        raise HTTPException(status_code=404, detail="Segment not found")
+    return FileResponse(str(segment), media_type="video/mp2t", filename=segment.name)
+
+
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -363,6 +388,15 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state.last_error = None
     db.commit()
     db.refresh(state)
+    first_track = queue["tracks"][0] if queue.get("tracks") else None
+    if first_track is not None:
+        try:
+            broadcast_engine.start(station_id=payload.station_id, source_track_path=Path(first_track.file_path).expanduser().resolve())
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("broadcast.start.failed station_id=%s", payload.station_id)
+            state.last_error = f"broadcast start failed: {exc}"
+            db.commit()
+            db.refresh(state)
     _log_event("player.play.started", station_id=payload.station_id, queue_items=len(sequence))
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
@@ -443,6 +477,7 @@ def player_stop(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.stop.requested", station_id=state.current_station_id)
     state.is_playing = False
+    broadcast_engine.stop()
     db.commit()
     db.refresh(state)
     _log_event("player.stop.completed", station_id=state.current_station_id)
