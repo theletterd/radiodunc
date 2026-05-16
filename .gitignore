@@ -229,3 +229,5 @@ secrets.*
 # Local runtime artifacts
 radio.db
 generated_audio/
+.claude/
+HANDOFF.md
