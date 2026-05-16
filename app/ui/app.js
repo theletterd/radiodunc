@@ -10,6 +10,7 @@ let syncInFlight = null;
 let refreshStateInFlight = null;
 let refreshIntervalId = null;
 let lastStreamReloadAtMs = 0;
+let endedRecoveryInFlight = false;
 let lastRefreshTriggerAtMs = 0;
 const REFRESH_TRIGGER_COOLDOWN_MS = 1500;
 const PLAYBACK_RETRY_DELAY_MS = 750;

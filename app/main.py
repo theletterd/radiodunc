@@ -426,9 +426,24 @@ def broadcast_status():
 def broadcast_live_manifest(request: Request):
     manifest = broadcast_engine.manifest_path()
     range_header = request.headers.get("range")
+    status = broadcast_engine.status()
+    if not status.running:
+        _log_event("broadcast.manifest.unavailable", path=str(manifest), reason="engine_not_running", range=range_header)
+        raise HTTPException(status_code=503, detail="Live stream encoder is not running")
     if not manifest.exists():
         _log_event("broadcast.manifest.miss", path=str(manifest), range=range_header)
         raise HTTPException(status_code=404, detail="Live stream is not running")
+
+    manifest_age_seconds = time.time() - manifest.stat().st_mtime
+    if manifest_age_seconds > 8.0:
+        _log_event(
+            "broadcast.manifest.stale",
+            path=str(manifest),
+            age_seconds=round(manifest_age_seconds, 3),
+            range=range_header,
+        )
+        raise HTTPException(status_code=503, detail="Live stream manifest is stale")
+
     content = manifest.read_text(encoding="utf-8")
     size = len(content.encode("utf-8"))
     _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header)
