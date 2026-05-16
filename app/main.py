@@ -4,7 +4,7 @@ import os
 import time
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
@@ -452,10 +452,12 @@ def broadcast_live_manifest(request: Request):
     manifest_bytes = manifest.read_bytes()
     size = len(manifest_bytes)
 
+    now_utc = datetime.now(ZoneInfo("UTC"))
+    manifest_ttl_seconds = 2
+    expires_at = now_utc + timedelta(seconds=manifest_ttl_seconds)
     headers = {
-        "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
+        "Cache-Control": f"public, max-age={manifest_ttl_seconds}, must-revalidate",
+        "Expires": expires_at.strftime("%a, %d %b %Y %H:%M:%S GMT"),
         "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         "Accept-Ranges": "bytes",
     }
@@ -497,9 +499,8 @@ def broadcast_live_segment(segment_name: str, request: Request):
         media_type="video/mp2t",
         filename=segment.name,
         headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
+            "Cache-Control": "public, max-age=60, immutable",
+            "Expires": (datetime.now(ZoneInfo("UTC")) + timedelta(seconds=60)).strftime("%a, %d %b %Y %H:%M:%S GMT"),
             "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         },
     )
