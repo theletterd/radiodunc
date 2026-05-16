@@ -331,7 +331,10 @@ class PlayoutWorker:
             "current_track_path": current_track.file_path,
             "next_track_path": next_track.file_path,
             "dj_audio_path": str(audio_path),
-            "transition_at_epoch": float(current.get("planned_end_epoch", time.time())),
+            "transition_at_epoch": max(
+                time.time(),
+                float(current.get("planned_end_epoch", time.time())) - 20.0,
+            ),
         }
 
     def _commit_transition_or_fallback(
