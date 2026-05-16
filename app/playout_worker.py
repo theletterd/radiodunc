@@ -106,7 +106,6 @@ class PlayoutWorker:
                 return
             config = load_config()
             now_epoch = time.time()
-            self._consume_admin_commands(db, state)
             state_name = self._resolve_state(state)
             self._log_state_snapshot(state, state_name)
 
@@ -152,31 +151,6 @@ class PlayoutWorker:
             round(time.time(), 3),
             state.current_track_id,
         )
-
-    def _consume_admin_commands(self, db: Session, state: PlayerState) -> None:
-        commands = self._admin_commands(state)
-        if not commands:
-            return
-        command = commands.pop(0)
-        name = command.get("command")
-        logger.info("playout.admin.command command=%s station_id=%s", name, command.get("station_id"))
-        if name == "force_station_change":
-            station_id = command.get("station_id")
-            if station_id is None:
-                state.last_error = "admin command force_station_change missing station_id"
-            else:
-                state.current_station_id = int(station_id)
-                state.queue_json = "[]"
-                state.queue_index = 0
-                state.current_track_id = None
-                state.is_playing = True
-                state.timeline_started_at_epoch = time.time()
-                state.current_item_started_at_epoch = 0.0
-                state.current_item_expected_end_at_epoch = 0.0
-                state.current_sequence_id = (state.current_sequence_id or 0) + 1
-                state.playout_mode = "recovering"
-                state.last_error = None
-        state.admin_commands_json = json.dumps(commands)
 
     def _resolve_state(self, state: PlayerState) -> str:
         if not state.is_playing:
@@ -405,7 +379,3 @@ class PlayoutWorker:
     @staticmethod
     def _queue(state: PlayerState) -> list[dict]:
         return json.loads(state.queue_json) if state.queue_json else []
-
-    @staticmethod
-    def _admin_commands(state: PlayerState) -> list[dict]:
-        return json.loads(state.admin_commands_json) if state.admin_commands_json else []

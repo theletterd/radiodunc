@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from .config import AppConfig, load_config, save_config
 from .database import Base, engine, get_db
-from .models import DJClip, FavoriteStation, ListenerSession, PlayerState, RecentStation, Station, Track
+from .models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
 from .dj_scripts import generate_dj_script
 from .scanner import scan_library
 from .broadcast import BroadcastEngine
@@ -28,7 +28,6 @@ from .schemas import (
     PlayerStateUpdateRequest,
     PlayerPlayRequest,
     PlayerActionResponse,
-    PlayerAdminCommandRequest,
     FavoriteStationRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
@@ -38,8 +37,6 @@ from .schemas import (
     StationOut,
     TrackOut,
     BroadcastStatusResponse,
-    ListenerHeartbeatRequest,
-    ListenerHeartbeatResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
@@ -63,7 +60,6 @@ def _ensure_player_state_schema() -> None:
             "current_item_expected_end_at_epoch": "ALTER TABLE player_state ADD COLUMN current_item_expected_end_at_epoch FLOAT NOT NULL DEFAULT 0.0",
             "current_sequence_id": "ALTER TABLE player_state ADD COLUMN current_sequence_id INTEGER NOT NULL DEFAULT 0",
             "playout_mode": "ALTER TABLE player_state ADD COLUMN playout_mode VARCHAR NOT NULL DEFAULT 'stopped'",
-            "admin_commands_json": "ALTER TABLE player_state ADD COLUMN admin_commands_json TEXT NOT NULL DEFAULT '[]'",
         }
         for column_name, ddl in missing_columns.items():
             if column_name not in columns:
@@ -76,8 +72,7 @@ def _ensure_player_state_schema() -> None:
                     current_item_started_at_epoch = COALESCE(current_item_started_at_epoch, 0.0),
                     current_item_expected_end_at_epoch = COALESCE(current_item_expected_end_at_epoch, 0.0),
                     current_sequence_id = COALESCE(current_sequence_id, 0),
-                    playout_mode = COALESCE(NULLIF(playout_mode, ''), 'stopped'),
-                    admin_commands_json = COALESCE(NULLIF(admin_commands_json, ''), '[]')
+                    playout_mode = COALESCE(NULLIF(playout_mode, ''), 'stopped')
                 """
             )
         )
@@ -162,30 +157,6 @@ async def log_requests(request, call_next):
     _log_event("request.end", method=request.method, path=request.url.path, status=response.status_code, elapsed_ms=elapsed_ms)
     return response
 
-
-
-def _daypart_greeting(config: AppConfig) -> str:
-    try:
-        zone = ZoneInfo(config.alerts.local_time_zone)
-    except Exception:  # noqa: BLE001
-        zone = ZoneInfo("UTC")
-    hour = datetime.now(zone).hour
-    if 5 <= hour < 12:
-        return "Good morning"
-    if 12 <= hour < 17:
-        return "Good afternoon"
-    if 17 <= hour < 22:
-        return "Good evening"
-    return "Late night vibes"
-
-
-def _local_time_announcement(config: AppConfig) -> str:
-    try:
-        zone = ZoneInfo(config.alerts.local_time_zone)
-    except Exception:  # noqa: BLE001
-        zone = ZoneInfo("UTC")
-    stamp = datetime.now(zone).strftime("%-I:%M%p").lower()
-    return f"It's {stamp}"
 
 
 @app.get("/health")
@@ -303,13 +274,6 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     )
 
 
-def _active_listener_count(db: Session, *, now_epoch: float | None = None, active_window_seconds: float = 30.0) -> int:
-    now_epoch = now_epoch or time.time()
-    min_last_seen = now_epoch - active_window_seconds
-    return db.query(ListenerSession).filter(ListenerSession.last_seen_at_epoch >= min_last_seen).count()
-
-
-
 def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
     global _admin_auth_disabled_logged
     expected = os.getenv("ADMIN_API_TOKEN")
@@ -324,43 +288,9 @@ def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=403, detail="Admin authentication failed")
 
 
-def _enqueue_admin_command(state: PlayerState, payload: PlayerAdminCommandRequest) -> dict:
-    commands = json.loads(state.admin_commands_json) if state.admin_commands_json else []
-    command = {
-        "command": payload.command,
-        "station_id": payload.station_id,
-        "queue_size": payload.queue_size,
-        "seed": payload.seed,
-        "metadata": payload.metadata or {},
-        "requested_at_epoch": time.time(),
-    }
-    commands.append(command)
-    state.admin_commands_json = json.dumps(commands)
-    return command
-
-
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
-
-
-@app.post("/listeners/heartbeat", response_model=ListenerHeartbeatResponse)
-def listeners_heartbeat(payload: ListenerHeartbeatRequest, db: Session = Depends(get_db)):
-    now_epoch = time.time()
-    listener = db.query(ListenerSession).filter(ListenerSession.session_id == payload.session_id).first()
-    if listener is None:
-        listener = ListenerSession(session_id=payload.session_id, last_seen_at_epoch=now_epoch)
-        db.add(listener)
-    else:
-        listener.last_seen_at_epoch = now_epoch
-    db.commit()
-    db.refresh(listener)
-
-    return ListenerHeartbeatResponse(
-        session_id=listener.session_id,
-        last_seen_at_epoch=listener.last_seen_at_epoch,
-        active_listener_count=_active_listener_count(db, now_epoch=now_epoch),
-    )
 
 
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
@@ -417,12 +347,6 @@ def player_current_media(db: Session = Depends(get_db)):
     raise HTTPException(status_code=409, detail="Current queue item has unsupported type")
 
 
-
-
-@app.get("/player/stream")
-def player_stream(db: Session = Depends(get_db)):
-    """Transitional single-audio endpoint for frontend playback."""
-    return player_current_media(db)
 
 
 @app.get("/broadcast/status", response_model=BroadcastStatusResponse)
@@ -557,22 +481,6 @@ def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_a
     db.refresh(state)
     _log_event("player.next.completed", new_index=state.queue_index, is_playing=state.is_playing)
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
-
-
-@app.post("/player/admin/command", response_model=PlayerActionResponse)
-def player_admin_command(payload: PlayerAdminCommandRequest, db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
-    state = _get_or_create_player_state(db)
-    if payload.command == "force_station_change" and payload.station_id is None:
-        raise HTTPException(status_code=400, detail="station_id is required for force_station_change")
-    if payload.station_id is not None:
-        station = db.query(Station).filter(Station.id == payload.station_id).first()
-        if not station:
-            raise HTTPException(status_code=404, detail=f"Station {payload.station_id} not found")
-    command = _enqueue_admin_command(state, payload)
-    _log_event("player.admin.command.queued", command=command.get("command"), station_id=command.get("station_id"))
-    db.commit()
-    db.refresh(state)
-    return PlayerActionResponse(state=_build_player_state_response(db, state), action=f"admin:{payload.command}")
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)
