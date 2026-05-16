@@ -211,7 +211,7 @@ class PlayoutWorker:
             state.playout_mode = "recovering"
             return
         current = queue[state.queue_index]
-        self._ensure_item_timing(db, current, state, config, now_epoch)
+        self._ensure_item_timing(db, queue, current, state, config, now_epoch)
         self._orchestrate_transition_window(db, state, config, queue, now_epoch)
         planned_end = float(current.get("planned_end_epoch", now_epoch + 1))
         if now_epoch < planned_end:
@@ -237,9 +237,9 @@ class PlayoutWorker:
         if not queue:
             return
         item = queue[state.queue_index]
-        self._ensure_item_timing(db, item, state, config, now_epoch)
+        self._ensure_item_timing(db, queue, item, state, config, now_epoch)
 
-    def _ensure_item_timing(self, db: Session, item: dict, state: PlayerState, config: AppConfig, now_epoch: float) -> None:
+    def _ensure_item_timing(self, db: Session, queue: list[dict], item: dict, state: PlayerState, config: AppConfig, now_epoch: float) -> None:
         if item.get("planned_start_epoch") is None:
             item["planned_start_epoch"] = now_epoch
             logger.info("playout.timing.start_assigned queue_index=%s type=%s planned_start_epoch=%s", state.queue_index, item.get("type"), round(float(item["planned_start_epoch"]), 3))
@@ -249,7 +249,7 @@ class PlayoutWorker:
             logger.info("playout.timing.end_assigned queue_index=%s type=%s duration_s=%s planned_end_epoch=%s", state.queue_index, item.get("type"), round(duration, 3), round(float(item["planned_end_epoch"]), 3))
         state.current_item_started_at_epoch = float(item.get("planned_start_epoch", 0.0))
         state.current_item_expected_end_at_epoch = float(item.get("planned_end_epoch", 0.0))
-        state.queue_json = json.dumps(self._queue(state))
+        state.queue_json = json.dumps(queue)
 
     def _item_duration_seconds(self, db: Session, item: dict, state: PlayerState, config: AppConfig) -> float:
         if item.get("type") == "track":

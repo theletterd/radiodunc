@@ -435,7 +435,11 @@ def broadcast_live_manifest(request: Request):
     return Response(
         content=content,
         media_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 
@@ -448,7 +452,16 @@ def broadcast_live_segment(segment_name: str, request: Request):
         raise HTTPException(status_code=404, detail="Segment not found")
     size = segment.stat().st_size
     _log_event("broadcast.segment.serve", segment=segment_name, path=str(segment), size_bytes=size, range=range_header)
-    return FileResponse(str(segment), media_type="video/mp2t", filename=segment.name)
+    return FileResponse(
+        str(segment),
+        media_type="video/mp2t",
+        filename=segment.name,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
