@@ -263,8 +263,15 @@ def player_current_media(db: Session = Depends(get_db)):
         except ValueError as exc:
             logger.warning("Invalid OpenAI TTS config during playback; falling back to tone", extra={"error": str(exc)})
             provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-        clip, _cached = get_or_create_dj_clip(db, script_text=script_text, voice=voice, provider=provider)
-        media_path = _safe_media_path(clip.audio_path, config)
+        is_ad_break = bool(item.get("is_ad_break"))
+        clip, audio_path, _cached = get_or_create_dj_clip(
+            db,
+            script_text=script_text,
+            voice=voice,
+            provider=provider,
+            persist=is_ad_break,
+        )
+        media_path = _safe_media_path(audio_path, config)
         return FileResponse(str(media_path), filename=media_path.name)
 
     raise HTTPException(status_code=409, detail="Current queue item has unsupported type")
@@ -323,6 +330,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
                 "type": "dj",
                 "label": f"{station.dj_name or 'DJ'} break",
                 "script_text": f"{time_check}{opener}{script.script_text}",
+                "is_ad_break": bool(payload_script.include_fake_ad),
             }
         )
         tracks_since_break = 0
@@ -433,5 +441,7 @@ def synthesize_station_dj_clip(station_id: int, payload: DJClipSynthesizeRequest
     except ValueError as exc:
         logger.warning("Invalid OpenAI TTS config during clip synthesis; falling back to tone", extra={"error": str(exc)})
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-    clip, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider)
-    return DJClipResponse(clip_id=clip.id, audio_path=clip.audio_path, voice=clip.voice, cached=cached)
+    clip, audio_path, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider, persist=True)
+    if clip is None:
+        raise HTTPException(status_code=500, detail="Failed to persist DJ clip")
+    return DJClipResponse(clip_id=clip.id, audio_path=audio_path, voice=clip.voice, cached=cached)
