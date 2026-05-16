@@ -48,6 +48,8 @@ from .playout_worker import PlayoutWorker
 
 Base.metadata.create_all(bind=engine)
 
+_last_manifest_stale_log_at_epoch: float = 0.0
+
 
 def _ensure_player_state_schema() -> None:
     with engine.begin() as conn:
@@ -435,7 +437,10 @@ def broadcast_live_manifest(request: Request):
         raise HTTPException(status_code=404, detail="Live stream is not running")
 
     manifest_age_seconds = time.time() - manifest.stat().st_mtime
-    if manifest_age_seconds > 8.0:
+    stale_manifest = manifest_age_seconds > 8.0
+    global _last_manifest_stale_log_at_epoch
+    if stale_manifest and (time.time() - _last_manifest_stale_log_at_epoch) >= 5.0:
+        _last_manifest_stale_log_at_epoch = time.time()
         _log_event(
             "broadcast.manifest.stale",
             path=str(manifest),
@@ -454,6 +459,7 @@ def broadcast_live_manifest(request: Request):
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
             "Pragma": "no-cache",
             "Expires": "0",
+            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         },
     )
 
@@ -475,6 +481,7 @@ def broadcast_live_segment(segment_name: str, request: Request):
             "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0",
             "Pragma": "no-cache",
             "Expires": "0",
+            "X-Live-Manifest-Stale": "1" if stale_manifest else "0",
         },
     )
 
