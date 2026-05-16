@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from .models import Station, Track
 
 
@@ -8,7 +10,8 @@ def _track_ref(track: Track | None) -> str:
         return "an unknown track"
     title = track.title or "Unknown Title"
     artist = track.artist or "Unknown Artist"
-    return f"{title} by {artist}"
+    filename = Path(track.file_path).name if track.file_path else "unknown file"
+    return f"{title} by {artist} (filename: {filename})"
 
 
 def render_song_transition_prompt(
