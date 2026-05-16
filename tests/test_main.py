@@ -15,6 +15,7 @@ from app.main import (
     generate_station_queue,
     get_config,
     healthcheck,
+    root,
     list_stations,
     list_tracks,
     scan_library_endpoint,
@@ -41,6 +42,12 @@ def _make_db_session():
 
 def test_healthcheck_returns_ok():
     assert healthcheck() == {"status": "ok"}
+
+
+def test_root_redirects_to_ui():
+    response = root()
+    assert response.status_code == 307
+    assert response.headers.get("location") == "/ui/"
 
 
 def test_ui_index_file_exists():

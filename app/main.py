@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -191,6 +191,11 @@ def _local_time_announcement(config: AppConfig) -> str:
 @app.get("/health")
 def healthcheck():
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/ui/")
 
 
 @app.get("/config", response_model=AppConfig)
@@ -448,7 +453,6 @@ def broadcast_live_manifest(request: Request):
             age_seconds=round(manifest_age_seconds, 3),
             range=range_header,
         )
-        raise HTTPException(status_code=503, detail="Live stream manifest is stale")
 
     manifest_bytes = manifest.read_bytes()
     size = len(manifest_bytes)
