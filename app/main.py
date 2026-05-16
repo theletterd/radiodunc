@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -429,9 +429,14 @@ def broadcast_live_manifest(request: Request):
     if not manifest.exists():
         _log_event("broadcast.manifest.miss", path=str(manifest), range=range_header)
         raise HTTPException(status_code=404, detail="Live stream is not running")
-    size = manifest.stat().st_size
+    content = manifest.read_text(encoding="utf-8")
+    size = len(content.encode("utf-8"))
     _log_event("broadcast.manifest.serve", path=str(manifest), size_bytes=size, range=range_header)
-    return FileResponse(str(manifest), media_type="application/vnd.apple.mpegurl", filename="live.m3u8")
+    return Response(
+        content=content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/broadcast/{segment_name}")
