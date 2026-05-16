@@ -325,7 +325,7 @@ def broadcast_status():
 
 @app.get("/broadcast/live.m3u8")
 def broadcast_live_manifest():
-    manifest = Path("generated_audio") / "hls" / "live.m3u8"
+    manifest = broadcast_engine.manifest_path()
     if not manifest.exists():
         raise HTTPException(status_code=404, detail="Live stream is not running")
     return FileResponse(str(manifest), media_type="application/vnd.apple.mpegurl", filename="live.m3u8")
@@ -333,7 +333,7 @@ def broadcast_live_manifest():
 
 @app.get("/broadcast/{segment_name}")
 def broadcast_live_segment(segment_name: str):
-    segment = Path("generated_audio") / "hls" / segment_name
+    segment = broadcast_engine.segment_path(segment_name)
     if not segment.exists() or segment.suffix != ".ts":
         raise HTTPException(status_code=404, detail="Segment not found")
     return FileResponse(str(segment), media_type="video/mp2t", filename=segment.name)
@@ -458,6 +458,7 @@ def player_next(db: Session = Depends(get_db)):
                         current_track_path=_safe_media_path(current_track.file_path, config),
                         dj_clip_path=_safe_media_path(audio_path, config),
                         next_track_path=_safe_media_path(next_track.file_path, config),
+                        current_stream_path=broadcast_engine.manifest_path(),
                     )
                 except Exception:
                     logger.exception("broadcast.transition.start.failed station_id=%s", station.id)
