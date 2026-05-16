@@ -73,6 +73,63 @@ class BroadcastEngine:
             self._started_at_epoch = time.time()
             self._last_error = None
 
+    def start_transition(self, *, station_id: int, current_track_path: Path, dj_clip_path: Path, next_track_path: Path, tail_seconds: int = 20, fade_seconds: int = 8) -> None:
+        """Start a live-style transition stream: tail of current track + DJ overlay + next track.
+
+        This keeps transition rendering inside the broadcast worker process (ffmpeg),
+        rather than prebuilding a file in request handling.
+        """
+        with self._lock:
+            self._stop_locked()
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            for item in self.output_dir.glob("*.ts"):
+                item.unlink(missing_ok=True)
+            (self.output_dir / "live.m3u8").unlink(missing_ok=True)
+
+            filter_complex = (
+                f"[0:a]afade=t=out:st=0:d={fade_seconds},volume=0.22[musicduck];"
+                "[1:a]adelay=700|700[dj];"
+                "[musicduck][dj]amix=inputs=2:duration=longest:dropout_transition=0[transition];"
+                "[transition][2:a]concat=n=2:v=0:a=1[out]"
+            )
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-sseof",
+                f"-{tail_seconds}",
+                "-i",
+                str(current_track_path),
+                "-i",
+                str(dj_clip_path),
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(next_track_path),
+                "-vn",
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[out]",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-f",
+                "hls",
+                "-hls_time",
+                "2",
+                "-hls_list_size",
+                "6",
+                "-hls_flags",
+                "delete_segments+append_list",
+                str(self.output_dir / "live.m3u8"),
+            ]
+            logger.info("broadcast.transition.start station_id=%s current=%s dj=%s next=%s", station_id, current_track_path, dj_clip_path, next_track_path)
+            self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            self._station_id = station_id
+            self._started_at_epoch = time.time()
+            self._last_error = None
+
     def _stop_locked(self) -> None:
         if self._proc is None:
             return
