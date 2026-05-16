@@ -10,6 +10,62 @@ let syncInFlight = null;
 let refreshStateInFlight = null;
 let refreshIntervalId = null;
 let lastStreamReloadAtMs = 0;
+let hlsController = null;
+
+function destroyHlsController() {
+  if (!hlsController) return;
+  try {
+    hlsController.destroy();
+  } catch (err) {
+    console.warn('[ui][audio] failed to destroy hls controller', { err });
+  }
+  hlsController = null;
+}
+
+function ensureLiveStreamLoaded(forceReload = false) {
+  const streamUrl = '/broadcast/live.m3u8';
+  const hasNativeHls = audioEl.canPlayType('application/vnd.apple.mpegurl') !== '';
+  const HlsCtor = window.Hls;
+  const canUseHlsJs = Boolean(HlsCtor && HlsCtor.isSupported && HlsCtor.isSupported());
+
+  if (hasNativeHls) {
+    if (!audioEl.src || forceReload) {
+      destroyHlsController();
+      audioEl.src = streamUrl;
+      audioEl.load();
+      console.log('[ui][audio] native HLS stream assigned', { streamUrl, forceReload });
+    }
+    return;
+  }
+
+  if (canUseHlsJs) {
+    if (!hlsController || forceReload) {
+      destroyHlsController();
+      hlsController = new HlsCtor({
+        lowLatencyMode: false,
+        backBufferLength: 90,
+        maxLiveSyncPlaybackRate: 1.0,
+      });
+      hlsController.attachMedia(audioEl);
+      hlsController.on(HlsCtor.Events.MEDIA_ATTACHED, () => {
+        hlsController.loadSource(streamUrl);
+      });
+      hlsController.on(HlsCtor.Events.ERROR, (_event, data) => {
+        console.warn('[ui][audio] hls.js error', data);
+      });
+      console.log('[ui][audio] hls.js stream attached', { streamUrl, forceReload });
+    }
+    return;
+  }
+
+  if (!audioEl.src || forceReload) {
+    audioEl.src = streamUrl;
+    audioEl.load();
+    console.warn('[ui][audio] fallback src assignment without native HLS or hls.js support');
+  }
+}
+
+
 let endedRecoveryInFlight = false;
 let lastRefreshTriggerAtMs = 0;
 const REFRESH_TRIGGER_COOLDOWN_MS = 1500;
@@ -174,6 +230,7 @@ async function syncAudioToState(options = {}) {
   if (!state?.is_playing) {
     console.log('[ui][audio] sync stopping playback because state is not playing');
     audioEl.pause();
+    destroyHlsController();
     audioEl.removeAttribute('src');
     audioEl.load();
     loadedQueuePosition = null;
@@ -190,7 +247,7 @@ async function syncAudioToState(options = {}) {
   const canReloadNow = (Date.now() - lastStreamReloadAtMs) >= STREAM_RELOAD_COOLDOWN_MS;
   if (shouldLoadInitialStream || (forceReload && canReloadNow)) {
     console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8', forceReload });
-    audioEl.src = '/broadcast/live.m3u8';
+    ensureLiveStreamLoaded(forceReload);
     lastStreamReloadAtMs = Date.now();
   }
   loadedQueuePosition = state.queue_position;
