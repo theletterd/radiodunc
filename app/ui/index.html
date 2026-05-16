@@ -85,6 +85,10 @@ const overlayEl = document.getElementById('overlayAudio');
 let loadedQueuePosition = null;
 let transitionInFlight = false;
 const FADE_DURATION_MS = 8000;
+const DJ_PREROLL_MIN_SECONDS = 5;
+const DJ_PREROLL_MAX_SECONDS = 10;
+let djPrerollQueuePosition = null;
+let djPrerollThresholdSeconds = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -193,6 +197,8 @@ async function syncAudioToState() {
   if (loadedQueuePosition !== state.queue_position) {
     audioEl.src = `/player/current-media?pos=${state.queue_position}&ts=${Date.now()}`;
     loadedQueuePosition = state.queue_position;
+    djPrerollQueuePosition = null;
+    djPrerollThresholdSeconds = null;
   }
   try {
     await audioEl.play();
@@ -326,7 +332,24 @@ document.getElementById('stopBtn').addEventListener('click', async () => {
   }
 });
 
+audioEl.addEventListener('timeupdate', async () => {
+  if (transitionInFlight) return;
+  if (!state?.is_playing || state?.now_playing_type !== 'track') return;
+  if (!Number.isFinite(audioEl.duration) || audioEl.duration <= 0) return;
+
+  if (djPrerollQueuePosition !== state.queue_position) {
+    djPrerollQueuePosition = state.queue_position;
+    djPrerollThresholdSeconds = DJ_PREROLL_MIN_SECONDS + Math.random() * (DJ_PREROLL_MAX_SECONDS - DJ_PREROLL_MIN_SECONDS);
+  }
+
+  const remaining = audioEl.duration - audioEl.currentTime;
+  if (remaining <= (djPrerollThresholdSeconds ?? DJ_PREROLL_MAX_SECONDS)) {
+    await runDjOverlapTransition();
+  }
+});
+
 audioEl.addEventListener('ended', async () => {
+  if (transitionInFlight) return;
   await runDjOverlapTransition();
 });
 
