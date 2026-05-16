@@ -189,7 +189,7 @@ async function syncAudioToState(options = {}) {
   const canReloadNow = (Date.now() - lastStreamReloadAtMs) >= STREAM_RELOAD_COOLDOWN_MS;
   if (shouldLoadInitialStream || (forceReload && canReloadNow)) {
     console.log('[ui][audio] loading backend live stream', { stream: '/broadcast/live.m3u8', forceReload });
-    audioEl.src = `/broadcast/live.m3u8?ts=${Date.now()}`;
+    audioEl.src = '/broadcast/live.m3u8';
     lastStreamReloadAtMs = Date.now();
   }
   loadedQueuePosition = state.queue_position;
@@ -358,28 +358,38 @@ function canAttemptStreamRecovery() {
 }
 
 audioEl.addEventListener('ended', async () => {
+  if (endedRecoveryInFlight) {
+    console.warn('[ui][audio] ended event ignored; recovery already in flight');
+    return;
+  }
+
   const now = Date.now();
   if (!state?.is_playing) return;
+  endedRecoveryInFlight = true;
 
   try {
-    await audioEl.play();
-    console.warn('[ui][audio] ended event recovered via play() without stream reload');
-    return;
-  } catch (err) {
-    console.warn('[ui][audio] ended event play() retry failed; considering stream reload', { err });
-  }
+    try {
+      await audioEl.play();
+      console.warn('[ui][audio] ended event recovered via play() without stream reload');
+      return;
+    } catch (err) {
+      console.warn('[ui][audio] ended event play() retry failed; considering stream reload', { err });
+    }
 
-  if ((now - lastEndedRecoveryAtMs) < STREAM_RELOAD_COOLDOWN_MS) {
-    console.warn('[ui][audio] ended event recovery suppressed by cooldown');
-    return;
-  }
-  if (!canAttemptStreamRecovery()) {
-    return;
-  }
+    if ((now - lastEndedRecoveryAtMs) < STREAM_RELOAD_COOLDOWN_MS) {
+      console.warn('[ui][audio] ended event recovery suppressed by cooldown');
+      return;
+    }
+    if (!canAttemptStreamRecovery()) {
+      return;
+    }
 
-  lastEndedRecoveryAtMs = now;
-  console.warn('[ui][audio] ended event received; attempting stream recovery');
-  await syncAudioToState({ forceReload: true });
+    lastEndedRecoveryAtMs = now;
+    console.warn('[ui][audio] ended event received; attempting stream recovery');
+    await syncAudioToState({ forceReload: true });
+  } finally {
+    endedRecoveryInFlight = false;
+  }
 });
 
 
