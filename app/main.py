@@ -295,64 +295,10 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Station {payload.station_id} not found")
 
     queue = build_station_queue(db=db, station_id=payload.station_id, config=config, size=payload.queue_size, seed=payload.seed)
-    sequence = []
-    breaks_since_weather = 0
-    breaks_since_news = 0
-    breaks_since_time_check = 0
-    tracks_since_break = 0
-    for idx, track in enumerate(queue["tracks"]):
-        sequence.append({"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"})
-        tracks_since_break += 1
-        if tracks_since_break < config.dj_break_every_tracks:
-            continue
-
-        breaks_since_weather += 1
-        breaks_since_news += 1
-        breaks_since_time_check += 1
-        payload_script = DJScriptGenerateRequest(
-            previous_track_id=track.id,
-            next_track_id=queue["tracks"][idx + 1].id if idx + 1 < len(queue["tracks"]) else None,
-            include_weather=breaks_since_weather >= config.weather_insert_every_breaks,
-            include_news=breaks_since_news >= config.news_insert_every_breaks,
-            include_fake_ad=(idx % 4 == 0),
-            max_sentences=3,
-        )
-        if payload_script.include_weather:
-            breaks_since_weather = 0
-        if payload_script.include_news:
-            breaks_since_news = 0
-        will_attempt_openai_script = config.radio_polish_enabled and config.script_provider == "openai"
-        _log_event(
-            "player.play.dj_script.requested",
-            station_id=station.id,
-            radio_polish_enabled=config.radio_polish_enabled,
-            script_provider=config.script_provider,
-            will_attempt_openai_script=will_attempt_openai_script,
-            include_weather=payload_script.include_weather,
-            include_news=payload_script.include_news,
-            include_fake_ad=payload_script.include_fake_ad,
-        )
-        script = generate_dj_script(
-            station=station,
-            payload=payload_script,
-            previous_track=track,
-            next_track=queue["tracks"][idx + 1] if idx + 1 < len(queue["tracks"]) else None,
-            config=config if config.radio_polish_enabled else None,
-        )
-        opener = f"{_daypart_greeting(config)} from {station.name}. " if config.daypart_programming_enabled else ""
-        time_check = ""
-        if config.time_announcement_enabled and breaks_since_time_check >= config.time_announcement_every_breaks:
-            time_check = f"{_local_time_announcement(config)} and you're listening to {station.name}. "
-            breaks_since_time_check = 0
-        sequence.append(
-            {
-                "type": "dj",
-                "label": f"{station.dj_name or 'DJ'} break",
-                "script_text": f"{time_check}{opener}{script.script_text}",
-                "is_ad_break": bool(payload_script.include_fake_ad),
-            }
-        )
-        tracks_since_break = 0
+    sequence = [
+        {"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"}
+        for track in queue["tracks"]
+    ]
 
     state.current_station_id = payload.station_id
     state.is_playing = True
@@ -370,7 +316,67 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
 def player_next(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.next.requested", current_index=state.queue_index)
-    _advance_player(state)
+    config = load_config()
+
+    if not state.queue_json:
+        if state.current_station_id is None:
+            raise HTTPException(status_code=400, detail="No station selected")
+        station = db.query(Station).filter(Station.id == state.current_station_id).first()
+        if not station:
+            raise HTTPException(status_code=404, detail=f"Station {state.current_station_id} not found")
+        queue = build_station_queue(db=db, station_id=station.id, config=config, size=10, seed=None)
+        sequence = [
+            {"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"}
+            for track in queue["tracks"]
+        ]
+        state.queue_json = json.dumps(sequence)
+        state.queue_index = 0
+        state.current_track_id = sequence[0].get("track_id") if sequence else None
+        state.is_playing = bool(sequence)
+        db.commit()
+        db.refresh(state)
+        return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
+
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    if not queue or not (0 <= state.queue_index < len(queue)):
+        state.is_playing = False
+        state.current_track_id = None
+    else:
+        current_item = queue[state.queue_index]
+        if current_item.get("type") == "track" and state.current_station_id is not None and state.queue_index + 1 < len(queue):
+            station = db.query(Station).filter(Station.id == state.current_station_id).first()
+            current_track = db.query(Track).filter(Track.id == current_item.get("track_id")).first()
+            next_item = queue[state.queue_index + 1]
+            next_track = db.query(Track).filter(Track.id == next_item.get("track_id")).first() if next_item.get("type") == "track" else None
+            payload_script = DJScriptGenerateRequest(
+                previous_track_id=current_track.id if current_track else None,
+                next_track_id=next_track.id if next_track else None,
+                include_weather=False,
+                include_news=False,
+                include_fake_ad=False,
+                max_sentences=3,
+            )
+            script = generate_dj_script(
+                station=station,
+                payload=payload_script,
+                previous_track=current_track,
+                next_track=next_track,
+                config=config if config.radio_polish_enabled else None,
+            )
+            opener = f"{_daypart_greeting(config)} from {station.name}. " if config.daypart_programming_enabled else ""
+            time_check = f"{_local_time_announcement(config)} and you're listening to {station.name}. " if config.time_announcement_enabled else ""
+            queue.insert(
+                state.queue_index + 1,
+                {
+                    "type": "dj",
+                    "label": f"{station.dj_name or 'DJ'} break",
+                    "script_text": f"{time_check}{opener}{script.script_text}",
+                    "is_ad_break": False,
+                },
+            )
+            state.queue_json = json.dumps(queue)
+        _advance_player(state)
+
     db.commit()
     db.refresh(state)
     _log_event("player.next.completed", new_index=state.queue_index, is_playing=state.is_playing)

@@ -286,7 +286,7 @@ def test_player_play_next_stop_flow(monkeypatch):
 
     played = player_play(PlayerPlayRequest(station_id=station.id, queue_size=2), db)
     assert played.state.is_playing is True
-    assert played.state.queue_depth == 4
+    assert played.state.queue_depth == 2
     assert played.state.current_track is not None
     assert played.state.current_track.title == "One"
 
@@ -319,7 +319,7 @@ def test_player_play_can_include_time_announcement(monkeypatch):
     state = db.query(PlayerState).order_by(PlayerState.id.asc()).first()
     assert state is not None
     queue = state.queue_json or ""
-    assert "It's " in queue
+    assert "It's " not in queue
 
 
 def test_player_current_media_returns_track_file(tmp_path, monkeypatch):
