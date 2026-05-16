@@ -125,6 +125,14 @@ class DJClipResponse(BaseModel):
     cached: bool
 
 
+class PlayerNextResponse(BaseModel):
+    current_track_url: str
+    dj_clip_url: str
+    next_track_url: str | None = None
+    next_track_metadata: TrackOut | None = None
+    dj_script: str
+
+
 class BroadcastStatusResponse(BaseModel):
     running: bool
     station_id: int | None = None

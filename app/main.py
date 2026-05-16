@@ -37,6 +37,7 @@ from .schemas import (
     StationOut,
     TrackOut,
     BroadcastStatusResponse,
+    PlayerNextResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
@@ -347,6 +348,24 @@ def player_current_media(db: Session = Depends(get_db)):
     raise HTTPException(status_code=409, detail="Current queue item has unsupported type")
 
 
+@app.get("/media/track/{track_id}")
+def media_track(track_id: int, db: Session = Depends(get_db)):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if track is None:
+        raise HTTPException(status_code=404, detail="Track not found")
+    config = load_config()
+    media_path = _safe_media_path(track.file_path, config)
+    return FileResponse(str(media_path), filename=(track.title or "track") + media_path.suffix)
+
+
+@app.get("/media/dj-clip/{clip_hash}")
+def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
+    clip = db.query(DJClip).filter(DJClip.script_hash == clip_hash).first()
+    if clip is None:
+        raise HTTPException(status_code=404, detail="DJ clip not found")
+    config = load_config()
+    media_path = _safe_media_path(clip.audio_path, config)
+    return FileResponse(str(media_path), media_type="audio/wav", filename=media_path.name)
 
 
 @app.get("/broadcast/status", response_model=BroadcastStatusResponse)
@@ -460,27 +479,102 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admi
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
 
-@app.post("/player/next", response_model=PlayerActionResponse)
+@app.post("/player/next", response_model=PlayerNextResponse)
 def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
     state = _get_or_create_player_state(db)
     _log_event("player.next.requested", current_index=state.queue_index)
+
     if not state.queue_json:
         raise HTTPException(status_code=400, detail="No queue available")
 
-    queue = json.loads(state.queue_json) if state.queue_json else []
-    if not queue or not (0 <= state.queue_index < len(queue)):
-        state.is_playing = False
-        state.current_track_id = None
-        state.playout_mode = "recovering"
-    else:
-        queue[state.queue_index]["planned_end_epoch"] = time.time()
-        state.queue_json = json.dumps(queue)
-        state.playout_mode = "live"
+    queue = json.loads(state.queue_json)
+    if not queue:
+        raise HTTPException(status_code=400, detail="Queue is empty")
 
+    config = load_config()
+    current_idx = state.queue_index
+
+    # Track being left behind — back-announced in the DJ script
+    previous_track: Track | None = None
+    if 0 <= current_idx < len(queue):
+        item = queue[current_idx]
+        if item.get("type") == "track" and item.get("track_id") is not None:
+            previous_track = db.query(Track).filter(Track.id == item["track_id"]).first()
+
+    # Advance to the next queue slot
+    next_idx = current_idx + 1
+    if next_idx >= len(queue):
+        raise HTTPException(status_code=400, detail="Already at end of queue")
+
+    next_item = queue[next_idx]
+    if next_item.get("type") != "track" or next_item.get("track_id") is None:
+        raise HTTPException(status_code=400, detail="Next queue item is not a track")
+
+    next_track = db.query(Track).filter(Track.id == next_item["track_id"]).first()
+    if next_track is None:
+        raise HTTPException(status_code=404, detail="Next track not found in library")
+
+    # Require an active station for DJ script generation
+    if state.current_station_id is None:
+        raise HTTPException(status_code=400, detail="No active station")
+    station = db.query(Station).filter(Station.id == state.current_station_id).first()
+    if station is None:
+        raise HTTPException(status_code=400, detail="Active station not found")
+
+    # Generate transition script: back-announce previous, intro next
+    script_response = generate_dj_script(
+        station,
+        DJScriptGenerateRequest(max_sentences=3),
+        previous_track,
+        next_track,
+        config=config,
+    )
+
+    # Synthesize (or return cached) DJ clip
+    try:
+        provider = build_tts_provider(config)
+    except ValueError:
+        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+
+    station_config = json.loads(station.config_json) if station.config_json else {}
+    voice = station_config.get("voice_hint") or None
+    clip, _audio_path, dj_cached = get_or_create_dj_clip(
+        db,
+        script_text=script_response.script_text,
+        voice=voice,
+        provider=provider,
+        persist=True,
+    )
+    if clip is None:
+        raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
+
+    # Advance queue state
+    state.queue_index = next_idx
+    state.current_track_id = next_track.id
+    state.playout_mode = "live"
     db.commit()
-    db.refresh(state)
-    _log_event("player.next.completed", new_index=state.queue_index, is_playing=state.is_playing)
-    return PlayerActionResponse(state=_build_player_state_response(db, state), action="next")
+
+    # Look ahead one more slot for prefetch
+    look_ahead_track: Track | None = None
+    look_ahead_idx = next_idx + 1
+    if look_ahead_idx < len(queue):
+        la_item = queue[look_ahead_idx]
+        if la_item.get("type") == "track" and la_item.get("track_id") is not None:
+            look_ahead_track = db.query(Track).filter(Track.id == la_item["track_id"]).first()
+
+    _log_event(
+        "player.next.completed",
+        new_index=next_idx,
+        track_id=next_track.id,
+        dj_cached=dj_cached,
+    )
+    return PlayerNextResponse(
+        current_track_url=f"/media/track/{next_track.id}",
+        dj_clip_url=f"/media/dj-clip/{clip.script_hash}",
+        next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
+        next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
+        dj_script=script_response.script_text,
+    )
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)

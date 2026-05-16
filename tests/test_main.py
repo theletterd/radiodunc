@@ -27,9 +27,11 @@ from app.main import (
     player_next,
     player_stop,
     player_current_media,
+    media_track,
+    media_dj_clip,
 )
 from app.models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
-from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, DJScriptResponse, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -274,7 +276,37 @@ def test_synthesize_station_dj_clip_creates_and_caches():
     assert db.query(DJClip).count() == 1
 
 
-def test_player_play_next_stop_flow(monkeypatch):
+def _fake_dj_next(db, station, track1, track2, tmp_path, monkeypatch):
+    """Helper: wire up DJ script + clip mocks needed by player_next."""
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF")
+    clip = DJClip(
+        script_text="Welcome back.",
+        audio_path=str(wav),
+        voice="default",
+        script_hash="testhash001",
+    )
+    db.add(clip)
+    db.commit()
+    db.refresh(clip)
+    monkeypatch.setattr(
+        "app.main.generate_dj_script",
+        lambda *_a, **_k: DJScriptResponse(
+            station_id=station.id,
+            station_name=station.name,
+            dj_name=station.dj_name or "DJ",
+            sentences=["Welcome back."],
+            script_text="Welcome back.",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.main.get_or_create_dj_clip",
+        lambda *_a, **_k: (clip, str(wav), False),
+    )
+    return clip
+
+
+def test_player_play_next_stop_flow(monkeypatch, tmp_path):
     db = _make_db_session()
     station = Station(name="Flow FM", dj_name="DJ Flow")
     track1 = Track(file_path="/m/1.mp3", title="One", artist="A")
@@ -286,10 +318,8 @@ def test_player_play_next_stop_flow(monkeypatch):
     db.refresh(track2)
 
     monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
-    monkeypatch.setattr(
-        "app.main.build_station_queue",
-        lambda **_kwargs: {"tracks": [track1, track2]},
-    )
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: {"tracks": [track1, track2]})
+    _fake_dj_next(db, station, track1, track2, tmp_path, monkeypatch)
 
     played = player_play(PlayerPlayRequest(station_id=station.id, queue_size=2), db)
     assert played.state.is_playing is True
@@ -298,7 +328,8 @@ def test_player_play_next_stop_flow(monkeypatch):
     assert played.state.current_track.title == "One"
 
     nexted = player_next(db)
-    assert nexted.state.is_playing is True
+    assert nexted.current_track_url == f"/media/track/{track2.id}"
+    assert nexted.dj_clip_url == "/media/dj-clip/testhash001"
 
     stopped = player_stop(db)
     assert stopped.state.is_playing is False
@@ -374,3 +405,114 @@ def test_player_current_media_rejects_path_outside_allowed_root(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         player_current_media(db)
     assert exc.value.status_code == 403
+
+
+def test_player_next_returns_urls_and_advances_queue(monkeypatch, tmp_path):
+    db = _make_db_session()
+    station = Station(name="Next FM", dj_name="DJ Next")
+    track1 = Track(file_path="/m/a.mp3", title="Alpha", artist="A", duration_seconds=210.0)
+    track2 = Track(file_path="/m/b.mp3", title="Beta", artist="B", duration_seconds=180.0)
+    track3 = Track(file_path="/m/c.mp3", title="Gamma", artist="C", duration_seconds=200.0)
+    db.add_all([station, track1, track2, track3])
+    db.commit()
+    db.refresh(station)
+    db.refresh(track1)
+    db.refresh(track2)
+    db.refresh(track3)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: {"tracks": [track1, track2, track3]})
+    _fake_dj_next(db, station, track1, track2, tmp_path, monkeypatch)
+
+    player_play(PlayerPlayRequest(station_id=station.id, queue_size=3), db)
+    result = player_next(db)
+
+    assert result.current_track_url == f"/media/track/{track2.id}"
+    assert result.dj_clip_url == "/media/dj-clip/testhash001"
+    assert result.next_track_url == f"/media/track/{track3.id}"
+    assert result.next_track_metadata is not None
+    assert result.next_track_metadata.title == "Gamma"
+    assert result.dj_script == "Welcome back."
+
+    state = db.query(PlayerState).first()
+    assert state.queue_index == 1
+    assert state.current_track_id == track2.id
+
+
+def test_player_next_at_end_of_queue_raises_400(monkeypatch, tmp_path):
+    db = _make_db_session()
+    station = Station(name="End FM", dj_name="DJ End")
+    track = Track(file_path="/m/only.mp3", title="Only", artist="A")
+    db.add_all([station, track])
+    db.commit()
+    db.refresh(station)
+    db.refresh(track)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_kwargs: {"tracks": [track]})
+    _fake_dj_next(db, station, track, None, tmp_path, monkeypatch)
+
+    player_play(PlayerPlayRequest(station_id=station.id, queue_size=1), db)
+
+    with pytest.raises(HTTPException) as exc:
+        player_next(db)
+    assert exc.value.status_code == 400
+
+
+def test_player_next_no_queue_raises_400():
+    db = _make_db_session()
+    state = PlayerState(is_playing=False, queue_json=None)
+    db.add(state)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        player_next(db)
+    assert exc.value.status_code == 400
+
+
+def test_media_track_serves_file(monkeypatch, tmp_path):
+    db = _make_db_session()
+    audio = tmp_path / "song.mp3"
+    audio.write_bytes(b"fake-mp3")
+    track = Track(file_path=str(audio), title="My Song", artist="X")
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(music_folder=str(tmp_path)))
+
+    response = media_track(track.id, db)
+    assert response.path == str(audio)
+
+
+def test_media_track_not_found_raises_404():
+    db = _make_db_session()
+    with pytest.raises(HTTPException) as exc:
+        media_track(9999, db)
+    assert exc.value.status_code == 404
+
+
+def test_media_dj_clip_serves_file(monkeypatch, tmp_path):
+    db = _make_db_session()
+    wav = tmp_path / "clip.wav"
+    wav.write_bytes(b"RIFF")
+    clip = DJClip(
+        script_text="Hello world",
+        audio_path=str(wav),
+        voice="default",
+        script_hash="deadbeef1234",
+    )
+    db.add(clip)
+    db.commit()
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(music_folder=str(tmp_path)))
+
+    response = media_dj_clip("deadbeef1234", db)
+    assert response.path == str(wav)
+
+
+def test_media_dj_clip_not_found_raises_404():
+    db = _make_db_session()
+    with pytest.raises(HTTPException) as exc:
+        media_dj_clip("nosuchhash", db)
+    assert exc.value.status_code == 404
