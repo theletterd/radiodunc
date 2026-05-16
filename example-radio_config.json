@@ -38,6 +38,7 @@
     }
   ],
   "playlist_artist_repeat_window": 3,
+  "radio_polish_enabled": true,
   "tts_provider": "openai",
   "script_provider": "openai",
   "openai_text_model": "gpt-4o-mini",
