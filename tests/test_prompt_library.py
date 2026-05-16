@@ -20,6 +20,8 @@ def test_prompt_library_placeholders_present():
     time_check = render_time_check_prompt(station, "8:53am")
 
     assert "[TRANSITION_PROMPT_PLACEHOLDER]" in transition
+    assert "filename: one.mp3" in transition
+    assert "filename: two.mp3" in transition
     assert "[AD_BREAK_PROMPT_PLACEHOLDER]" in ad
     assert "[WEATHER_PROMPT_PLACEHOLDER]" in weather
     assert "[NEWS_PROMPT_PLACEHOLDER]" in news
