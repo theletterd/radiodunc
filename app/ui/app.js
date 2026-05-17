@@ -296,8 +296,9 @@ async function triggerTransition(reason) {
       console.log(`[audio] DJ clip: start=${djStart.toFixed(3)} dur=${djBuf.duration.toFixed(2)}`);
     }
 
+    let adStart = djEnd; // set inside the block below; used for mode scheduling
     if (adBuf) {
-      const adStart = djEnd + 0.1; // tiny gap between DJ and ad
+      adStart = djEnd + 0.1; // tiny gap between DJ and ad
       const adSrc  = ctx.createBufferSource();
       adSrc.buffer = adBuf;
       const adGain = ctx.createGain();
