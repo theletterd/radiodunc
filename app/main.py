@@ -80,7 +80,9 @@ _migrate_drop_legacy_schema()
 
 logger = logging.getLogger(__name__)
 
-_RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
+# Capture reserved fields both before and after a format call so that
+# attributes set as side-effects of format() (e.g. `message`) are excluded.
+_RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys()) | {"message"}
 
 
 class ContextFormatter(logging.Formatter):

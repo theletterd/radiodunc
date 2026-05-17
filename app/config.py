@@ -55,7 +55,25 @@ class AdBreakPreferences(BaseModel):
 
 
 class AlertConfig(BaseModel):
-    weather_location: str = "Seattle, WA"
+    weather_location: str = Field(
+        default="Seattle, WA",
+        description=(
+            "Display name used in DJ weather mentions. If weather_latitude/weather_longitude "
+            "are set, geocoding is skipped and this string is used purely as the spoken name."
+        ),
+    )
+    weather_latitude: float | None = Field(
+        default=None,
+        description=(
+            "Optional. Set this (with weather_longitude) to bypass geocoding entirely. "
+            "Useful for locations the Open-Meteo geocoder doesn't recognise (small cities, "
+            "suburbs, etc.). Find your coords at latlong.net or maps.google.com."
+        ),
+    )
+    weather_longitude: float | None = Field(
+        default=None,
+        description="Optional. Required when weather_latitude is set.",
+    )
     local_time_zone: str = "America/Los_Angeles"
     weather: WeatherPreferences = Field(default_factory=WeatherPreferences)
     news: NewsPreferences = Field(default_factory=NewsPreferences)

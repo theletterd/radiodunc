@@ -48,6 +48,7 @@ Queue items injected via `POST /player/queue/inject` carry `"requested": True`. 
 - `ads.voice` (single string) was replaced by `ads.voices` (list of `{voice, voice_instructions}`)
 - `ads.pool_size` controls when to stop generating new ad clips (default 100)
 - Each `dj_roster` entry and the base station can have `voice` and `voice_instructions` independently
+- `alerts.weather_latitude`/`weather_longitude` bypass Open-Meteo geocoding when set — useful for small cities not in their database. `weather_location` is still used as the spoken display name.
 
 The example config is `example-radio_config.json`. The local config is `radio_config.json` (gitignored).
 

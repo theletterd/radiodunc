@@ -123,7 +123,7 @@ The first roster entry whose `days`/`start_hour`/`end_hour` matches the current 
 }
 ```
 
-- **weather** — pulls live conditions from Open-Meteo, reported in Celsius
+- **weather** — pulls live conditions from Open-Meteo, reported in Celsius. Set `weather_latitude` and `weather_longitude` to bypass geocoding (useful for small cities or suburbs the Open-Meteo geocoder doesn't recognise — find coords at latlong.net). `weather_location` is still used as the spoken name in DJ lines.
 - **news** — fetches a random headline from any RSS feed
 - **ads** — generates fake ad-break scripts via OpenAI; one voice is picked at random per break. Once `pool_size` clips are cached, new breaks are drawn from the pool instead of generating fresh ones
 

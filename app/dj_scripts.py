@@ -107,7 +107,11 @@ def _build_prompt(
     weather_block = ""
     if payload.include_weather:
         location = config.alerts.weather_location
-        live_weather = fetch_weather_summary(location)
+        live_weather = fetch_weather_summary(
+            location,
+            latitude=config.alerts.weather_latitude,
+            longitude=config.alerts.weather_longitude,
+        )
         if live_weather:
             weather_block = f"Weather context — use as facts: {live_weather}\n"
         else:
@@ -293,7 +297,11 @@ def generate_dj_script(
 
     if payload.include_weather:
         location = config.alerts.weather_location if config else "your area"
-        live_weather = fetch_weather_summary(location)
+        live_weather = fetch_weather_summary(
+            location,
+            latitude=config.alerts.weather_latitude if config else None,
+            longitude=config.alerts.weather_longitude if config else None,
+        )
         if live_weather:
             sentence_pool.append(live_weather)
         else:

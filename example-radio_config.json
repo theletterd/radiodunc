@@ -2,6 +2,8 @@
   "music_folder": "~/Music",
   "alerts": {
     "weather_location": "Seattle, WA",
+    "weather_latitude": null,
+    "weather_longitude": null,
     "local_time_zone": "America/Los_Angeles",
     "weather": {
       "enabled": true,

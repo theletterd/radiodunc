@@ -40,47 +40,53 @@ _WEATHER_CODE_LABELS = {
 }
 
 
-def fetch_weather_summary(location: str) -> str | None:
+def fetch_weather_summary(
+    location: str,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> str | None:
     logger.info("Starting weather lookup for requested location=%s", location)
-    geocode_url = (
-        "https://geocoding-api.open-meteo.com/v1/search?"
-        f"name={quote_plus(location)}&count=1&language=en&format=json"
-    )
-    logger.debug("Weather geocoding URL built for location=%s: %s", location, geocode_url)
-    try:
-        with urllib.request.urlopen(geocode_url, timeout=15) as response:  # noqa: S310
-            geocode_data = json.loads(response.read().decode("utf-8"))
-            logger.debug("Weather geocoding response received for location=%s", location)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        logger.warning("Weather geocoding failed for location=%s", location)
-        return None
 
-    results = geocode_data.get("results")
-    if not isinstance(results, list) or not results:
-        logger.warning("Weather geocoding returned no results for location=%s", location)
-        return None
-    logger.info("Weather geocoding returned %d result(s) for location=%s", len(results), location)
-    top_result = results[0]
-    if not isinstance(top_result, dict):
-        logger.warning("Weather geocoding top result was not a dict for location=%s", location)
-        return None
-    matched_name = top_result.get("name")
-    matched_admin = top_result.get("admin1")
-    matched_country = top_result.get("country")
-    latitude = top_result.get("latitude")
-    longitude = top_result.get("longitude")
-    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
-        logger.warning("Weather geocoding missing coordinates for location=%s", location)
-        return None
-    logger.info(
-        "Weather geocoding resolved location=%s to match=%s, admin=%s, country=%s at lat=%s lon=%s",
-        location,
-        matched_name,
-        matched_admin,
-        matched_country,
-        latitude,
-        longitude,
-    )
+    if latitude is not None and longitude is not None:
+        logger.info(
+            "Using pinned coordinates for location=%s lat=%s lon=%s (geocoding skipped)",
+            location, latitude, longitude,
+        )
+    else:
+        geocode_url = (
+            "https://geocoding-api.open-meteo.com/v1/search?"
+            f"name={quote_plus(location)}&count=1&language=en&format=json"
+        )
+        logger.debug("Weather geocoding URL built for location=%s: %s", location, geocode_url)
+        try:
+            with urllib.request.urlopen(geocode_url, timeout=15) as response:  # noqa: S310
+                geocode_data = json.loads(response.read().decode("utf-8"))
+                logger.debug("Weather geocoding response received for location=%s", location)
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+            logger.warning("Weather geocoding failed for location=%s", location)
+            return None
+
+        results = geocode_data.get("results")
+        if not isinstance(results, list) or not results:
+            logger.warning("Weather geocoding returned no results for location=%s", location)
+            return None
+        logger.info("Weather geocoding returned %d result(s) for location=%s", len(results), location)
+        top_result = results[0]
+        if not isinstance(top_result, dict):
+            logger.warning("Weather geocoding top result was not a dict for location=%s", location)
+            return None
+        matched_name = top_result.get("name")
+        matched_admin = top_result.get("admin1")
+        matched_country = top_result.get("country")
+        latitude = top_result.get("latitude")
+        longitude = top_result.get("longitude")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            logger.warning("Weather geocoding missing coordinates for location=%s", location)
+            return None
+        logger.info(
+            "Weather geocoding resolved location=%s to match=%s, admin=%s, country=%s at lat=%s lon=%s",
+            location, matched_name, matched_admin, matched_country, latitude, longitude,
+        )
 
     weather_url = (
         "https://api.open-meteo.com/v1/forecast?"
