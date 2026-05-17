@@ -28,7 +28,60 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 // ── Transition guard ─────────────────────────────────────────────────────────
 let transitioning    = false;
 let autoTriggerTimer = null;
-let adBadgeTimer     = null;  // setTimeout ID for hiding the ad badge
+
+// ── On-air mode ───────────────────────────────────────────────────────────────
+// Tracks what's currently playing so renderPlayer() never stomps a badge.
+// Values: 'track' | 'dj' | 'ad'
+let onAirMode   = 'track';
+let _modeTimers = [];   // pending setTimeout IDs for mode switches
+let _labelAnim  = null; // in-progress label animation (KeyframeEffect)
+
+function clearModeTimers() {
+  _modeTimers.forEach(clearTimeout);
+  _modeTimers = [];
+}
+
+function scheduleMode(mode, delayMs, label = null) {
+  const id = setTimeout(() => setOnAirMode(mode, label), delayMs);
+  _modeTimers.push(id);
+}
+
+function setOnAirMode(mode, label = null) {
+  onAirMode = mode;
+  const el = document.getElementById('nowPlaying');
+  el.dataset.mode = mode;
+  let text;
+  if (mode === 'ad')  text = '📻 Ad break';
+  else if (mode === 'dj') text = '🎙️ On air';
+  else text = label || serverState?.now_playing_label || el.textContent || '-';
+  animateLabel(el, text);
+}
+
+async function animateLabel(el, newText) {
+  if (el.textContent === newText) return;
+
+  // Cancel any in-flight animation before starting a new one
+  if (_labelAnim) { try { _labelAnim.cancel(); } catch (_) {} }
+
+  const out = el.animate(
+    [{ transform: 'translateY(0)', opacity: 1 },
+     { transform: 'translateY(-110%)', opacity: 0 }],
+    { duration: 200, easing: 'ease-in' }
+  );
+  _labelAnim = out;
+  try { await out.finished; } catch (_) { return; }
+  if (_labelAnim !== out) return; // superseded by a newer call
+
+  el.textContent = newText;
+
+  const inn = el.animate(
+    [{ transform: 'translateY(110%)', opacity: 0 },
+     { transform: 'translateY(0)',    opacity: 1 }],
+    { duration: 200, easing: 'ease-out' }
+  );
+  _labelAnim = inn;
+  inn.finished.then(() => { if (_labelAnim === inn) _labelAnim = null; }).catch(() => {});
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function savedVolume()    { return Number(localStorage.getItem('volume') ?? serverState?.volume ?? 80); }
@@ -152,6 +205,7 @@ async function triggerTransition(reason) {
   }
   transitioning = true;
   clearAutoTrigger();
+  clearModeTimers();
   console.log('[audio] transition start:', reason);
 
   try {
@@ -187,10 +241,7 @@ async function triggerTransition(reason) {
       return;
     }
 
-    // Optimistically update the now-playing label so the UI doesn't lag the audio.
-    if (next.current_track_label) {
-      document.getElementById('nowPlaying').textContent = next.current_track_label;
-    }
+    // Update filename immediately (no animation needed here).
     const fname = next.current_track_metadata?.file_path?.split('/').pop() || '';
     document.getElementById('nowPlayingFile').textContent = fname;
 
@@ -261,18 +312,23 @@ async function triggerTransition(reason) {
       adSrc.start(adStart);
       djEnd = adStart + adBuf.duration; // next track waits until after the ad
       console.log(`[audio] AD clip: start=${adStart.toFixed(3)} dur=${adBuf.duration.toFixed(2)}`);
+    }
 
-      // Swap label to an Ad badge for the ad's duration, then restore.
-      // Cancel any stale badge timer from a previous transition first.
-      clearTimeout(adBadgeTimer);
-      const trackLabel = next.current_track_label || document.getElementById('nowPlaying').textContent;
-      const adShowMs   = Math.max(0, (adStart - ctx.currentTime) * 1000);
-      const adHideMs   = Math.max(0, (djEnd   - ctx.currentTime) * 1000);
-      setTimeout(() => { document.getElementById('nowPlaying').textContent = '📻 Ad break'; }, adShowMs);
-      adBadgeTimer = setTimeout(() => {
-        document.getElementById('nowPlaying').textContent = trackLabel;
-        adBadgeTimer = null;
-      }, adHideMs);
+    // 4b. Schedule on-air mode indicators.
+    //     djStart is often already in the past (we awaited decode above), so
+    //     Math.max(0, ...) makes those fire immediately.
+    const nowT = ctx.currentTime;
+    if (djBuf) {
+      scheduleMode('dj',   Math.max(0, (djStart - nowT) * 1000));
+      if (adBuf) {
+        scheduleMode('ad',    Math.max(0, (adStart - nowT) * 1000));
+        scheduleMode('track', Math.max(0, (adStart + adBuf.duration - nowT) * 1000), next.current_track_label);
+      } else {
+        scheduleMode('track', Math.max(0, (djStart + djBuf.duration - nowT) * 1000), next.current_track_label);
+      }
+    } else {
+      // No DJ clip: show track label immediately
+      setOnAirMode('track', next.current_track_label);
     }
 
     // 5. Schedule next track gain ramp and el.play().
@@ -359,6 +415,8 @@ async function startPlayback() {
 // ── Stop playback ─────────────────────────────────────────────────────────────
 async function stopPlayback() {
   clearAutoTrigger();
+  clearModeTimers();
+  onAirMode = 'track';
   transitioning = false;
   const t = ctx?.currentTime ?? 0;
   for (const s of Object.values(slots)) {
@@ -385,8 +443,14 @@ function renderPlayer() {
   document.getElementById('volume').value = savedVolume();
   if (masterGain) masterGain.gain.value = musicVolume();
 
-  const label = serverState?.now_playing_label || '-';
-  document.getElementById('nowPlaying').textContent = label;
+  // Only push the server label when no badge is active; the mode timers own the
+  // nowPlaying element while a DJ clip or ad is playing.
+  if (onAirMode === 'track') {
+    const label = serverState?.now_playing_label || '-';
+    const el = document.getElementById('nowPlaying');
+    el.dataset.mode = 'track';
+    if (el.textContent !== label) animateLabel(el, label);
+  }
 
   const track = serverState?.current_track;
   const filename = track?.file_path ? track.file_path.split('/').pop() : '';

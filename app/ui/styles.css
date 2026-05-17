@@ -156,12 +156,28 @@ h1#stationName {
   50%       { box-shadow: 0 0 32px rgba(244,114,182,0.28), inset 0 0 0 1px rgba(244,114,182,0.14); }
 }
 
+/* Clips the roll-up animation so text doesn't slide outside the card */
+.now-playing-clip {
+  overflow: hidden;
+  position: relative;
+  min-height: 1.8em;
+  margin-bottom: 6px;
+}
+
 #nowPlaying {
   font-size: 1.2rem;
   font-weight: 500;
-  margin: 0 0 6px;
+  margin: 0;
   color: var(--text);
-  transition: color 0.3s;
+  transition: color 0.25s;
+}
+
+#nowPlaying[data-mode="dj"] {
+  color: var(--pink);
+}
+
+#nowPlaying[data-mode="ad"] {
+  color: #fb923c;
 }
 
 #playerFlags {
