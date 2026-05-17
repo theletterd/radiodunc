@@ -238,7 +238,7 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Queue is empty")
 
     label = _track_label(track)
-    item = {"type": "track", "track_id": track.id, "label": label}
+    item = {"type": "track", "track_id": track.id, "label": label, "requested": True}
     insert_at = state.queue_index + 1
     queue.insert(insert_at, item)
     state.queue_json = json.dumps(queue)
@@ -539,14 +539,19 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if clip is None:
         include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
         include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+        ad_break_follows = config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks)
+        effective_reason = reason
+        if next_item.get("requested") and reason != "skip":
+            effective_reason = "request"
 
         script_response = generate_dj_script(
             station,
             DJScriptGenerateRequest(
                 max_sentences=3,
-                reason=reason,
+                reason=effective_reason,
                 include_weather=include_weather,
                 include_news=include_news,
+                ad_break_follows=ad_break_follows,
             ),
             previous_track,
             next_track,

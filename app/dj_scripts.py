@@ -119,11 +119,22 @@ def _build_prompt(
         else:
             news_block = "News context: include a one-sentence top-of-hour news tease.\n"
     ad_block = "Ad context: include a brief sponsor-style ad break line. Include the fact that the next song plays after the break.\n" if payload.include_fake_ad else ""
+    if payload.ad_break_follows:
+        ad_block = (
+            "Ad break context: a short ad break follows immediately after your transition. "
+            "Work in a natural tease — something like 'coming up after the break, [next track]' — "
+            "keep it brief and smooth. Don't dwell on it.\n"
+        )
     reason_block = ""
     if payload.reason == "skip":
         reason_block = (
             "Reason: the audience didn't like the previous track. "
             "Acknowledge that lightly and tee up the next one with extra enthusiasm.\n"
+        )
+    elif payload.reason == "request":
+        reason_block = (
+            "Reason: this next track is an audience request — someone called in for it. "
+            "Give it a warm intro, like you're honouring their pick.\n"
         )
 
     try:
@@ -261,6 +272,10 @@ def generate_dj_script(
     if payload.reason == "skip":
         sentence_pool.append(
             f"Sounds like {_track_ref(previous_track)} wasn't doing it for you — let's try this instead."
+        )
+    elif payload.reason == "request":
+        sentence_pool.append(
+            f"We've got a request coming in — this one goes out to whoever called in for {_track_ref(next_track)}."
         )
     sentence_pool.extend([
         f"You're listening to {station.name} with {station.dj_name}, keeping it {station.dj_style} tonight.",

@@ -80,8 +80,9 @@ class DJScriptGenerateRequest(BaseModel):
     include_weather: bool = False
     include_news: bool = False
     include_fake_ad: bool = False
+    ad_break_follows: bool = False
     max_sentences: int = Field(default=3, ge=1, le=3)
-    reason: str | None = None  # "skip" = user skipped previous track; "auto" or None = natural end
+    reason: str | None = None  # "skip" = user skipped; "request" = audience request; "auto"/None = natural end
 
 
 class DJScriptResponse(BaseModel):

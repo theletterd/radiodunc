@@ -6,8 +6,8 @@
 - ✅ Multiple ad-break voices/personalities — `AdVoice` list with per-voice instructions, random pick per break
 
 ## DJ script / prompts
-- [ ] When an ad break is coming up, tell the DJ to tease it: "coming up after the break, <next song>"
-- [ ] When a track was injected via the request queue, tell the DJ it was an audience request: "someone called in requesting this one"
+- ✅ When an ad break is coming up, DJ is told to tease it (`ad_break_follows` flag → prompt block)
+- ✅ Injected tracks flagged as audience requests (`requested: true` in queue item → `reason = "request"` in prompt)
 
 ## UI — queue
 - [ ] Make the queue display longer (show more upcoming tracks)
