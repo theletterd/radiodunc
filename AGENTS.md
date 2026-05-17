@@ -52,6 +52,19 @@ Queue items injected via `POST /player/queue/inject` carry `"requested": True`. 
 
 The example config is `example-radio_config.json`. The local config is `radio_config.json` (gitignored).
 
+## Station config fields — what each one does
+
+| Field | Affects | Effect |
+|---|---|---|
+| `dj_style` | LLM prompt | Injected as `DJ: {name} ({style}).` — shapes tone and personality |
+| `era` | LLM prompt | Adds `Era: X.` to station context — nudges DJ to reference that period |
+| `genre_focus` | LLM prompt | Adds `Genre focus: X, Y.` — prompts genre-aware track connections |
+| `description` | LLM prompt | Free-form flavour text appended to the format line |
+| `voice_instructions` | TTS | Natural-language delivery hint sent to the TTS model |
+| `core_artists` | Scheduler only | When non-empty, queue is built **exclusively** from these artists (exact metadata match). Falls back to full library if none match. |
+
+`genre_focus` and `core_artists` are easy to confuse: `genre_focus` only affects what the DJ *says*, `core_artists` only affects which *tracks get played*.
+
 ## DJ persona scheduling
 
 `dj_roster` is an ordered list of `DJPersona` entries with optional `days`, `start_hour`, `end_hour`. `pick_active_persona()` returns the first match. `active_station()` applies the match by merging fields onto the base `StationConfig` (name, style, voice, voice_instructions, prompt_template). The base station is the fallback when nothing matches.

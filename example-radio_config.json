@@ -52,7 +52,7 @@
     "format": "Eclectic Mixtape",
     "description": "No rules, only great songs from your library.",
     "era": null,
-    "genre_focus": [],
+    "genre_focus": ["indie rock", "alternative", "post-punk"],
     "core_artists": [],
     "dj_name": "DJ Verse",
     "dj_style": "warm storyteller with dry wit — equal parts knowledgeable and self-deprecating",
