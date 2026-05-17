@@ -385,10 +385,17 @@ function renderPlayer() {
 
   const label = serverState?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
-  document.getElementById('playerFlags').textContent =
-    serverState?.is_playing
-      ? (transitioning ? 'Transitioning…' : 'Playing')
-      : 'Stopped';
+
+  const isPlaying = !!serverState?.is_playing;
+  document.getElementById('nowPlayingCard').classList.toggle('active', isPlaying);
+
+  const flags = document.getElementById('playerFlags');
+  if (isPlaying) {
+    const statusText = transitioning ? 'Transitioning…' : 'On air';
+    flags.innerHTML = `<span class="live-dot"></span>${statusText}`;
+  } else {
+    flags.textContent = 'Stopped';
+  }
 }
 
 async function renderQueue() {
@@ -412,15 +419,14 @@ async function renderQueue() {
     const li = document.createElement('li');
     li.dataset.position = item.position;
     li.draggable = true;
-    li.style.cssText = 'display:flex; align-items:center; gap:8px; padding:4px 0; cursor:grab; border-top:2px solid transparent; transition:border-color 0.1s, opacity 0.1s;';
 
     const handle = document.createElement('span');
     handle.textContent = '⠿';
-    handle.style.cssText = 'color:#475569; font-size:1.1em; user-select:none;';
+    handle.className = 'handle';
 
     const span = document.createElement('span');
     span.textContent = item.label;
-    span.style.flex = '1';
+    span.className = 'track-label';
 
     const btn = document.createElement('button');
     btn.textContent = '✕';

@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RadioDunc — Local Radio Control</title>
-    <link rel="stylesheet" href="/ui/styles.css" />
-
+  <title>RadioDunc</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="/ui/styles.css" />
 </head>
 <body>
   <div class="wrap">
     <aside>
       <h2>Library Setup</h2>
       <div class="card">
-        <label class="muted" for="libraryPath">Music folder</label>
+        <label class="muted" for="libraryPath" style="display:block; margin-bottom:6px; font-size:0.8rem;">Music folder</label>
         <input id="libraryPath" placeholder="/path/to/music" />
         <div class="row" style="margin-top:10px;">
           <button id="scanBtn" class="primary">Scan Library</button>
@@ -23,7 +24,7 @@
 
     <main>
       <h1 id="stationName">RadioDunc</h1>
-      <p id="stationMeta" class="muted">Loading station…</p>
+      <p id="stationMeta">Your personal AI radio station.</p>
 
       <div class="card">
         <div class="row">
@@ -34,7 +35,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card now-playing" id="nowPlayingCard">
         <h3>Now Playing</h3>
         <p id="nowPlaying">-</p>
         <p id="playerFlags" class="muted">-</p>
@@ -42,18 +43,17 @@
 
       <div class="card">
         <h3>Up Next</h3>
-        <ul id="queueList" style="list-style:none; padding:0; margin:0; max-height:340px; overflow-y:auto;"></ul>
+        <ul id="queueList"></ul>
       </div>
 
       <div class="card">
         <h3>Request a Track</h3>
         <input type="text" id="trackSearch" placeholder="Search the library…" />
-        <ul id="searchResults" style="list-style:none; padding:0; margin:4px 0 0;"></ul>
+        <ul id="searchResults" style="margin-top:6px;"></ul>
       </div>
     </main>
   </div>
 
 <script src="/ui/app.js"></script>
-
 </body>
 </html>
