@@ -28,13 +28,15 @@
     "core_artists": [],
     "dj_name": "DJ Verse",
     "dj_style": "warm storyteller with dry wit",
-    "voice_hint": null,
+    "voice": null,
+    "voice_instructions": null,
     "dj_prompt_template": null,
     "dj_roster": [
       {
         "name": "Saturday Night Sam",
         "style": "high-energy party host",
-        "voice_hint": "fable",
+        "voice": "fable",
+        "voice_instructions": "Upbeat and punchy. Fast-paced delivery with infectious energy.",
         "days": ["friday", "saturday"],
         "start_hour": 20,
         "end_hour": 23
@@ -42,6 +44,8 @@
       {
         "name": "Sunday Morning Mel",
         "style": "calm and reflective",
+        "voice": null,
+        "voice_instructions": "Soft and unhurried. Long pauses. Like a quiet morning.",
         "days": ["sunday"],
         "start_hour": 6,
         "end_hour": 11

@@ -1,8 +1,8 @@
 # RadioDunc — Backlog
 
 ## DJ / personality system
-- [ ] Consolidate DJ config: one "default DJ" on the station, others as scheduleable roster entries — default plays when nothing else matches
-- [ ] Rename/clarify `voice_hint` → `voice` and `voice_instructions` → `voice_instructions` (consistent naming, no ambiguity)
+- ✅ Consolidate DJ config: station fields are the default DJ, `dj_roster` entries are scheduled overrides
+- ✅ Renamed `voice_hint` → `voice` everywhere (consistent with `voice_instructions`)
 - [ ] Multiple ad-break voices/personalities — pool of defined ad voices, pick one per break
 
 ## DJ script / prompts

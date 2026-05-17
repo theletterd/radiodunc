@@ -155,20 +155,20 @@ def test_active_station_overrides_dj_fields():
     persona = DJPersona(
         name="Override Olive",
         style="dramatic",
-        voice_hint="echo",
+        voice="echo",
         prompt_template="custom {dj_name}",
     )
     station = StationConfig(
         dj_name="Default Dan",
         dj_style="plain",
-        voice_hint="alloy",
+        voice="alloy",
         dj_roster=[persona],
     )
     cfg = AppConfig(station=station)
     eff = active_station(station, cfg, now=MONDAY_NOON)
     assert eff.dj_name == "Override Olive"
     assert eff.dj_style == "dramatic"
-    assert eff.voice_hint == "echo"
+    assert eff.voice == "echo"
     assert eff.dj_prompt_template == "custom {dj_name}"
 
 

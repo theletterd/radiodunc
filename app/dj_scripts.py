@@ -60,7 +60,7 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
     return station.model_copy(update={
         "dj_name": persona.name,
         "dj_style": persona.style,
-        "voice_hint": persona.voice_hint or station.voice_hint,
+        "voice": persona.voice or station.voice,
         "voice_instructions": persona.voice_instructions or station.voice_instructions,
         "dj_prompt_template": persona.prompt_template or station.dj_prompt_template,
     })

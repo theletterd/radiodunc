@@ -441,7 +441,7 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
             except ValueError:
                 provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
 
-            voice = station.voice_hint or None
+            voice = station.voice or None
             instructions = station.voice_instructions or None
             try:
                 clip, _path, _cached = get_or_create_dj_clip(
@@ -516,7 +516,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         provider = build_tts_provider(config)
     except ValueError:
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-    voice = station.voice_hint or None
+    voice = station.voice or None
 
     # Try the prefetch cache first (skip invalidates it — different prompt context).
     cached_prefetch = _take_prefetched(next_idx) if reason != "skip" else None

@@ -24,9 +24,9 @@ def test_validate_and_format_config_rejects_blank_station_format():
         _validate_and_format_config("radio_config.json", raw)
 
 
-def test_station_voice_hint_is_normalized_to_none_when_blank():
-    station = StationConfig(voice_hint="   ")
-    assert station.voice_hint is None
+def test_station_voice_is_normalized_to_none_when_blank():
+    station = StationConfig(voice="   ")
+    assert station.voice is None
 
 
 def test_app_config_defaults_include_station():
