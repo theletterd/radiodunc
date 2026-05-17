@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import Station, Track
+from .config import StationConfig
+from .models import Track
 
 
 def _track_ref(track: Track | None) -> str:
@@ -15,7 +16,7 @@ def _track_ref(track: Track | None) -> str:
 
 
 def render_song_transition_prompt(
-    station: Station,
+    station: StationConfig,
     previous_track: Track | None,
     next_track: Track | None,
     max_sentences: int,
@@ -27,28 +28,19 @@ def render_song_transition_prompt(
     )
 
 
-def render_ad_break_prompt(station: Station) -> str:
+def render_ad_break_prompt(station: StationConfig) -> str:
     return (
         "[AD_BREAK_PROMPT_PLACEHOLDER] "
-        f"Write a brief sponsor-style ad break line in the voice of {station.dj_name or 'DJ'} on {station.name}."
+        f"Write a brief sponsor-style ad break line in the voice of {station.dj_name} on {station.name}."
     )
 
 
-def render_weather_prompt(station: Station, weather_location: str) -> str:
+def render_weather_prompt(station: StationConfig, weather_location: str) -> str:
     return (
         "[WEATHER_PROMPT_PLACEHOLDER] "
         f"Write a concise weather update for {weather_location} on {station.name}."
     )
 
 
-def render_news_prompt(station: Station) -> str:
-    return "[NEWS_PROMPT_PLACEHOLDER] Write a short top-of-hour news tease for station {station_name}.".format(
-        station_name=station.name
-    )
-
-
-def render_time_check_prompt(station: Station, local_time: str) -> str:
-    return (
-        "[TIME_CHECK_PROMPT_PLACEHOLDER] "
-        f"Add a natural time check for {local_time} while hosting on {station.name}."
-    )
+def render_news_prompt(station: StationConfig) -> str:
+    return f"[NEWS_PROMPT_PLACEHOLDER] Write a short top-of-hour news tease for station {station.name}."

@@ -5,20 +5,18 @@ import logging
 import urllib.error
 import urllib.request
 
-from .config import AppConfig
-from .models import Station, Track
+from .config import AppConfig, StationConfig
+from .models import Track
 from .prompt_library import (
     render_ad_break_prompt,
     render_news_prompt,
     render_song_transition_prompt,
-    render_time_check_prompt,
     render_weather_prompt,
 )
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 from .weather import fetch_weather_summary
 
 logger = logging.getLogger(__name__)
-
 
 
 def _track_ref(track: Track | None) -> str:
@@ -30,7 +28,7 @@ def _track_ref(track: Track | None) -> str:
 
 
 def _generate_openai_script(
-    station: Station,
+    station: StationConfig,
     payload: DJScriptGenerateRequest,
     previous_track: Track | None,
     next_track: Track | None,
@@ -43,35 +41,29 @@ def _generate_openai_script(
         logger.warning("Skipping OpenAI DJ script generation: OPENAI_API_KEY is missing")
         return None
 
-    logger.info(
-        "Attempting OpenAI DJ script generation for station_id=%s with model=%s",
-        station.id,
-        config.openai_text_model,
-    )
+    logger.info("Attempting OpenAI DJ script generation with model=%s", config.openai_text_model)
     prompt_sections = [
         render_song_transition_prompt(station, previous_track, next_track, payload.max_sentences),
-        f"DJ name: {station.dj_name or 'DJ'}. Style: {station.dj_style or 'friendly'}.",
-        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}.",
+        f"DJ name: {station.dj_name}. Style: {station.dj_style}.",
+        f"Station format: {station.format}." + (f" Era: {station.era}." if station.era else ""),
     ]
+    if station.genre_focus:
+        prompt_sections.append(f"Genre focus: {', '.join(station.genre_focus)}.")
+    if station.description:
+        prompt_sections.append(f"Station description: {station.description}")
+    prompt_sections.append(
+        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}."
+    )
     if payload.include_weather:
-        prompt_sections.append(render_weather_prompt(station, "your area"))
-        weather_location = "your area"
-        if station.config_json:
-            try:
-                station_cfg = json.loads(station.config_json)
-                if isinstance(station_cfg, dict):
-                    weather_location = str(station_cfg.get("weather_location") or weather_location)
-            except json.JSONDecodeError:
-                pass
-        live_weather = fetch_weather_summary(weather_location)
+        location = config.alerts.weather_location
+        prompt_sections.append(render_weather_prompt(station, location))
+        live_weather = fetch_weather_summary(location)
         if live_weather:
             prompt_sections.append(f"Use this real weather data as facts: {live_weather}")
     if payload.include_news:
         prompt_sections.append(render_news_prompt(station))
     if payload.include_fake_ad:
         prompt_sections.append(render_ad_break_prompt(station))
-    if config.time_announcement_enabled:
-        prompt_sections.append(render_time_check_prompt(station, "the current local time"))
     prompt_sections.append("Return plain text only.")
     prompt = " ".join(prompt_sections)
     req = urllib.request.Request(
@@ -82,13 +74,12 @@ def _generate_openai_script(
     )
     try:
         with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
-            logger.info("OpenAI DJ script request succeeded with status=%s", getattr(response, "status", "unknown"))
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        logger.warning("OpenAI DJ script request failed with HTTPError status=%s", exc.code)
+        logger.warning("OpenAI DJ script request failed status=%s", exc.code)
         return None
     except urllib.error.URLError as exc:
-        logger.warning("OpenAI DJ script request failed with URLError reason=%s", exc.reason)
+        logger.warning("OpenAI DJ script request failed reason=%s", exc.reason)
         return None
     except TimeoutError:
         logger.warning("OpenAI DJ script request timed out")
@@ -99,7 +90,6 @@ def _generate_openai_script(
 
     output_text = data.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
-        logger.info("OpenAI DJ script response included top-level output_text")
         return output_text
 
     output_items = data.get("output")
@@ -118,88 +108,58 @@ def _generate_openai_script(
                 if isinstance(text, str) and text.strip():
                     text_chunks.append(text.strip())
         if text_chunks:
-            assembled_text = " ".join(text_chunks)
-            logger.info("OpenAI DJ script response extracted text from output.content")
-            return assembled_text
+            return " ".join(text_chunks)
 
-    response_preview = json.dumps(data, ensure_ascii=False)[:2000]
-    logger.info("OpenAI DJ script raw response preview=%s", response_preview)
     logger.warning("OpenAI DJ script response missing usable output_text; falling back to sentence pool")
     return None
 
 
 def generate_dj_script(
-    station: Station,
+    station: StationConfig,
     payload: DJScriptGenerateRequest,
     previous_track: Track | None,
     next_track: Track | None,
     config: AppConfig | None = None,
 ) -> DJScriptResponse:
-    dj_name = station.dj_name or "DJ"
-    style = station.dj_style or "friendly"
-
     sentence_pool: list[str] = [
-        f"You're listening to {station.name} with {dj_name}, keeping it {style} tonight.",
+        f"You're listening to {station.name} with {station.dj_name}, keeping it {station.dj_style} tonight.",
         f"We just heard {_track_ref(previous_track)}, and up next is {_track_ref(next_track)}.",
-        f"{station.tagline or 'Stay tuned for more great music.'}",
+        f"{station.tagline}",
     ]
 
-    cfg: dict = {}
-    if station.config_json:
-        try:
-            cfg = json.loads(station.config_json)
-        except json.JSONDecodeError:
-            cfg = {}
-
     if payload.include_weather:
-        location = cfg.get("weather_location") or "your area"
+        location = config.alerts.weather_location if config else "your area"
         live_weather = fetch_weather_summary(location)
         if live_weather:
             sentence_pool.append(live_weather)
         else:
-            sentence_pool.append(render_weather_prompt(station, location))
             sentence_pool.append(
                 f"Quick weather check for {location}: keep it locked here while we keep the soundtrack rolling."
             )
 
     if payload.include_news:
-        sentence_pool.append(render_news_prompt(station))
         sentence_pool.append("News flash is coming at the top of the hour, right after more hand-picked tracks.")
 
     if payload.include_fake_ad:
-        sentence_pool.append(render_ad_break_prompt(station))
         sentence_pool.append("This set is sponsored by Midnight Coffee Co.—brew loud, drive smooth.")
 
     if config is not None:
-        logger.info(
-            "DJ script generation path: station_id=%s provider=%s openai_key_present=%s model=%s",
-            station.id,
-            config.script_provider,
-            bool(config.openai_api_key),
-            config.openai_text_model,
-        )
         scripted = _generate_openai_script(station, payload, previous_track, next_track, config)
         if scripted:
             parts = [part.strip() for part in scripted.replace("\n", " ").split(".") if part.strip()]
             sentences = [f"{part}." for part in parts[: payload.max_sentences]]
             if sentences:
                 return DJScriptResponse(
-                    station_id=station.id,
                     station_name=station.name,
-                    dj_name=dj_name,
+                    dj_name=station.dj_name,
                     sentences=sentences,
                     script_text=" ".join(sentences),
                 )
-            logger.warning("OpenAI DJ script produced no usable sentences after parsing; using sentence pool fallback")
-    else:
-        logger.info("No config provided to generate_dj_script; using sentence pool fallback")
 
-    logger.info("Using sentence pool fallback for station_id=%s", station.id)
     sentences = sentence_pool[: payload.max_sentences]
     return DJScriptResponse(
-        station_id=station.id,
         station_name=station.name,
-        dj_name=dj_name,
+        dj_name=station.dj_name,
         sentences=sentences,
         script_text=" ".join(sentences),
     )

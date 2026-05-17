@@ -16,19 +16,14 @@
         <input id="libraryPath" placeholder="/path/to/music" />
         <div class="row" style="margin-top:10px;">
           <button id="scanBtn" class="primary">Scan Library</button>
-          <button id="refreshStationsBtn">Refresh Stations</button>
         </div>
         <p id="scanStatus" class="status muted">Idle</p>
       </div>
-
-      <h2>Stations</h2>
-      <input id="search" placeholder="Search stations" style="width:100%; margin-bottom:8px;" />
-      <div id="stations"></div>
     </aside>
 
     <main>
-      <h1 id="stationName">No station selected</h1>
-      <p id="stationMeta" class="muted">Pick a station, then press Play.</p>
+      <h1 id="stationName">RadioDunc</h1>
+      <p id="stationMeta" class="muted">Loading station…</p>
 
       <div class="card">
         <div class="row">
@@ -46,22 +41,13 @@
       </div>
 
       <div class="card">
-        <h3>Playback</h3>
-        <p id="upNext">-</p>
         <h3>Up Next</h3>
         <ul id="queueList" style="list-style:none; padding:0; margin:0;"></ul>
       </div>
 
       <div class="card">
-        <h3>Favorites</h3>
-        <p id="favorites" class="muted">-</p>
-        <h3>Recent Stations</h3>
-        <p id="recent" class="muted">-</p>
-      </div>
-
-      <div class="card">
         <h3>Request a Track</h3>
-        <input type="text" id="trackSearch" placeholder="Request a track…" style="width:100%;" />
+        <input type="text" id="trackSearch" placeholder="Search the library…" style="width:100%;" />
         <ul id="searchResults" style="list-style:none; padding:0; margin:4px 0 0;"></ul>
       </div>
     </main>

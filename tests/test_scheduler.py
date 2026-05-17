@@ -1,12 +1,10 @@
-import json
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.config import AppConfig
+from app.config import AppConfig, StationConfig
 from app.database import Base
-from app.models import Station, Track
+from app.models import Track
 from app.scheduler import build_station_queue
 
 
@@ -27,12 +25,13 @@ def test_build_station_queue_respects_artist_repeat_window_and_seed():
             Track(file_path="/music/4.mp3", artist="A"),
         ]
     )
-    station = Station(name="Test FM", config_json=json.dumps({"core_artists": ["A", "B", "C"]}))
-    db.add(station)
     db.commit()
 
-    cfg = AppConfig(playlist_artist_repeat_window=2)
-    out = build_station_queue(db, station.id, cfg, size=4, seed=7)
+    cfg = AppConfig(
+        playlist_artist_repeat_window=2,
+        station=StationConfig(core_artists=["A", "B", "C"]),
+    )
+    out = build_station_queue(db, cfg, size=4, seed=7)
 
     assert out["queue_size"] == 4
     artists = [t.artist for t in out["tracks"]]
@@ -40,14 +39,7 @@ def test_build_station_queue_respects_artist_repeat_window_and_seed():
         assert artists[idx] != artists[idx - 1]
 
 
-def test_build_station_queue_errors_for_missing_station_or_tracks():
+def test_build_station_queue_errors_for_no_tracks():
     db = _make_db_session()
-    with pytest.raises(ValueError, match="not found"):
-        build_station_queue(db, 999, AppConfig(), size=3)
-
-    station = Station(name="X FM")
-    db.add(station)
-    db.commit()
-
     with pytest.raises(ValueError, match="No tracks found"):
-        build_station_queue(db, station.id, AppConfig(), size=3)
+        build_station_queue(db, AppConfig(), size=3)

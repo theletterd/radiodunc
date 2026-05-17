@@ -9,7 +9,6 @@ const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
 // ── App state ────────────────────────────────────────────────────────────────
-let stations    = [];
 let serverState = null;
 
 // ── Web Audio ────────────────────────────────────────────────────────────────
@@ -33,7 +32,6 @@ let autoTriggerTimer = null;
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function savedVolume()    { return Number(localStorage.getItem('volume') ?? serverState?.volume ?? 80); }
 function musicVolume()    { return Math.max(0, Math.min(1, savedVolume() / 100)); }
-function stationLabel(id) { return stations.find(s => s.id === id)?.name || `#${id}`; }
 
 async function api(path, opts = {}) {
   const method = opts.method || 'GET';
@@ -235,22 +233,9 @@ async function startPlayback() {
   initAudio();
   await ctx.resume();
 
-  // Ensure a station is selected
-  if (!serverState?.station_id) {
-    const id =
-      serverState?.recent_station_ids?.[0] ??
-      serverState?.favorites?.[0] ??
-      stations?.[0]?.id;
-    if (!id) throw new Error('No station available. Scan library and generate stations first.');
-    serverState = await api('/player/state', {
-      method: 'PUT',
-      body: JSON.stringify({ station_id: id }),
-    });
-  }
-
   const resp = await api('/player/play', {
     method: 'POST',
-    body: JSON.stringify({ station_id: serverState.station_id, queue_size: 12 }),
+    body: JSON.stringify({ queue_size: 12 }),
   });
   serverState = resp.state;
   if (!serverState.current_track?.id) throw new Error('Server returned no current track');
@@ -302,42 +287,10 @@ async function stopPlayback() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
-function renderStations() {
-  const q         = document.getElementById('search').value.toLowerCase();
-  const container = document.getElementById('stations');
-  container.innerHTML = '';
-  stations.filter(s => s.name.toLowerCase().includes(q)).forEach(s => {
-    const card = document.createElement('div');
-    card.className = `card station${serverState?.station_id === s.id ? ' active' : ''}`;
-    card.innerHTML = `<strong>${s.name}</strong><div class="muted">${s.tagline || s.format || 'Local station'}</div>`;
-
-    const row    = document.createElement('div');
-    row.className = 'row';
-    const favBtn = document.createElement('button');
-    favBtn.textContent = serverState?.favorites?.includes(s.id) ? '★ Favorited' : '☆ Favorite';
-    favBtn.onclick = async (e) => {
-      e.stopPropagation();
-      const want = !serverState?.favorites?.includes(s.id);
-      await api(`/stations/${s.id}/favorite`, { method: 'PUT', body: JSON.stringify({ favorite: want }) });
-      await refreshServerState();
-    };
-    row.appendChild(favBtn);
-    card.appendChild(row);
-
-    card.onclick = async () => {
-      serverState = await api('/player/state', { method: 'PUT', body: JSON.stringify({ station_id: s.id }) });
-      renderAll();
-    };
-    container.appendChild(card);
-  });
-}
-
 function renderPlayer() {
-  const cur = stations.find(s => s.id === serverState?.station_id);
-  document.getElementById('stationName').textContent = cur?.name || 'No station selected';
-  document.getElementById('stationMeta').textContent = cur
-    ? (cur.tagline || cur.format || 'Live radio')
-    : 'Pick a station, then press Play.';
+  const station = serverState?.station;
+  document.getElementById('stationName').textContent = station?.name || 'RadioDunc';
+  document.getElementById('stationMeta').textContent = station?.tagline || 'Loading station…';
   document.getElementById('volume').value = savedVolume();
   if (masterGain) masterGain.gain.value = musicVolume();
 
@@ -347,12 +300,6 @@ function renderPlayer() {
     serverState?.is_playing
       ? (transitioning ? 'Transitioning…' : 'Playing')
       : 'Stopped';
-  document.getElementById('upNext').textContent =
-    serverState?.is_playing ? 'Web Audio — direct file playback' : '-';
-  document.getElementById('favorites').textContent =
-    (serverState?.favorites || []).map(stationLabel).join(', ') || '-';
-  document.getElementById('recent').textContent =
-    (serverState?.recent_station_ids || []).map(stationLabel).join(', ') || '-';
 }
 
 async function renderQueue() {
@@ -393,7 +340,7 @@ async function renderQueue() {
   }
 }
 
-function renderAll() { renderStations(); renderPlayer(); renderQueue(); }
+function renderAll() { renderPlayer(); renderQueue(); }
 
 // ── Server state refresh ──────────────────────────────────────────────────────
 let refreshInFlight = null;
@@ -407,8 +354,6 @@ async function refreshServerState() {
 }
 
 // ── Event bindings ────────────────────────────────────────────────────────────
-document.getElementById('search').addEventListener('input', renderStations);
-
 document.getElementById('scanBtn').addEventListener('click', async () => {
   const status     = document.getElementById('scanStatus');
   const folderPath = document.getElementById('libraryPath').value;
@@ -421,19 +366,6 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
     status.textContent = `Scanned ${result.scanned} files, added ${result.inserted}, updated ${result.updated}.`;
   } catch (err) {
     status.textContent = `Scan failed: ${err.message}`;
-  }
-});
-
-document.getElementById('refreshStationsBtn').addEventListener('click', async () => {
-  const status = document.getElementById('scanStatus');
-  status.textContent = 'Generating stations…';
-  try {
-    const result = await api('/stations/generate', { method: 'POST', body: JSON.stringify({}) });
-    stations     = await api('/stations');
-    await refreshServerState();
-    status.textContent = `Generated ${result?.generated ?? stations.length} stations.`;
-  } catch (err) {
-    status.textContent = `Refresh failed: ${err.message}`;
   }
 });
 
@@ -528,7 +460,6 @@ async function init() {
 
   const config = await api('/config');
   document.getElementById('libraryPath').value = config.music_folder || '';
-  stations    = await api('/stations');
   serverState = await api('/player/status');
   renderAll();
   // Light polling — client drives playback now, so we don't need frequent syncs.
