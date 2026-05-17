@@ -3,14 +3,19 @@
   "alerts": {
     "weather_location": "Seattle, WA",
     "local_time_zone": "America/Los_Angeles",
+    "weather": {
+      "enabled": true,
+      "every_n_breaks": 4
+    },
     "news": {
       "enabled": true,
-      "categories": [
-        "local",
-        "national",
-        "music"
-      ],
-      "briefing_minutes": 30
+      "rss_url": "https://feeds.bbci.co.uk/news/rss.xml",
+      "every_n_breaks": 5
+    },
+    "ads": {
+      "enabled": false,
+      "voice": "echo",
+      "every_n_breaks": 6
     }
   },
   "station": {

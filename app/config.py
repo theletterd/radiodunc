@@ -7,16 +7,29 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
+class WeatherPreferences(BaseModel):
+    enabled: bool = True
+    every_n_breaks: int = Field(default=4, ge=0, description="0 = never; 1 = every break; N = every Nth break")
+
+
 class NewsPreferences(BaseModel):
     enabled: bool = True
-    categories: list[str] = Field(default_factory=lambda: ["local", "national", "music"])
-    briefing_minutes: int = 30
+    rss_url: str = "https://feeds.bbci.co.uk/news/rss.xml"
+    every_n_breaks: int = Field(default=5, ge=0)
+
+
+class AdBreakPreferences(BaseModel):
+    enabled: bool = False
+    voice: str = "echo"
+    every_n_breaks: int = Field(default=6, ge=0)
 
 
 class AlertConfig(BaseModel):
     weather_location: str = "Seattle, WA"
     local_time_zone: str = "America/Los_Angeles"
+    weather: WeatherPreferences = Field(default_factory=WeatherPreferences)
     news: NewsPreferences = Field(default_factory=NewsPreferences)
+    ads: AdBreakPreferences = Field(default_factory=AdBreakPreferences)
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")

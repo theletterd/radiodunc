@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .config import WEEKDAYS, AppConfig, DJPersona, StationConfig
 from .models import Track
+from .news import fetch_random_headline
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 from .weather import fetch_weather_summary
 
@@ -99,7 +100,13 @@ def _build_prompt(
             weather_block = f"Weather context — use as facts: {live_weather}\n"
         else:
             weather_block = f"Weather context: include a brief check for {location}.\n"
-    news_block = "News context: include a one-sentence top-of-hour news tease.\n" if payload.include_news else ""
+    news_block = ""
+    if payload.include_news:
+        headline = fetch_random_headline(config.alerts.news.rss_url)
+        if headline:
+            news_block = f"News context — work in this real headline naturally: \"{headline}\".\n"
+        else:
+            news_block = "News context: include a one-sentence top-of-hour news tease.\n"
     ad_block = "Ad context: include a brief sponsor-style ad break line.\n" if payload.include_fake_ad else ""
     reason_block = ""
     if payload.reason == "skip":

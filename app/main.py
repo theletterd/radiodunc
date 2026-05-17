@@ -399,9 +399,22 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         raise HTTPException(status_code=404, detail="Next track not found in library")
 
     station = active_station(config.station, config)
+
+    # Cadence: include weather/news every Nth break (queue_index proxies the break count).
+    def _on_cadence(every: int) -> bool:
+        return every > 0 and next_idx % every == 0
+
+    include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
+    include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+
     script_response = generate_dj_script(
         station,
-        DJScriptGenerateRequest(max_sentences=3, reason=reason),
+        DJScriptGenerateRequest(
+            max_sentences=3,
+            reason=reason,
+            include_weather=include_weather,
+            include_news=include_news,
+        ),
         previous_track,
         next_track,
         config=config,
