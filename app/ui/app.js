@@ -3,8 +3,8 @@
 // ── Timing constants ─────────────────────────────────────────────────────────
 // Adjust these to taste; all audio scheduling uses AudioContext time (sample-accurate).
 const FADE_OUT_S     = 9.0;  // current track fades 1→0 over this many seconds
-const DJ_OVERLAP_S   = 0.5;  // DJ clip starts this far before the fade-out ends
 const FADE_IN_S      = 1.2;  // next track fades 0→1 over this many seconds
+const DJ_GAIN        = 1.8;  // DJ clip peak gain (>1 boosts it above the fading music)
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
@@ -166,8 +166,8 @@ async function triggerTransition(reason) {
 
       // Short in/out fades on the DJ clip itself to avoid clicks.
       djGain.gain.setValueAtTime(0, djStart);
-      djGain.gain.linearRampToValueAtTime(1.0, djStart + DJ_EDGE_S);
-      djGain.gain.setValueAtTime(1.0, djStart + djBuf.duration - DJ_EDGE_S);
+      djGain.gain.linearRampToValueAtTime(DJ_GAIN, djStart + DJ_EDGE_S);
+      djGain.gain.setValueAtTime(DJ_GAIN, djStart + djBuf.duration - DJ_EDGE_S);
       djGain.gain.linearRampToValueAtTime(0, djStart + djBuf.duration);
 
       // AudioBufferSourceNode.start(when) is sample-accurate.
@@ -352,7 +352,45 @@ function renderPlayer() {
     (serverState?.recent_station_ids || []).map(stationLabel).join(', ') || '-';
 }
 
-function renderAll() { renderStations(); renderPlayer(); }
+async function renderQueue() {
+  const list = document.getElementById('queueList');
+  if (!list) return;
+  if (!serverState?.is_playing) { list.innerHTML = ''; return; }
+  let preview;
+  try { preview = await api('/player/queue'); } catch (_) { list.innerHTML = ''; return; }
+  list.innerHTML = '';
+  if (!preview.items.length) {
+    const li = document.createElement('li');
+    li.className = 'muted';
+    li.textContent = 'No upcoming tracks';
+    list.appendChild(li);
+    return;
+  }
+  for (const item of preview.items) {
+    const li = document.createElement('li');
+    li.style.cssText = 'display:flex; align-items:center; gap:8px; padding:3px 0;';
+    const span = document.createElement('span');
+    span.textContent = item.label;
+    span.style.flex = '1';
+    const btn = document.createElement('button');
+    btn.textContent = '✕';
+    btn.title = 'Remove from queue';
+    btn.style.cssText = 'padding:1px 6px; font-size:0.8em;';
+    btn.onclick = async () => {
+      try {
+        await api(`/player/queue/${item.position}`, { method: 'DELETE' });
+        renderQueue();
+      } catch (e) {
+        alert('Could not remove track: ' + (e.message || e));
+      }
+    };
+    li.appendChild(span);
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+}
+
+function renderAll() { renderStations(); renderPlayer(); renderQueue(); }
 
 // ── Server state refresh ──────────────────────────────────────────────────────
 let refreshInFlight = null;

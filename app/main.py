@@ -33,6 +33,8 @@ from .schemas import (
     StationOut,
     TrackOut,
     PlayerNextResponse,
+    QueueItemOut,
+    QueuePreviewResponse,
 )
 from .scheduler import build_station_queue
 from .stations import generate_stations
@@ -271,6 +273,47 @@ def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
+
+
+@app.get("/player/queue", response_model=QueuePreviewResponse)
+def player_queue(db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    current_pos = state.queue_index
+    upcoming_items: list[QueueItemOut] = []
+    for i in range(current_pos + 1, min(current_pos + 6, len(queue))):
+        item = queue[i]
+        if item.get("type") == "track" and item.get("track_id") is not None:
+            upcoming_items.append(
+                QueueItemOut(
+                    position=i,
+                    track_id=item["track_id"],
+                    label=item.get("label", f"Track {item['track_id']}"),
+                )
+            )
+    return QueuePreviewResponse(
+        items=upcoming_items,
+        queue_position=current_pos,
+        queue_depth=len(queue),
+    )
+
+
+@app.delete("/player/queue/{position}", status_code=204)
+def delete_queue_item(
+    position: int,
+    db: Session = Depends(get_db),
+    _admin: None = Depends(_require_admin),
+):
+    state = _get_or_create_player_state(db)
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    if position <= state.queue_index or position >= len(queue):
+        raise HTTPException(
+            status_code=404,
+            detail="Position out of range or refers to current/past track",
+        )
+    queue.pop(position)
+    state.queue_json = json.dumps(queue)
+    db.commit()
 
 
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:

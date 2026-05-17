@@ -133,3 +133,15 @@ class PlayerNextResponse(BaseModel):
     dj_script: str
 
 
+class QueueItemOut(BaseModel):
+    position: int
+    track_id: int
+    label: str
+
+
+class QueuePreviewResponse(BaseModel):
+    items: list[QueueItemOut]
+    queue_position: int
+    queue_depth: int
+
+
