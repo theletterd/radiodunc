@@ -13,7 +13,7 @@ from sqlalchemy import text
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, engine, get_db
 from .models import DJClip, PlayerState, Track
-from .dj_scripts import active_station, generate_dj_script
+from .dj_scripts import active_station, generate_ad_script, generate_dj_script
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
@@ -446,6 +446,31 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
+    # Optional ad clip: generate and synthesize when on ad cadence.
+    ad_clip_url: str | None = None
+    ad_script_text: str | None = None
+    if config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks):
+        ad_script_text = generate_ad_script(station, config)
+        if ad_script_text:
+            try:
+                ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
+                    db,
+                    script_text=ad_script_text,
+                    voice=config.alerts.ads.voice,
+                    provider=provider,
+                )
+            except RuntimeError:
+                logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", config.alerts.ads.voice)
+                ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
+                    db,
+                    script_text=ad_script_text,
+                    voice=None,
+                    provider=provider,
+                )
+            if ad_clip is not None:
+                ad_clip_url = f"/media/dj-clip/{ad_clip.script_hash}"
+                _log_event("player.next.ad_attached", ad_cached=ad_cached, voice=config.alerts.ads.voice)
+
     state.queue_index = next_idx
     state.current_track_id = next_track.id
     db.commit()
@@ -462,10 +487,13 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         new_index=next_idx,
         track_id=next_track.id,
         dj_cached=dj_cached,
+        ad_attached=bool(ad_clip_url),
     )
     return PlayerNextResponse(
         current_track_url=f"/media/track/{next_track.id}",
         dj_clip_url=f"/media/dj-clip/{clip.script_hash}",
+        ad_clip_url=ad_clip_url,
+        ad_script=ad_script_text,
         next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
         dj_script=script_response.script_text,

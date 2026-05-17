@@ -22,6 +22,13 @@ class AdBreakPreferences(BaseModel):
     enabled: bool = False
     voice: str = "echo"
     every_n_breaks: int = Field(default=6, ge=0)
+    prompt_template: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for the ad-break prompt. Placeholders: {station_name}, "
+            "{station_format}, {dj_name}. Leave null for the built-in default."
+        ),
+    )
 
 
 class AlertConfig(BaseModel):

@@ -160,11 +160,21 @@ async function triggerTransition(reason) {
       console.warn('[audio] DJ clip unavailable, crossfading without it:', err);
     }
 
-    // 4. Place the DJ clip on the AudioContext timeline.
+    // Optional ad clip plays right after the DJ clip.
+    let adBuf = null;
+    if (next.ad_clip_url) {
+      try {
+        adBuf = await fetchAndDecode(next.ad_clip_url);
+      } catch (err) {
+        console.warn('[audio] ad clip unavailable, skipping:', err);
+      }
+    }
+
+    // 4. Place the DJ clip (and optional ad) on the AudioContext timeline.
     //    djStart adapts: if we're on time, it overlaps the fade-out tail;
     //    if we're late, it fires immediately.
     const djStart = ctx.currentTime + 0.05;
-    let djEnd = djStart; // advances to djStart + clip duration if we have a clip
+    let djEnd = djStart; // advances as each clip is scheduled
 
     if (djBuf) {
       const djSrc  = ctx.createBufferSource();
@@ -173,16 +183,32 @@ async function triggerTransition(reason) {
       djSrc.connect(djGain);
       djGain.connect(masterGain);
 
-      // Short in/out fades on the DJ clip itself to avoid clicks.
       djGain.gain.setValueAtTime(0, djStart);
       djGain.gain.linearRampToValueAtTime(DJ_GAIN, djStart + DJ_EDGE_S);
       djGain.gain.setValueAtTime(DJ_GAIN, djStart + djBuf.duration - DJ_EDGE_S);
       djGain.gain.linearRampToValueAtTime(0, djStart + djBuf.duration);
 
-      // AudioBufferSourceNode.start(when) is sample-accurate.
       djSrc.start(djStart);
       djEnd = djStart + djBuf.duration;
       console.log(`[audio] DJ clip: start=${djStart.toFixed(3)} dur=${djBuf.duration.toFixed(2)}`);
+    }
+
+    if (adBuf) {
+      const adStart = djEnd + 0.1; // tiny gap between DJ and ad
+      const adSrc  = ctx.createBufferSource();
+      adSrc.buffer = adBuf;
+      const adGain = ctx.createGain();
+      adSrc.connect(adGain);
+      adGain.connect(masterGain);
+
+      adGain.gain.setValueAtTime(0, adStart);
+      adGain.gain.linearRampToValueAtTime(DJ_GAIN, adStart + DJ_EDGE_S);
+      adGain.gain.setValueAtTime(DJ_GAIN, adStart + adBuf.duration - DJ_EDGE_S);
+      adGain.gain.linearRampToValueAtTime(0, adStart + adBuf.duration);
+
+      adSrc.start(adStart);
+      djEnd = adStart + adBuf.duration; // next track waits until after the ad
+      console.log(`[audio] AD clip: start=${adStart.toFixed(3)} dur=${adBuf.duration.toFixed(2)}`);
     }
 
     // 5. Schedule next track gain ramp and el.play().

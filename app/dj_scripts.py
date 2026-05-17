@@ -75,6 +75,15 @@ Up next: {next_track}.
 Return plain text only — no headings, no markdown."""
 
 
+DEFAULT_AD_PROMPT_TEMPLATE = """\
+Write a 2-sentence late-night radio sponsor spot. Invent a fake but plausible
+brand and product (food, gadget, app, local service — be creative and varied).
+Vintage radio-ad voice: punchy, slightly cheesy, with a memorable tagline.
+Make it clearly sound like an ad break, not DJ banter. Station context: \
+{station_name} ({station_format}).
+Return plain text only — no headings, no markdown, no quotation marks."""
+
+
 def _track_ref(track: Track | None) -> str:
     if not track:
         return "an unknown track"
@@ -139,22 +148,15 @@ def _build_prompt(
         return DEFAULT_DJ_PROMPT_TEMPLATE.format_map(fields)
 
 
-def _generate_openai_script(
-    station: StationConfig,
-    payload: DJScriptGenerateRequest,
-    previous_track: Track | None,
-    next_track: Track | None,
-    config: AppConfig,
-) -> str | None:
+def _call_openai_text(prompt: str, config: AppConfig) -> str | None:
+    """POST a prompt to OpenAI's Responses API and return the text, or None on failure."""
     if config.script_provider != "openai":
-        logger.info("Skipping OpenAI DJ script generation: script_provider=%s", config.script_provider)
+        logger.info("Skipping OpenAI text generation: script_provider=%s", config.script_provider)
         return None
     if not config.openai_api_key:
-        logger.warning("Skipping OpenAI DJ script generation: OPENAI_API_KEY is missing")
+        logger.warning("Skipping OpenAI text generation: OPENAI_API_KEY is missing")
         return None
 
-    logger.info("Attempting OpenAI DJ script generation with model=%s", config.openai_text_model)
-    prompt = _build_prompt(station, payload, previous_track, next_track, config)
     req = urllib.request.Request(
         "https://api.openai.com/v1/responses",
         data=json.dumps({"model": config.openai_text_model, "input": prompt}).encode("utf-8"),
@@ -165,16 +167,16 @@ def _generate_openai_script(
         with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        logger.warning("OpenAI DJ script request failed status=%s", exc.code)
+        logger.warning("OpenAI text request failed status=%s", exc.code)
         return None
     except urllib.error.URLError as exc:
-        logger.warning("OpenAI DJ script request failed reason=%s", exc.reason)
+        logger.warning("OpenAI text request failed reason=%s", exc.reason)
         return None
     except TimeoutError:
-        logger.warning("OpenAI DJ script request timed out")
+        logger.warning("OpenAI text request timed out")
         return None
     except json.JSONDecodeError:
-        logger.warning("OpenAI DJ script response was not valid JSON")
+        logger.warning("OpenAI text response was not valid JSON")
         return None
 
     output_text = data.get("output_text")
@@ -198,6 +200,39 @@ def _generate_openai_script(
                     text_chunks.append(text.strip())
         if text_chunks:
             return " ".join(text_chunks)
+    return None
+
+
+def _generate_openai_script(
+    station: StationConfig,
+    payload: DJScriptGenerateRequest,
+    previous_track: Track | None,
+    next_track: Track | None,
+    config: AppConfig,
+) -> str | None:
+    logger.info("Generating DJ transition script via OpenAI model=%s", config.openai_text_model)
+    prompt = _build_prompt(station, payload, previous_track, next_track, config)
+    text = _call_openai_text(prompt, config)
+    if text is None:
+        logger.warning("OpenAI DJ script failed; will fall back to sentence pool")
+    return text
+
+
+def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
+    """Generate a fake-ad script via OpenAI. Returns None on failure (caller should skip the ad)."""
+    template = config.alerts.ads.prompt_template or DEFAULT_AD_PROMPT_TEMPLATE
+    fields = {
+        "station_name": station.name,
+        "station_format": station.format,
+        "dj_name": station.dj_name,
+    }
+    try:
+        prompt = template.format_map(fields)
+    except KeyError as exc:
+        logger.warning("ads.prompt_template has unknown placeholder %s; using default", exc)
+        prompt = DEFAULT_AD_PROMPT_TEMPLATE.format_map(fields)
+    logger.info("Generating ad-break script via OpenAI")
+    return _call_openai_text(prompt, config)
 
     logger.warning("OpenAI DJ script response missing usable output_text; falling back to sentence pool")
     return None
@@ -257,3 +292,4 @@ def generate_dj_script(
         sentences=sentences,
         script_text=" ".join(sentences),
     )
+

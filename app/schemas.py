@@ -106,6 +106,8 @@ class DJClipResponse(BaseModel):
 class PlayerNextResponse(BaseModel):
     current_track_url: str
     dj_clip_url: str
+    ad_clip_url: str | None = None  # plays right after the DJ clip when an ad fires
+    ad_script: str | None = None
     next_track_url: str | None = None
     next_track_metadata: TrackOut | None = None
     dj_script: str

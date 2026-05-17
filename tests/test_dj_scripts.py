@@ -1,10 +1,13 @@
 from datetime import datetime
+from unittest.mock import patch
 
-from app.config import AppConfig, DJPersona, StationConfig
+from app.config import AppConfig, AdBreakPreferences, DJPersona, StationConfig
 from app.dj_scripts import (
+    DEFAULT_AD_PROMPT_TEMPLATE,
     DEFAULT_DJ_PROMPT_TEMPLATE,
     _build_prompt,
     active_station,
+    generate_ad_script,
     pick_active_persona,
 )
 from app.models import Track
@@ -159,3 +162,31 @@ def test_active_station_falls_back_when_no_match():
     cfg = AppConfig(station=station)
     eff = active_station(station, cfg, now=MONDAY_NOON)  # Monday, persona only Sunday
     assert eff.dj_name == "Default Dan"
+
+
+# ── Ad script generation ──────────────────────────────────────────────────────
+
+def test_generate_ad_script_returns_text_from_openai_call():
+    cfg = AppConfig(station=StationConfig(name="Test FM", format="Late Night"))
+    with patch("app.dj_scripts._call_openai_text", return_value="Try Acme Beans, the bean for every scene.") as call:
+        result = generate_ad_script(cfg.station, cfg)
+    assert result == "Try Acme Beans, the bean for every scene."
+    # Prompt is built and includes station name
+    sent_prompt = call.call_args[0][0]
+    assert "Test FM" in sent_prompt
+
+
+def test_generate_ad_script_uses_custom_template():
+    cfg = AppConfig(
+        station=StationConfig(name="Custom FM"),
+        alerts={"ads": AdBreakPreferences(prompt_template="AD for {station_name}")},
+    )
+    with patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
+        generate_ad_script(cfg.station, cfg)
+    assert call.call_args[0][0] == "AD for Custom FM"
+
+
+def test_generate_ad_script_returns_none_on_openai_failure():
+    cfg = AppConfig(station=StationConfig())
+    with patch("app.dj_scripts._call_openai_text", return_value=None):
+        assert generate_ad_script(cfg.station, cfg) is None
