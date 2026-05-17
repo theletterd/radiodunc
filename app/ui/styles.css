@@ -19,8 +19,8 @@
 body {
   margin: 0;
   font-family: 'Inter', system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: 16px;
+  line-height: 1.55;
   background: var(--bg);
   color: var(--text);
 }
@@ -57,7 +57,7 @@ main {
 /* ── Station header ── */
 h1#stationName {
   font-family: 'Playfair Display', Georgia, serif;
-  font-size: 2.4rem;
+  font-size: 2.8rem;
   font-weight: 700;
   margin: 0 0 4px;
   background: linear-gradient(135deg, #fff 30%, var(--pink) 100%);
@@ -68,7 +68,7 @@ h1#stationName {
 }
 
 #stationMeta {
-  font-size: 0.85rem;
+  font-size: 0.95rem;
   color: var(--muted);
   margin: 0 0 22px;
   font-style: italic;
@@ -85,12 +85,12 @@ h1#stationName {
 }
 
 .card h3 {
-  font-size: 0.65rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 /* ── Now Playing card — glows when active ── */
@@ -111,9 +111,9 @@ h1#stationName {
 }
 
 #nowPlaying {
-  font-size: 1.05rem;
+  font-size: 1.2rem;
   font-weight: 500;
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   color: var(--text);
   transition: color 0.3s;
 }
@@ -146,13 +146,13 @@ h1#stationName {
 /* ── Inputs ── */
 input {
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 13px;
   border-radius: 9px;
   border: 1px solid var(--border);
   background: var(--surface2);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.88rem;
+  font-size: 0.95rem;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
@@ -171,13 +171,13 @@ input[type="range"] {
 
 /* ── Buttons ── */
 button {
-  padding: 8px 14px;
+  padding: 9px 16px;
   border-radius: 9px;
   border: 1px solid var(--border-hi);
   background: var(--surface2);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.1s, box-shadow 0.15s;
@@ -246,7 +246,7 @@ ul {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 2px;
+  padding: 7px 4px;
   border-top: 2px solid transparent;
   border-radius: 6px;
   transition: border-color 0.1s, opacity 0.15s, background 0.15s;
@@ -264,7 +264,7 @@ ul {
 
 #queueList li span.track-label {
   flex: 1;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -275,10 +275,10 @@ ul {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--border);
   gap: 8px;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
 }
 
 #searchResults li:last-child { border-bottom: none; }

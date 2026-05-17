@@ -9,6 +9,10 @@
 - ✅ When an ad break is coming up, DJ is told to tease it (`ad_break_follows` flag → prompt block)
 - ✅ Injected tracks flagged as audience requests (`requested: true` in queue item → `reason = "request"` in prompt)
 
+## UI — library panel
+- [ ] Hide the scanner behind a collapsible dropdown (it's rarely used)
+- [ ] Add a "Library status" widget to the sidebar showing track count, last scan time, etc.
+
 ## UI — queue
 - ✅ Queue shows all upcoming tracks (was capped at 5), scrollable with max-height
 - ✅ Queue start size bumped to 30 tracks
