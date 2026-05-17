@@ -90,6 +90,22 @@ def test_no_reason_omits_reason_block():
     assert "pressed Skip" not in prompt
 
 
+def test_prompt_includes_current_time_and_weekday():
+    import re
+    cfg = _make_config(name="Time FM")
+    prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    # e.g. "Local time right now: 3:47 PM on Sunday."
+    assert "Local time right now:" in prompt
+    assert re.search(r"\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", prompt)
+
+
+def test_custom_template_can_use_time_placeholders():
+    cfg = _make_config(template="It's {current_time} on {current_weekday}.", name="T FM")
+    prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert prompt.startswith("It's ")
+    assert " on " in prompt
+
+
 # ── DJ persona / roster scheduling ────────────────────────────────────────────
 
 MONDAY_NOON = datetime(2026, 5, 18, 12, 0)       # weekday() == 0

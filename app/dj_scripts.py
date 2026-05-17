@@ -69,6 +69,7 @@ DEFAULT_DJ_PROMPT_TEMPLATE = """\
 Write a {max_sentences}-sentence radio DJ transition for {station_name}.
 DJ: {dj_name} ({dj_style}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
+Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
 Up next: {next_track}.
 {reason_block}{weather_block}{news_block}{ad_block}\
@@ -124,6 +125,13 @@ def _build_prompt(
             "Acknowledge that lightly and tee up the next one with extra enthusiasm.\n"
         )
 
+    try:
+        now = datetime.now(ZoneInfo(config.alerts.local_time_zone))
+    except Exception:  # noqa: BLE001
+        now = datetime.now()
+    current_time = now.strftime("%-I:%M %p")
+    current_weekday = WEEKDAYS[now.weekday()].capitalize()
+
     fields = {
         "max_sentences": payload.max_sentences,
         "station_name": station.name,
@@ -135,6 +143,8 @@ def _build_prompt(
         "dj_style": station.dj_style,
         "previous_track": _track_ref(previous_track),
         "next_track": _track_ref(next_track),
+        "current_time": current_time,
+        "current_weekday": current_weekday,
         "weather_block": weather_block,
         "news_block": news_block,
         "ad_block": ad_block,

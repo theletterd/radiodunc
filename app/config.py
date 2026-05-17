@@ -113,7 +113,8 @@ class StationConfig(BaseModel):
             "Optional override for the DJ transition prompt. Supports placeholders: "
             "{max_sentences}, {station_name}, {station_format}, {station_description}, "
             "{station_era}, {station_genre_focus}, {dj_name}, {dj_style}, "
-            "{previous_track}, {next_track}, {weather_block}, {news_block}, {ad_block}. "
+            "{previous_track}, {next_track}, {current_time}, {current_weekday}, "
+            "{weather_block}, {news_block}, {ad_block}, {reason_block}. "
             "Leave null to use the built-in default."
         ),
     )
