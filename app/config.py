@@ -70,7 +70,7 @@ class AppConfig(BaseModel):
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
     openai_tts_model: str = "gpt-4o-mini-tts"
-    openai_tts_voice: str = "alloy"
+    openai_tts_voice: str = "verse"
     station_generation_count: int = 6
     station_generation_seed: int | None = None
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)
