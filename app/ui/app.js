@@ -83,11 +83,21 @@ function clearAutoTrigger() {
 
 function scheduleAutoTrigger(trackDurationSec) {
   clearAutoTrigger();
-  if (!trackDurationSec) return;
+  if (!trackDurationSec || !Number.isFinite(trackDurationSec)) return;
   const elapsed  = curSlot().el.currentTime || 0;
   const delaySec = Math.max(0, trackDurationSec - elapsed - AUTO_PREROLL_S);
-  console.log(`[audio] auto-trigger in ${delaySec.toFixed(1)}s`);
+  console.log(`[audio] auto-trigger in ${delaySec.toFixed(1)}s (dur=${trackDurationSec.toFixed(1)}s)`);
   autoTriggerTimer = setTimeout(() => triggerTransition('auto'), delaySec * 1000);
+}
+
+// Fire cb as soon as the element has duration info. Works whether metadata
+// has already loaded (calls immediately) or hasn't yet (waits for the event).
+function whenDuration(el, cb) {
+  if (el.duration && Number.isFinite(el.duration)) {
+    cb();
+  } else {
+    el.addEventListener('loadedmetadata', cb, { once: true });
+  }
 }
 
 // ── Core crossfade transition ────────────────────────────────────────────────
@@ -239,12 +249,13 @@ async function triggerTransition(reason) {
       oldSlot.el.src = '';
     }, cleanupMs);
 
-    // 7. Schedule auto-trigger for the new track via loadedmetadata.
+    // 7. Schedule auto-trigger for the new track.
+    //    By the time the next track starts playing, metadata is almost always
+    //    loaded already (we set src early during the transition). whenDuration
+    //    handles both cases — fires immediately or waits for loadedmetadata.
     const triggerSetupMs = Math.max(0, (trackGainStart + 0.3 - ctx.currentTime) * 1000);
     setTimeout(() => {
-      curSlot().el.addEventListener('loadedmetadata', () => {
-        scheduleAutoTrigger(curSlot().el.duration);
-      }, { once: true });
+      whenDuration(curSlot().el, () => scheduleAutoTrigger(curSlot().el.duration));
     }, triggerSetupMs);
 
     // 8. Refresh display after the new track has settled.
@@ -287,9 +298,7 @@ async function startPlayback() {
   cur.gainNode.gain.setValueAtTime(0, ctx.currentTime);
   cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
 
-  cur.el.addEventListener('loadedmetadata', () => {
-    scheduleAutoTrigger(cur.el.duration);
-  }, { once: true });
+  whenDuration(cur.el, () => scheduleAutoTrigger(cur.el.duration));
 
   renderAll();
 }
