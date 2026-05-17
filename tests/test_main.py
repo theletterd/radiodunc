@@ -20,6 +20,8 @@ from app.main import (
     list_stations,
     list_tracks,
     scan_library_endpoint,
+    search_library,
+    queue_inject,
     update_config,
     update_player_state,
     generate_station_dj_script,
@@ -34,7 +36,7 @@ from app.main import (
     media_dj_clip,
 )
 from app.models import DJClip, FavoriteStation, PlayerState, RecentStation, Station, Track
-from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, DJScriptResponse, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, StationGenerateRequest
+from app.schemas import DJClipSynthesizeRequest, DJScriptGenerateRequest, DJScriptResponse, FavoriteStationRequest, LibraryScanRequest, PlayerPlayRequest, PlayerStateUpdateRequest, QueueGenerateRequest, QueueInjectRequest, StationGenerateRequest
 
 
 def _make_db_session():
@@ -625,3 +627,121 @@ def test_delete_queue_item_rejects_out_of_range():
     with pytest.raises(HTTPException) as exc:
         delete_queue_item(5, db)
     assert exc.value.status_code == 404
+# ── /library/search tests ─────────────────────────────────────────────────────
+
+def test_search_library_returns_matching_tracks():
+    db = _make_db_session()
+    db.add_all([
+        Track(file_path="/m/a.mp3", title="Blue Monday", artist="New Order"),
+        Track(file_path="/m/b.mp3", title="Blue Lines", artist="Massive Attack"),
+        Track(file_path="/m/c.mp3", title="Something Else", artist="Other Artist"),
+    ])
+    db.commit()
+
+    results = search_library(q="blue", db=db)
+    titles = {t.title for t in results}
+    assert titles == {"Blue Monday", "Blue Lines"}
+    assert all(t.id is not None for t in results)
+
+
+def test_search_library_matches_artist():
+    db = _make_db_session()
+    db.add_all([
+        Track(file_path="/m/x.mp3", title="A Song", artist="Radiohead"),
+        Track(file_path="/m/y.mp3", title="Another Song", artist="Radio GA GA Band"),
+        Track(file_path="/m/z.mp3", title="Unrelated", artist="Unrelated Artist"),
+    ])
+    db.commit()
+
+    results = search_library(q="radio", db=db)
+    assert len(results) == 2
+
+
+def test_search_library_empty_query_returns_empty():
+    db = _make_db_session()
+    db.add(Track(file_path="/m/a.mp3", title="Something", artist="Artist"))
+    db.commit()
+
+    assert search_library(q="", db=db) == []
+    assert search_library(q="   ", db=db) == []
+
+
+def test_search_library_limits_to_ten_results():
+    db = _make_db_session()
+    for i in range(15):
+        db.add(Track(file_path=f"/m/{i}.mp3", title=f"Song {i}", artist="Same Artist"))
+    db.commit()
+
+    results = search_library(q="same artist", db=db)
+    assert len(results) <= 10
+
+
+# ── /player/queue/inject tests ────────────────────────────────────────────────
+
+def test_queue_inject_inserts_after_current(monkeypatch, tmp_path):
+    db = _make_db_session()
+    track1 = Track(file_path="/m/1.mp3", title="First", artist="A")
+    track2 = Track(file_path="/m/2.mp3", title="Second", artist="B")
+    track3 = Track(file_path="/m/3.mp3", title="Third", artist="C")
+    db.add_all([track1, track2, track3])
+    db.commit()
+    db.refresh(track1); db.refresh(track2); db.refresh(track3)
+
+    queue = [
+        {"type": "track", "track_id": track1.id, "label": "A - First"},
+        {"type": "track", "track_id": track3.id, "label": "C - Third"},
+    ]
+    state = PlayerState(is_playing=True, queue_json=json.dumps(queue), queue_index=0)
+    db.add(state)
+    db.commit()
+
+    result = queue_inject(QueueInjectRequest(track_id=track2.id), db)
+
+    assert result.position == 1
+    assert result.label == "B - Second"
+    assert result.queue_depth == 3
+
+    db.refresh(state)
+    updated_queue = json.loads(state.queue_json)
+    assert len(updated_queue) == 3
+    assert updated_queue[1]["track_id"] == track2.id
+
+
+def test_queue_inject_track_not_found_raises_404():
+    db = _make_db_session()
+    state = PlayerState(is_playing=True, queue_json='[{"type":"track","track_id":1,"label":"X"}]', queue_index=0)
+    db.add(state)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        queue_inject(QueueInjectRequest(track_id=9999), db)
+    assert exc.value.status_code == 404
+
+
+def test_queue_inject_no_queue_raises_400():
+    db = _make_db_session()
+    track = Track(file_path="/m/t.mp3", title="T", artist="A")
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+
+    # No PlayerState at all
+    with pytest.raises(HTTPException) as exc:
+        queue_inject(QueueInjectRequest(track_id=track.id), db)
+    assert exc.value.status_code == 400
+
+
+def test_queue_inject_empty_queue_raises_400():
+    db = _make_db_session()
+    track = Track(file_path="/m/t.mp3", title="T", artist="A")
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+
+    state = PlayerState(is_playing=True, queue_json='[]', queue_index=0)
+    db.add(state)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        queue_inject(QueueInjectRequest(track_id=track.id), db)
+    assert exc.value.status_code == 400

@@ -145,3 +145,13 @@ class QueuePreviewResponse(BaseModel):
     queue_depth: int
 
 
+class QueueInjectRequest(BaseModel):
+    track_id: int
+
+
+class QueueInjectResponse(BaseModel):
+    position: int
+    label: str
+    queue_depth: int
+
+
