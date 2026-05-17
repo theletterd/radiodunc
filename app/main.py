@@ -502,6 +502,8 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     )
     return PlayerNextResponse(
         current_track_url=f"/media/track/{next_track.id}",
+        current_track_metadata=TrackOut.model_validate(next_track),
+        current_track_label=_track_label(next_track),
         dj_clip_url=f"/media/dj-clip/{clip.script_hash}",
         ad_clip_url=ad_clip_url,
         ad_script=ad_script_text,

@@ -105,11 +105,13 @@ class DJClipResponse(BaseModel):
 
 class PlayerNextResponse(BaseModel):
     current_track_url: str
+    current_track_metadata: TrackOut  # the new current track (what's playing after the transition)
+    current_track_label: str          # display label (artist - title or filename fallback)
     dj_clip_url: str
-    ad_clip_url: str | None = None  # plays right after the DJ clip when an ad fires
+    ad_clip_url: str | None = None    # plays right after the DJ clip when an ad fires
     ad_script: str | None = None
     next_track_url: str | None = None
-    next_track_metadata: TrackOut | None = None
+    next_track_metadata: TrackOut | None = None  # look-ahead (N+2) for prefetch hints
     dj_script: str
 
 

@@ -154,6 +154,11 @@ async function triggerTransition(reason) {
       return;
     }
 
+    // Optimistically update the now-playing label so the UI doesn't lag the audio.
+    if (next.current_track_label) {
+      document.getElementById('nowPlaying').textContent = next.current_track_label;
+    }
+
     // 3. Decode DJ clip and start loading next track (parallel work).
     //    The gainNode on the alt slot is already at 0 from the previous transition
     //    or from init; just make sure.
@@ -219,6 +224,13 @@ async function triggerTransition(reason) {
       adSrc.start(adStart);
       djEnd = adStart + adBuf.duration; // next track waits until after the ad
       console.log(`[audio] AD clip: start=${adStart.toFixed(3)} dur=${adBuf.duration.toFixed(2)}`);
+
+      // Swap label to an Ad badge for the ad's duration, then restore.
+      const trackLabel = next.current_track_label || document.getElementById('nowPlaying').textContent;
+      const adShowMs   = Math.max(0, (adStart - ctx.currentTime) * 1000);
+      const adHideMs   = Math.max(0, (djEnd - ctx.currentTime) * 1000);
+      setTimeout(() => { document.getElementById('nowPlaying').textContent = '📻 Ad break'; }, adShowMs);
+      setTimeout(() => { document.getElementById('nowPlaying').textContent = trackLabel; }, adHideMs);
     }
 
     // 5. Schedule next track gain ramp and el.play().
