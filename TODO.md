@@ -13,19 +13,6 @@
 
 ## Station / DJ personality
 
-- [ ] **Per-day DJ personas** — assign different DJ names / voices / styles to different
-  days of the week (or time-of-day slots). Possible approach: a `dj_roster` list in
-  config with `days` and `hours` fields; `player_next` picks the active DJ from the
-  roster.
-
-- [ ] **Adjustable base DJ prompt** — expose `dj_style`, `dj_name`, and the prompt
-  template in `radio_config.json` so you can tune the DJ's tone without touching code.
-
-- [ ] **DJ reacts to "Next" skips** — when the user manually presses Next, pass a
-  `reason: "skip"` flag to `POST /player/next`. The backend generates a different script
-  style ("sounds like our listeners didn't like that one!") vs. a natural end-of-track
-  transition.
-
 ---
 
 ## Content enrichment
@@ -66,3 +53,6 @@
 - ✅ Track request search bar with queue inject
 - ✅ Removed `ADMIN_API_TOKEN` auth (local app)
 - ✅ Single curated station — collapsed multi-station model into config-driven `StationConfig`
+- ✅ Adjustable base DJ prompt (`dj_prompt_template` with placeholder substitution)
+- ✅ Per-day DJ personas (`dj_roster` with day/hour scheduling)
+- ✅ DJ reacts to manual Next skips (`reason: "skip"` flag)
