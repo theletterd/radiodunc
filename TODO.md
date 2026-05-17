@@ -1,0 +1,71 @@
+# RadioDunc — Backlog
+
+## UX / player polish
+
+- [ ] **Transition "now playing" display** — show incoming track title/artist in the UI
+  as soon as `POST /player/next` returns, rather than waiting for the server state poll.
+
+- [ ] **Show filename as fallback label** — when `artist`/`title` metadata is missing,
+  the now-playing label and queue display show "Unknown - Unknown". Fall back to the
+  bare filename (strip path and extension) so the UI is always readable.
+
+---
+
+## Station / DJ personality
+
+- [ ] **Single curated station** — collapse the multi-station model into one well-defined
+  station with a clear personality, era, and genre focus, configured directly in
+  `radio_config.json` rather than auto-generated.
+
+- [ ] **Per-day DJ personas** — assign different DJ names / voices / styles to different
+  days of the week (or time-of-day slots). Possible approach: a `dj_roster` list in
+  config with `days` and `hours` fields; `player_next` picks the active DJ from the
+  roster.
+
+- [ ] **Adjustable base DJ prompt** — expose `dj_style`, `dj_name`, and the prompt
+  template in `radio_config.json` so you can tune the DJ's tone without touching code.
+
+- [ ] **DJ reacts to "Next" skips** — when the user manually presses Next, pass a
+  `reason: "skip"` flag to `POST /player/next`. The backend generates a different script
+  style ("sounds like our listeners didn't like that one!") vs. a natural end-of-track
+  transition.
+
+---
+
+## Content enrichment
+
+- [ ] **Real weather reports** — `dj_scripts.py` already has `include_weather` support
+  wired to open-meteo; just enable it by default and pass the listener's location from
+  config.
+
+- [ ] **News alerts** — pull a short headline feed (RSS or a lightweight LLM web search)
+  and inject a 1-sentence news item into the DJ script on a configurable cadence
+  (e.g. every 3rd break).
+
+- [ ] **LLM-generated ad breaks** — synthesise fake ads with a voice *different from the
+  DJ* (pick a second voice from the OpenAI roster). Trigger on a configurable cadence
+  (e.g. every 4th track). Backend: generate script → synthesise with alt voice →
+  return as a special `ad_clip_url` alongside `dj_clip_url`.
+
+---
+
+## One-ahead prefetch (performance)
+
+- [ ] **Pre-generate next DJ clip in background** — after `player_next` returns, kick off
+  a background thread that generates the *following* DJ clip (N+1 → N+2 transition) and
+  caches it by hash. Pressing Next a second time would then return immediately with a
+  cached clip instead of waiting 1–3 s for TTS.
+
+---
+
+## Done
+
+- ✅ End of queue handled gracefully (clean stop + message)
+- ✅ Auto-trigger uses correct duration (loadedmetadata only)
+- ✅ Dead `DJ_OVERLAP_S` constant removed
+- ✅ Volume slider persists across reload (localStorage)
+- ✅ Next button visual feedback (disabled + "Loading…")
+- ✅ DJ / music volume balance (`DJ_GAIN = 1.8`)
+- ✅ Upcoming queue display with veto buttons
+- ✅ Track request search bar with queue inject
+- ✅ Removed `ADMIN_API_TOKEN` auth (local app)
