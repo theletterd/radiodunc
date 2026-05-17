@@ -446,7 +446,13 @@ document.getElementById('playBtn').addEventListener('click', async () => {
 
 document.getElementById('nextBtn').addEventListener('click', () => {
   if (!ctx || transitioning) return;
-  triggerTransition('user');
+  const btn = document.getElementById('nextBtn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  triggerTransition('user').finally(() => {
+    btn.disabled = false;
+    btn.textContent = 'Next';
+  });
 });
 
 document.getElementById('stopBtn').addEventListener('click', () => stopPlayback());
