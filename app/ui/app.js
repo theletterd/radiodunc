@@ -428,6 +428,50 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && serverState?.is_playing) refreshServerState();
 });
 
+// ── Track request search ──────────────────────────────────────────────────────
+let _searchTimer = null;
+
+function _renderSearchResults(tracks) {
+  const list = document.getElementById('searchResults');
+  list.innerHTML = '';
+  tracks.forEach(track => {
+    const label = `${track.artist || 'Unknown'} — ${track.title || 'Untitled'}`;
+    const li = document.createElement('li');
+    li.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #eee;';
+    const span = document.createElement('span');
+    span.textContent = label;
+    const btn = document.createElement('button');
+    btn.textContent = 'Add next';
+    btn.style.cssText = 'margin-left:8px; padding:2px 8px; font-size:0.85em;';
+    btn.onclick = async () => {
+      try {
+        await api('/player/queue/inject', { method: 'POST', body: JSON.stringify({ track_id: track.id }) });
+        document.getElementById('trackSearch').value = '';
+        document.getElementById('searchResults').innerHTML = '';
+        serverState = await api('/player/status');
+        renderAll();
+      } catch (err) {
+        alert(`Could not add track: ${err.message}`);
+      }
+    };
+    li.appendChild(span);
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+document.getElementById('trackSearch').addEventListener('input', (e) => {
+  clearTimeout(_searchTimer);
+  const q = e.target.value.trim();
+  if (!q) { document.getElementById('searchResults').innerHTML = ''; return; }
+  _searchTimer = setTimeout(async () => {
+    try {
+      const results = await api(`/library/search?q=${encodeURIComponent(q)}`);
+      _renderSearchResults(results);
+    } catch (_) {}
+  }, 300);
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   const config = await api('/config');

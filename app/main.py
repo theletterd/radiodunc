@@ -19,6 +19,8 @@ from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
     QueueGenerateRequest,
+    QueueInjectRequest,
+    QueueInjectResponse,
     QueueResponse,
     PlayerStateResponse,
     PlayerStateUpdateRequest,
@@ -178,6 +180,45 @@ def scan_library_endpoint(payload: LibraryScanRequest, db: Session = Depends(get
 @app.get("/tracks", response_model=list[TrackOut])
 def list_tracks(db: Session = Depends(get_db)):
     return db.query(Track).order_by(Track.artist.asc(), Track.album.asc(), Track.title.asc()).all()
+
+
+@app.get("/library/search", response_model=list[TrackOut])
+def search_library(q: str = "", db: Session = Depends(get_db)):
+    if not q.strip():
+        return []
+    pattern = f"%{q}%"
+    return (
+        db.query(Track)
+        .filter(Track.title.ilike(pattern) | Track.artist.ilike(pattern))
+        .order_by(Track.artist.asc(), Track.title.asc())
+        .limit(10)
+        .all()
+    )
+
+
+@app.post("/player/queue/inject", response_model=QueueInjectResponse)
+def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
+    track = db.query(Track).filter(Track.id == payload.track_id).first()
+    if track is None:
+        raise HTTPException(status_code=404, detail=f"Track {payload.track_id} not found")
+
+    state = db.query(PlayerState).order_by(PlayerState.id.asc()).first()
+    if state is None or not state.queue_json:
+        raise HTTPException(status_code=400, detail="No active player queue")
+
+    queue = json.loads(state.queue_json)
+    if not queue:
+        raise HTTPException(status_code=400, detail="Queue is empty")
+
+    label = f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"
+    item = {"type": "track", "track_id": track.id, "label": label}
+    insert_at = state.queue_index + 1
+    queue.insert(insert_at, item)
+    state.queue_json = json.dumps(queue)
+    db.commit()
+
+    _log_event("queue.inject", track_id=track.id, position=insert_at, queue_depth=len(queue))
+    return QueueInjectResponse(position=insert_at, label=label, queue_depth=len(queue))
 
 
 @app.post("/stations/generate")

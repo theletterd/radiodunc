@@ -133,3 +133,13 @@ class PlayerNextResponse(BaseModel):
     dj_script: str
 
 
+class QueueInjectRequest(BaseModel):
+    track_id: int
+
+
+class QueueInjectResponse(BaseModel):
+    position: int
+    label: str
+    queue_depth: int
+
+
