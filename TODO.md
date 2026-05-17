@@ -10,14 +10,15 @@
 - ✅ Injected tracks flagged as audience requests (`requested: true` in queue item → `reason = "request"` in prompt)
 
 ## UI — queue
-- [ ] Make the queue display longer (show more upcoming tracks)
+- ✅ Queue shows all upcoming tracks (was capped at 5), scrollable with max-height
+- ✅ Queue start size bumped to 30 tracks
 - [ ] Drag-to-reorder queue items
 - [ ] "Add more" button to extend the queue
 
 ## UI — layout / bugs
-- [ ] "Request a track" search bar overflows the container on the right — needs a max-width / overflow fix
-- [ ] Hitting 'x' on the up-next list removes the item but shows an error in the UI — handle the 204/empty response gracefully
-- [ ] Ad break UI badge disappears too early — extend the hide timer to match actual ad audio duration
+- ✅ Search bar overflow fixed (box-sizing: border-box on inputs globally)
+- ✅ Queue delete 204 response no longer throws a JS error (api() skips JSON parse on empty)
+- ✅ Ad break badge timer is cancelled on new transition — no more stale early resets
 
 ## Ad breaks
 - ✅ Cache ad clips forever; configurable `pool_size` (default 100), picks randomly from pool once full

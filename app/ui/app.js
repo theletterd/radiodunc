@@ -28,6 +28,7 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 // ── Transition guard ─────────────────────────────────────────────────────────
 let transitioning    = false;
 let autoTriggerTimer = null;
+let adBadgeTimer     = null;  // setTimeout ID for hiding the ad badge
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function savedVolume()    { return Number(localStorage.getItem('volume') ?? serverState?.volume ?? 80); }
@@ -43,6 +44,7 @@ async function api(path, opts = {}) {
     cache: isGet ? 'no-store' : opts.cache,
   });
   if (!resp.ok) throw new Error(`${method} ${path} → ${resp.status}: ${await resp.text()}`);
+  if (resp.status === 204 || resp.headers.get('content-length') === '0') return null;
   return resp.json();
 }
 
@@ -259,11 +261,16 @@ async function triggerTransition(reason) {
       console.log(`[audio] AD clip: start=${adStart.toFixed(3)} dur=${adBuf.duration.toFixed(2)}`);
 
       // Swap label to an Ad badge for the ad's duration, then restore.
+      // Cancel any stale badge timer from a previous transition first.
+      clearTimeout(adBadgeTimer);
       const trackLabel = next.current_track_label || document.getElementById('nowPlaying').textContent;
       const adShowMs   = Math.max(0, (adStart - ctx.currentTime) * 1000);
-      const adHideMs   = Math.max(0, (djEnd - ctx.currentTime) * 1000);
+      const adHideMs   = Math.max(0, (djEnd   - ctx.currentTime) * 1000);
       setTimeout(() => { document.getElementById('nowPlaying').textContent = '📻 Ad break'; }, adShowMs);
-      setTimeout(() => { document.getElementById('nowPlaying').textContent = trackLabel; }, adHideMs);
+      adBadgeTimer = setTimeout(() => {
+        document.getElementById('nowPlaying').textContent = trackLabel;
+        adBadgeTimer = null;
+      }, adHideMs);
     }
 
     // 5. Schedule next track gain ramp and el.play().
@@ -320,7 +327,7 @@ async function startPlayback() {
 
   const resp = await api('/player/play', {
     method: 'POST',
-    body: JSON.stringify({ queue_size: 12 }),
+    body: JSON.stringify({ queue_size: 30 }),
   });
   serverState = resp.state;
   if (!serverState.current_track?.id) throw new Error('Server returned no current track');

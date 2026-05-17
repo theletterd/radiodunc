@@ -8,8 +8,8 @@
     .station.active { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8 inset; }
     .muted { color: #94a3b8; }
     .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    input, button { border-radius: 8px; border: 1px solid #334155; background: #020617; color: #e5e7eb; }
-    input { padding: 8px; }
+    input, button { border-radius: 8px; border: 1px solid #334155; background: #020617; color: #e5e7eb; box-sizing: border-box; }
+    input { padding: 8px; width: 100%; }
     button { padding: 8px 12px; cursor: pointer; }
     button.primary { background: #0ea5e9; color: #082f49; border-color: #38bdf8; font-weight: 600; }
     ul { margin: 8px 0; padding-left: 18px; }

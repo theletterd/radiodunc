@@ -291,7 +291,7 @@ def player_queue(db: Session = Depends(get_db)):
     queue = json.loads(state.queue_json) if state.queue_json else []
     current_pos = state.queue_index
     upcoming_items: list[QueueItemOut] = []
-    for i in range(current_pos + 1, min(current_pos + 6, len(queue))):
+    for i in range(current_pos + 1, len(queue)):
         item = queue[i]
         if item.get("type") == "track" and item.get("track_id") is not None:
             upcoming_items.append(
