@@ -9,26 +9,9 @@
   the now-playing label and queue display show "Unknown - Unknown". Fall back to the
   bare filename (strip path and extension) so the UI is always readable.
 
----
-
-## Station / DJ personality
-
----
-
-## Content enrichment
-
-- [ ] **Real weather reports** — `dj_scripts.py` already has `include_weather` support
-  wired to open-meteo; just enable it by default and pass the listener's location from
-  config.
-
-- [ ] **News alerts** — pull a short headline feed (RSS or a lightweight LLM web search)
-  and inject a 1-sentence news item into the DJ script on a configurable cadence
-  (e.g. every 3rd break).
-
-- [ ] **LLM-generated ad breaks** — synthesise fake ads with a voice *different from the
-  DJ* (pick a second voice from the OpenAI roster). Trigger on a configurable cadence
-  (e.g. every 4th track). Backend: generate script → synthesise with alt voice →
-  return as a special `ad_clip_url` alongside `dj_clip_url`.
+- [ ] **Display "Ad break" indicator in UI** — when `PlayerNextResponse.ad_clip_url`
+  is present, show a brief "Ad break" badge in the now-playing area so the listener
+  knows what the second voice is.
 
 ---
 
@@ -56,3 +39,6 @@
 - ✅ Adjustable base DJ prompt (`dj_prompt_template` with placeholder substitution)
 - ✅ Per-day DJ personas (`dj_roster` with day/hour scheduling)
 - ✅ DJ reacts to manual Next skips (`reason: "skip"` flag)
+- ✅ Real weather reports on a cadence (`alerts.weather.every_n_breaks`)
+- ✅ News headlines from RSS on a cadence (`alerts.news.rss_url`, `every_n_breaks`)
+- ✅ LLM-generated ad breaks with a second voice (`alerts.ads`, default voice "echo")
