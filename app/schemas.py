@@ -62,6 +62,13 @@ class PlayerPlayRequest(BaseModel):
     seed: int | None = None
 
 
+class PlayerNextRequest(BaseModel):
+    reason: str | None = Field(
+        default=None,
+        description="Optional hint about why next was triggered: 'skip' (user clicked Next) or 'auto' (track ended).",
+    )
+
+
 class PlayerActionResponse(BaseModel):
     state: PlayerStateResponse
     action: str
@@ -74,6 +81,7 @@ class DJScriptGenerateRequest(BaseModel):
     include_news: bool = False
     include_fake_ad: bool = False
     max_sentences: int = Field(default=3, ge=1, le=3)
+    reason: str | None = None  # "skip" = user skipped previous track; "auto" or None = natural end
 
 
 class DJScriptResponse(BaseModel):

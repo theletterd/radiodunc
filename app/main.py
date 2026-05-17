@@ -23,6 +23,7 @@ from .schemas import (
     PlayerStateUpdateRequest,
     PlayerPlayRequest,
     PlayerActionResponse,
+    PlayerNextRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
     DJClipSynthesizeRequest,
@@ -364,9 +365,10 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/player/next", response_model=PlayerNextResponse)
-def player_next(db: Session = Depends(get_db)):
+def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
-    _log_event("player.next.requested", current_index=state.queue_index)
+    reason = payload.reason if payload else None
+    _log_event("player.next.requested", current_index=state.queue_index, reason=reason)
 
     if not state.queue_json:
         raise HTTPException(status_code=400, detail="No queue available")
@@ -399,7 +401,7 @@ def player_next(db: Session = Depends(get_db)):
     station = active_station(config.station, config)
     script_response = generate_dj_script(
         station,
-        DJScriptGenerateRequest(max_sentences=3),
+        DJScriptGenerateRequest(max_sentences=3, reason=reason),
         previous_track,
         next_track,
         config=config,

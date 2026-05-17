@@ -70,7 +70,7 @@ DJ: {dj_name} ({dj_style}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
 We just heard: {previous_track}.
 Up next: {next_track}.
-{weather_block}{news_block}{ad_block}\
+{reason_block}{weather_block}{news_block}{ad_block}\
 Return plain text only — no headings, no markdown."""
 
 
@@ -101,6 +101,12 @@ def _build_prompt(
             weather_block = f"Weather context: include a brief check for {location}.\n"
     news_block = "News context: include a one-sentence top-of-hour news tease.\n" if payload.include_news else ""
     ad_block = "Ad context: include a brief sponsor-style ad break line.\n" if payload.include_fake_ad else ""
+    reason_block = ""
+    if payload.reason == "skip":
+        reason_block = (
+            "Reason: the listener pressed Skip on the previous track. "
+            "Acknowledge that lightly and tee up the next one with extra enthusiasm.\n"
+        )
 
     fields = {
         "max_sentences": payload.max_sentences,
@@ -116,6 +122,7 @@ def _build_prompt(
         "weather_block": weather_block,
         "news_block": news_block,
         "ad_block": ad_block,
+        "reason_block": reason_block,
     }
     template = station.dj_prompt_template or DEFAULT_DJ_PROMPT_TEMPLATE
     try:
@@ -196,11 +203,16 @@ def generate_dj_script(
     next_track: Track | None,
     config: AppConfig | None = None,
 ) -> DJScriptResponse:
-    sentence_pool: list[str] = [
+    sentence_pool: list[str] = []
+    if payload.reason == "skip":
+        sentence_pool.append(
+            f"Sounds like {_track_ref(previous_track)} wasn't doing it for you — let's try this instead."
+        )
+    sentence_pool.extend([
         f"You're listening to {station.name} with {station.dj_name}, keeping it {station.dj_style} tonight.",
         f"We just heard {_track_ref(previous_track)}, and up next is {_track_ref(next_track)}.",
         f"{station.tagline}",
-    ]
+    ])
 
     if payload.include_weather:
         location = config.alerts.weather_location if config else "your area"

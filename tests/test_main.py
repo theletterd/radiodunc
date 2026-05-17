@@ -245,7 +245,7 @@ def test_player_play_next_stop_flow(monkeypatch, tmp_path):
     assert played.state.current_track is not None
     assert played.state.current_track.title == "One"
 
-    nexted = player_next(db)
+    nexted = player_next(None, db)
     assert nexted.current_track_url == f"/media/track/{track2.id}"
     assert nexted.dj_clip_url == "/media/dj-clip/testhash001"
 
@@ -272,7 +272,7 @@ def test_player_next_returns_urls_and_advances_queue(monkeypatch, tmp_path):
     _fake_dj_next(db, "Next FM", "DJ Next", tmp_path, monkeypatch)
 
     player_play(PlayerPlayRequest(queue_size=3), db)
-    result = player_next(db)
+    result = player_next(None, db)
 
     assert result.current_track_url == f"/media/track/{track2.id}"
     assert result.dj_clip_url == "/media/dj-clip/testhash001"
@@ -303,7 +303,7 @@ def test_player_next_at_end_of_queue_raises_400(monkeypatch, tmp_path):
     player_play(PlayerPlayRequest(queue_size=1), db)
 
     with pytest.raises(HTTPException) as exc:
-        player_next(db)
+        player_next(None, db)
     assert exc.value.status_code == 400
 
 
@@ -314,7 +314,7 @@ def test_player_next_no_queue_raises_400():
     db.commit()
 
     with pytest.raises(HTTPException) as exc:
-        player_next(db)
+        player_next(None, db)
     assert exc.value.status_code == 400
 
 

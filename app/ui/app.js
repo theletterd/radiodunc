@@ -124,7 +124,10 @@ async function triggerTransition(reason) {
     // 2. Advance queue on server, get DJ clip + next track URLs.
     let next;
     try {
-      next = await api('/player/next', { method: 'POST' });
+      next = await api('/player/next', {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason === 'user' ? 'skip' : 'auto' }),
+      });
     } catch (err) {
       const isEndOfQueue = err.message?.includes('400');
       if (isEndOfQueue) {

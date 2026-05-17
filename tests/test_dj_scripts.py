@@ -73,6 +73,20 @@ def test_optional_blocks_appear_when_requested():
     assert "Ad context" in prompt
 
 
+def test_skip_reason_adds_reason_block_to_prompt():
+    cfg = _make_config(name="X FM")
+    payload = DJScriptGenerateRequest(max_sentences=1, reason="skip")
+    prompt = _build_prompt(cfg.station, payload, None, None, cfg)
+    assert "pressed Skip" in prompt
+
+
+def test_no_reason_omits_reason_block():
+    cfg = _make_config(name="X FM")
+    payload = DJScriptGenerateRequest(max_sentences=1)
+    prompt = _build_prompt(cfg.station, payload, None, None, cfg)
+    assert "pressed Skip" not in prompt
+
+
 # ── DJ persona / roster scheduling ────────────────────────────────────────────
 
 MONDAY_NOON = datetime(2026, 5, 18, 12, 0)       # weekday() == 0
