@@ -5,18 +5,24 @@ import logging
 import urllib.error
 import urllib.request
 
+from pathlib import Path
+
 from .config import AppConfig, StationConfig
 from .models import Track
-from .prompt_library import (
-    render_ad_break_prompt,
-    render_news_prompt,
-    render_song_transition_prompt,
-    render_weather_prompt,
-)
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 from .weather import fetch_weather_summary
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_DJ_PROMPT_TEMPLATE = """\
+Write a {max_sentences}-sentence radio DJ transition for {station_name}.
+DJ: {dj_name} ({dj_style}).
+Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
+We just heard: {previous_track}.
+Up next: {next_track}.
+{weather_block}{news_block}{ad_block}\
+Return plain text only — no headings, no markdown."""
 
 
 def _track_ref(track: Track | None) -> str:
@@ -24,7 +30,50 @@ def _track_ref(track: Track | None) -> str:
         return "an unknown track"
     title = track.title or "Unknown Title"
     artist = track.artist or "Unknown Artist"
-    return f"{title} by {artist}"
+    filename = Path(track.file_path).name if track.file_path else None
+    base = f"{title} by {artist}"
+    return f"{base} (filename: {filename})" if filename else base
+
+
+def _build_prompt(
+    station: StationConfig,
+    payload: DJScriptGenerateRequest,
+    previous_track: Track | None,
+    next_track: Track | None,
+    config: AppConfig,
+) -> str:
+    weather_block = ""
+    if payload.include_weather:
+        location = config.alerts.weather_location
+        live_weather = fetch_weather_summary(location)
+        if live_weather:
+            weather_block = f"Weather context — use as facts: {live_weather}\n"
+        else:
+            weather_block = f"Weather context: include a brief check for {location}.\n"
+    news_block = "News context: include a one-sentence top-of-hour news tease.\n" if payload.include_news else ""
+    ad_block = "Ad context: include a brief sponsor-style ad break line.\n" if payload.include_fake_ad else ""
+
+    fields = {
+        "max_sentences": payload.max_sentences,
+        "station_name": station.name,
+        "station_format": station.format,
+        "station_description": f" {station.description}" if station.description else "",
+        "station_era": f" Era: {station.era}." if station.era else "",
+        "station_genre_focus": f" Genre focus: {', '.join(station.genre_focus)}." if station.genre_focus else "",
+        "dj_name": station.dj_name,
+        "dj_style": station.dj_style,
+        "previous_track": _track_ref(previous_track),
+        "next_track": _track_ref(next_track),
+        "weather_block": weather_block,
+        "news_block": news_block,
+        "ad_block": ad_block,
+    }
+    template = station.dj_prompt_template or DEFAULT_DJ_PROMPT_TEMPLATE
+    try:
+        return template.format_map(fields)
+    except KeyError as exc:
+        logger.warning("dj_prompt_template has unknown placeholder %s; using default", exc)
+        return DEFAULT_DJ_PROMPT_TEMPLATE.format_map(fields)
 
 
 def _generate_openai_script(
@@ -42,30 +91,7 @@ def _generate_openai_script(
         return None
 
     logger.info("Attempting OpenAI DJ script generation with model=%s", config.openai_text_model)
-    prompt_sections = [
-        render_song_transition_prompt(station, previous_track, next_track, payload.max_sentences),
-        f"DJ name: {station.dj_name}. Style: {station.dj_style}.",
-        f"Station format: {station.format}." + (f" Era: {station.era}." if station.era else ""),
-    ]
-    if station.genre_focus:
-        prompt_sections.append(f"Genre focus: {', '.join(station.genre_focus)}.")
-    if station.description:
-        prompt_sections.append(f"Station description: {station.description}")
-    prompt_sections.append(
-        f"Include weather={payload.include_weather}, news={payload.include_news}, ad={payload.include_fake_ad}."
-    )
-    if payload.include_weather:
-        location = config.alerts.weather_location
-        prompt_sections.append(render_weather_prompt(station, location))
-        live_weather = fetch_weather_summary(location)
-        if live_weather:
-            prompt_sections.append(f"Use this real weather data as facts: {live_weather}")
-    if payload.include_news:
-        prompt_sections.append(render_news_prompt(station))
-    if payload.include_fake_ad:
-        prompt_sections.append(render_ad_break_prompt(station))
-    prompt_sections.append("Return plain text only.")
-    prompt = " ".join(prompt_sections)
+    prompt = _build_prompt(station, payload, previous_track, next_track, config)
     req = urllib.request.Request(
         "https://api.openai.com/v1/responses",
         data=json.dumps({"model": config.openai_text_model, "input": prompt}).encode("utf-8"),

@@ -32,6 +32,16 @@ class StationConfig(BaseModel):
     dj_name: str = Field(default="DJ", min_length=1)
     dj_style: str = Field(default="warm and conversational", min_length=1)
     voice_hint: str | None = None
+    dj_prompt_template: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for the DJ transition prompt. Supports placeholders: "
+            "{max_sentences}, {station_name}, {station_format}, {station_description}, "
+            "{station_era}, {station_genre_focus}, {dj_name}, {dj_style}, "
+            "{previous_track}, {next_track}, {weather_block}, {news_block}, {ad_block}. "
+            "Leave null to use the built-in default."
+        ),
+    )
 
     @field_validator("name", "tagline", "format", "dj_name", "dj_style", mode="before")
     @classmethod
@@ -43,7 +53,7 @@ class StationConfig(BaseModel):
             raise ValueError("must not be blank")
         return stripped
 
-    @field_validator("description", "era", "voice_hint", mode="before")
+    @field_validator("description", "era", "voice_hint", "dj_prompt_template", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
