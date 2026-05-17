@@ -14,7 +14,12 @@
     },
     "ads": {
       "enabled": false,
-      "voice": "echo",
+      "voices": [
+        { "voice": "echo", "voice_instructions": "Classic radio announcer. Warm, punchy, slightly retro." },
+        { "voice": "fable", "voice_instructions": "Enthusiastic infomercial energy. Sell it!" },
+        { "voice": "onyx", "voice_instructions": "Deep and authoritative. Like a prestige brand voiceover." }
+      ],
+      "pool_size": 100,
       "every_n_breaks": 6
     }
   },

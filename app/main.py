@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import threading
 import time
 from pathlib import Path
@@ -64,6 +65,11 @@ def _migrate_drop_legacy_schema() -> None:
                     conn.execute(text(f"ALTER TABLE player_state DROP COLUMN {col}"))
                 except Exception:  # noqa: BLE001
                     pass  # SQLite < 3.35; leave the column in place
+
+        # Add is_ad column to dj_clips if missing.
+        dj_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(dj_clips)")).fetchall()}
+        if "is_ad" not in dj_cols:
+            conn.execute(text("ALTER TABLE dj_clips ADD COLUMN is_ad BOOLEAN NOT NULL DEFAULT 0"))
 
 
 _migrate_drop_legacy_schema()
@@ -562,30 +568,47 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
-    # Optional ad clip: generate and synthesize when on ad cadence.
+    # Optional ad clip: serve from pool or generate a new one.
     ad_clip_url: str | None = None
     ad_script_text: str | None = None
     if config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks):
-        ad_script_text = generate_ad_script(station, config)
-        if ad_script_text:
-            try:
-                ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
-                    db,
-                    script_text=ad_script_text,
-                    voice=config.alerts.ads.voice,
-                    provider=provider,
-                )
-            except RuntimeError:
-                logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", config.alerts.ads.voice)
-                ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
-                    db,
-                    script_text=ad_script_text,
-                    voice=None,
-                    provider=provider,
-                )
-            if ad_clip is not None:
-                ad_clip_url = f"/media/dj-clip/{ad_clip.script_hash}"
-                _log_event("player.next.ad_attached", ad_cached=ad_cached, voice=config.alerts.ads.voice)
+        ads_cfg = config.alerts.ads
+        ad_clip: DJClip | None = None
+        ad_cached = False
+
+        pool_count = db.query(DJClip).filter(DJClip.is_ad == True).count()  # noqa: E712
+        if pool_count >= ads_cfg.pool_size:
+            # Pool is full — pick a random existing ad clip.
+            all_ad_clips = db.query(DJClip).filter(DJClip.is_ad == True).all()  # noqa: E712
+            ad_clip = random.choice(all_ad_clips)
+            ad_script_text = ad_clip.script_text
+            ad_cached = True
+            _log_event("player.next.ad_pool_hit", pool_count=pool_count)
+        else:
+            # Generate a new ad clip and add it to the pool.
+            ad_script_text = generate_ad_script(station, config)
+            if ad_script_text:
+                ad_voice_cfg = random.choice(ads_cfg.voices) if ads_cfg.voices else None
+                ad_voice = ad_voice_cfg.voice if ad_voice_cfg else None
+                ad_instructions = ad_voice_cfg.voice_instructions if ad_voice_cfg else None
+                try:
+                    ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
+                        db,
+                        script_text=ad_script_text,
+                        voice=ad_voice,
+                        voice_instructions=ad_instructions,
+                        provider=provider,
+                        is_ad=True,
+                    )
+                except RuntimeError:
+                    logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", ad_voice)
+                    ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
+                        db, script_text=ad_script_text, voice=None, provider=provider, is_ad=True,
+                    )
+
+        if ad_clip is not None:
+            ad_clip_url = f"/media/dj-clip/{ad_clip.script_hash}"
+            _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
 
     state.queue_index = next_idx
     state.current_track_id = next_track.id

@@ -18,9 +18,32 @@ class NewsPreferences(BaseModel):
     every_n_breaks: int = Field(default=5, ge=0)
 
 
+class AdVoice(BaseModel):
+    """A voice+instructions pair for ad-break narration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    voice: str = Field(min_length=1, description="TTS voice identifier (e.g. 'echo', 'fable').")
+    voice_instructions: str | None = Field(
+        default=None,
+        description="Natural language delivery guidance passed to the TTS model.",
+    )
+
+
 class AdBreakPreferences(BaseModel):
     enabled: bool = False
-    voice: str = "echo"
+    voices: list[AdVoice] = Field(
+        default_factory=lambda: [AdVoice(voice="echo")],
+        description=(
+            "Pool of voices used for ad breaks. One is picked at random each break. "
+            "Each entry has a 'voice' (TTS identifier) and optional 'voice_instructions'."
+        ),
+    )
+    pool_size: int = Field(
+        default=100,
+        ge=1,
+        description="Once this many unique ad clips are cached, reuse them instead of generating new ones.",
+    )
     every_n_breaks: int = Field(default=6, ge=0)
     prompt_template: str | None = Field(
         default=None,

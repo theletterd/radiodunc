@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -29,6 +29,7 @@ class DJClip(Base):
     audio_path: Mapped[str] = mapped_column(String, nullable=False)
     voice: Mapped[str | None] = mapped_column(String, nullable=True)
     script_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    is_ad: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 

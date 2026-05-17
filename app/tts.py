@@ -102,6 +102,7 @@ def get_or_create_dj_clip(
     voice: str | None = None,
     provider=None,
     voice_instructions: str | None = None,
+    is_ad: bool = False,
 ) -> tuple[DJClip | None, str, bool]:
     normalized_voice = (voice or "default").strip() or "default"
     digest = _clip_hash(script_text, normalized_voice, voice_instructions)
@@ -117,7 +118,7 @@ def get_or_create_dj_clip(
     logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
     local_provider.synthesize(script_text, normalized_voice, output_path, instructions=voice_instructions)
 
-    clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice)
+    clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice, is_ad=is_ad)
     db.add(clip)
     db.commit()
     db.refresh(clip)

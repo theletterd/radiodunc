@@ -3,7 +3,7 @@
 ## DJ / personality system
 - ✅ Consolidate DJ config: station fields are the default DJ, `dj_roster` entries are scheduled overrides
 - ✅ Renamed `voice_hint` → `voice` everywhere (consistent with `voice_instructions`)
-- [ ] Multiple ad-break voices/personalities — pool of defined ad voices, pick one per break
+- ✅ Multiple ad-break voices/personalities — `AdVoice` list with per-voice instructions, random pick per break
 
 ## DJ script / prompts
 - [ ] When an ad break is coming up, tell the DJ to tease it: "coming up after the break, <next song>"
@@ -20,13 +20,16 @@
 - [ ] Ad break UI badge disappears too early — extend the hide timer to match actual ad audio duration
 
 ## Ad breaks
-- [ ] Cache ad clips forever; once we have ~100, stop generating new ones and pick randomly from the pool
+- ✅ Cache ad clips forever; configurable `pool_size` (default 100), picks randomly from pool once full
 
 ## Observability
 - [ ] Add timing logs for LLM and TTS steps (how long each segment takes end-to-end)
 
 ## UI — now playing
 - [ ] Show the MP3 filename in the now-playing display
+
+## Config
+- [ ] Sync radio_config.json to match the new example config shape (voice → voices list for ads, voice_instructions on roster entries)
 
 ## Docs
 - [ ] Update README to reflect current architecture (Web Audio, single-station config, persona system, etc.)
