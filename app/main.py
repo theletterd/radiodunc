@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from .config import AppConfig, StationConfig, load_config, save_config
-from .database import Base, engine, get_db
+from .database import Base, SessionLocal, engine, get_db
 from .models import DJClip, PlayerState, Track
 from .dj_scripts import active_station, generate_ad_script, generate_dj_script
 from .scanner import scan_library
@@ -375,6 +376,92 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
 
+# ── DJ clip prefetch ──────────────────────────────────────────────────────────
+# After each player_next, we kick off a background thread that pre-generates
+# the *following* DJ clip. If the user presses Next again (or the track auto-
+# advances), player_next finds the cached clip and skips the 1–3s TTS round trip.
+#
+# Key by target queue position. Cache entries are popped on use (so a stale
+# prefetch from a previous play session can't collide).
+_prefetch_cache: dict[int, dict] = {}
+_prefetch_lock = threading.Lock()
+
+
+def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
+    """Background-thread job: build script + synthesize DJ clip for transition to target_idx."""
+    try:
+        if target_idx >= len(queue):
+            return
+        target_item = queue[target_idx]
+        if target_item.get("type") != "track" or target_item.get("track_id") is None:
+            return
+
+        db = SessionLocal()
+        try:
+            config = load_config()
+            previous_item = queue[base_idx] if 0 <= base_idx < len(queue) else None
+            previous_track = None
+            if previous_item and previous_item.get("type") == "track":
+                previous_track = db.query(Track).filter(Track.id == previous_item["track_id"]).first()
+            next_track = db.query(Track).filter(Track.id == target_item["track_id"]).first()
+            if next_track is None:
+                return
+
+            station = active_station(config.station, config)
+
+            def _on_cadence(every: int) -> bool:
+                return every > 0 and target_idx % every == 0
+
+            include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
+            include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+
+            script_response = generate_dj_script(
+                station,
+                DJScriptGenerateRequest(
+                    max_sentences=3,
+                    reason="auto",  # prefetch assumes auto-advance; skip invalidates the cache
+                    include_weather=include_weather,
+                    include_news=include_news,
+                ),
+                previous_track,
+                next_track,
+                config=config,
+            )
+
+            try:
+                provider = build_tts_provider(config)
+            except ValueError:
+                provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+
+            voice = station.voice_hint or None
+            try:
+                clip, _path, _cached = get_or_create_dj_clip(
+                    db, script_text=script_response.script_text, voice=voice, provider=provider
+                )
+            except RuntimeError:
+                clip, _path, _cached = get_or_create_dj_clip(
+                    db, script_text=script_response.script_text, voice=None, provider=provider
+                )
+            if clip is None:
+                return
+
+            with _prefetch_lock:
+                _prefetch_cache[target_idx] = {
+                    "script_text": script_response.script_text,
+                    "clip_hash": clip.script_hash,
+                }
+            _log_event("player.next.prefetched", target_idx=target_idx)
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        logger.exception("DJ clip prefetch failed for target_idx=%s", target_idx)
+
+
+def _take_prefetched(target_idx: int) -> dict | None:
+    with _prefetch_lock:
+        return _prefetch_cache.pop(target_idx, None)
+
+
 @app.post("/player/next", response_model=PlayerNextResponse)
 def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -415,45 +502,51 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     def _on_cadence(every: int) -> bool:
         return every > 0 and next_idx % every == 0
 
-    include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
-    include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
-
-    script_response = generate_dj_script(
-        station,
-        DJScriptGenerateRequest(
-            max_sentences=3,
-            reason=reason,
-            include_weather=include_weather,
-            include_news=include_news,
-        ),
-        previous_track,
-        next_track,
-        config=config,
-    )
-
     try:
         provider = build_tts_provider(config)
     except ValueError:
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-
     voice = station.voice_hint or None
-    try:
-        clip, _audio_path, dj_cached = get_or_create_dj_clip(
-            db,
-            script_text=script_response.script_text,
-            voice=voice,
-            provider=provider,
+
+    # Try the prefetch cache first (skip invalidates it — different prompt context).
+    cached_prefetch = _take_prefetched(next_idx) if reason != "skip" else None
+    clip = None
+    script_text: str | None = None
+    dj_cached = False
+    if cached_prefetch:
+        clip = db.query(DJClip).filter(DJClip.script_hash == cached_prefetch["clip_hash"]).first()
+        if clip:
+            script_text = cached_prefetch["script_text"]
+            dj_cached = True
+            _log_event("player.next.prefetch_hit", target_idx=next_idx)
+
+    if clip is None:
+        include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
+        include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+
+        script_response = generate_dj_script(
+            station,
+            DJScriptGenerateRequest(
+                max_sentences=3,
+                reason=reason,
+                include_weather=include_weather,
+                include_news=include_news,
+            ),
+            previous_track,
+            next_track,
+            config=config,
         )
-    except RuntimeError:
-        logger.warning(
-            "DJ clip synthesis failed with voice=%r; retrying with default voice", voice
-        )
-        clip, _audio_path, dj_cached = get_or_create_dj_clip(
-            db,
-            script_text=script_response.script_text,
-            voice=None,
-            provider=provider,
-        )
+        script_text = script_response.script_text
+
+        try:
+            clip, _audio_path, dj_cached = get_or_create_dj_clip(
+                db, script_text=script_text, voice=voice, provider=provider,
+            )
+        except RuntimeError:
+            logger.warning("DJ clip synthesis failed with voice=%r; retrying with default voice", voice)
+            clip, _audio_path, dj_cached = get_or_create_dj_clip(
+                db, script_text=script_text, voice=None, provider=provider,
+            )
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
@@ -500,6 +593,16 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         dj_cached=dj_cached,
         ad_attached=bool(ad_clip_url),
     )
+
+    # Fire-and-forget: pre-generate the DJ clip for the next transition.
+    prefetch_target = next_idx + 1
+    if prefetch_target < len(queue):
+        threading.Thread(
+            target=_prefetch_dj_clip,
+            args=(prefetch_target, list(queue), next_idx),
+            daemon=True,
+        ).start()
+
     return PlayerNextResponse(
         current_track_url=f"/media/track/{next_track.id}",
         current_track_metadata=TrackOut.model_validate(next_track),
@@ -509,7 +612,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         ad_script=ad_script_text,
         next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
-        dj_script=script_response.script_text,
+        dj_script=script_text or "",
     )
 
 

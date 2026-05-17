@@ -590,3 +590,78 @@ def test_queue_inject_empty_queue_raises_400():
     with pytest.raises(HTTPException) as exc:
         queue_inject(QueueInjectRequest(track_id=track.id), db)
     assert exc.value.status_code == 400
+
+
+# ── DJ clip prefetch ──────────────────────────────────────────────────────────
+
+def test_player_next_uses_prefetched_clip_when_available(monkeypatch, tmp_path):
+    from app.main import _prefetch_cache
+
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
+    db.add_all([t1, t2])
+    db.commit()
+    db.refresh(t1); db.refresh(t2)
+
+    # Seed a pre-existing clip in the DB and a prefetch cache entry pointing to it.
+    wav = tmp_path / "prefetched.wav"
+    wav.write_bytes(b"RIFF")
+    cached_clip = DJClip(
+        script_text="Prefetched script", audio_path=str(wav),
+        voice="default", script_hash="prefetchhash",
+    )
+    db.add(cached_clip)
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.main.load_config",
+        lambda: AppConfig(station=StationConfig(name="Pre FM", dj_name="DJ Pre")),
+    )
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_k: {"tracks": [t1, t2]})
+
+    # If the prefetch is honored, generate_dj_script should NOT be called.
+    call_count = {"n": 0}
+    def _should_not_be_called(*_a, **_k):
+        call_count["n"] += 1
+        return DJScriptResponse(station_name="x", dj_name="y", sentences=["x"], script_text="x")
+    monkeypatch.setattr("app.main.generate_dj_script", _should_not_be_called)
+
+    player_play(PlayerPlayRequest(queue_size=2), db)
+    _prefetch_cache[1] = {"script_text": "Prefetched script", "clip_hash": "prefetchhash"}
+
+    result = player_next(None, db)
+
+    assert result.dj_clip_url == f"/media/dj-clip/prefetchhash"
+    assert call_count["n"] == 0
+    assert 1 not in _prefetch_cache  # popped after use
+
+
+def test_player_next_skip_bypasses_prefetch_cache(monkeypatch, tmp_path):
+    from app.main import _prefetch_cache
+    from app.schemas import PlayerNextRequest
+
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
+    db.add_all([t1, t2])
+    db.commit()
+    db.refresh(t1); db.refresh(t2)
+
+    monkeypatch.setattr(
+        "app.main.load_config",
+        lambda: AppConfig(station=StationConfig(name="Skip FM", dj_name="DJ Skip")),
+    )
+    monkeypatch.setattr("app.main.build_station_queue", lambda **_k: {"tracks": [t1, t2]})
+    _fake_dj_next(db, "Skip FM", "DJ Skip", tmp_path, monkeypatch)
+
+    player_play(PlayerPlayRequest(queue_size=2), db)
+    _prefetch_cache[1] = {"script_text": "stale", "clip_hash": "shouldnotuse"}
+
+    # reason="skip" should ignore the prefetch and generate fresh.
+    result = player_next(PlayerNextRequest(reason="skip"), db)
+
+    assert result.dj_clip_url == "/media/dj-clip/testhash001"
+    # Cache entry remains (we only pop on hit, not on skip-bypass)
+    assert _prefetch_cache.get(1) == {"script_text": "stale", "clip_hash": "shouldnotuse"}
+    _prefetch_cache.pop(1, None)  # cleanup
