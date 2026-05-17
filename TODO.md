@@ -12,7 +12,7 @@
 ## UI — queue
 - ✅ Queue shows all upcoming tracks (was capped at 5), scrollable with max-height
 - ✅ Queue start size bumped to 30 tracks
-- [ ] Drag-to-reorder queue items
+- ✅ Drag-to-reorder queue items (HTML5 drag-and-drop, blue drop indicator, ⠿ handle)
 - [ ] "Add more" button to extend the queue
 
 ## UI — layout / bugs

@@ -405,12 +405,23 @@ async function renderQueue() {
     list.appendChild(li);
     return;
   }
+
+  let dragSrc = null; // position of the item being dragged
+
   for (const item of preview.items) {
     const li = document.createElement('li');
-    li.style.cssText = 'display:flex; align-items:center; gap:8px; padding:3px 0;';
+    li.dataset.position = item.position;
+    li.draggable = true;
+    li.style.cssText = 'display:flex; align-items:center; gap:8px; padding:4px 0; cursor:grab; border-top:2px solid transparent; transition:border-color 0.1s, opacity 0.1s;';
+
+    const handle = document.createElement('span');
+    handle.textContent = '⠿';
+    handle.style.cssText = 'color:#475569; font-size:1.1em; user-select:none;';
+
     const span = document.createElement('span');
     span.textContent = item.label;
     span.style.flex = '1';
+
     const btn = document.createElement('button');
     btn.textContent = '✕';
     btn.title = 'Remove from queue';
@@ -423,6 +434,39 @@ async function renderQueue() {
         alert('Could not remove track: ' + (e.message || e));
       }
     };
+
+    li.addEventListener('dragstart', e => {
+      dragSrc = item.position;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { li.style.opacity = '0.4'; }, 0);
+    });
+    li.addEventListener('dragend', () => {
+      li.style.opacity = '';
+      list.querySelectorAll('li').forEach(el => { el.style.borderTopColor = 'transparent'; });
+    });
+    li.addEventListener('dragover', e => {
+      if (dragSrc === null || dragSrc === item.position) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      list.querySelectorAll('li').forEach(el => { el.style.borderTopColor = 'transparent'; });
+      li.style.borderTopColor = '#38bdf8';
+    });
+    li.addEventListener('drop', async e => {
+      e.preventDefault();
+      if (dragSrc === null || dragSrc === item.position) return;
+      const from = dragSrc;
+      const to   = item.position;
+      dragSrc = null;
+      try {
+        await api('/player/queue/reorder', { method: 'POST', body: JSON.stringify({ from_position: from, to_position: to }) });
+        renderQueue();
+      } catch (err) {
+        console.warn('[queue] reorder failed:', err);
+        renderQueue();
+      }
+    });
+
+    li.appendChild(handle);
     li.appendChild(span);
     li.appendChild(btn);
     list.appendChild(li);

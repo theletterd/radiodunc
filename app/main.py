@@ -35,6 +35,7 @@ from .schemas import (
     PlayerNextResponse,
     QueueItemOut,
     QueuePreviewResponse,
+    QueueReorderRequest,
 )
 from .scheduler import build_station_queue
 from .tts import build_tts_provider, get_or_create_dj_clip
@@ -323,6 +324,23 @@ def delete_queue_item(
     queue.pop(position)
     state.queue_json = json.dumps(queue)
     db.commit()
+
+
+@app.post("/player/queue/reorder", status_code=204)
+def reorder_queue_item(payload: QueueReorderRequest, db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    queue = json.loads(state.queue_json) if state.queue_json else []
+    current = state.queue_index
+    for pos in (payload.from_position, payload.to_position):
+        if pos <= current or pos >= len(queue):
+            raise HTTPException(status_code=400, detail=f"Position {pos} is out of reorderable range")
+    if payload.from_position == payload.to_position:
+        return
+    item = queue.pop(payload.from_position)
+    queue.insert(payload.to_position, item)
+    state.queue_json = json.dumps(queue)
+    db.commit()
+    _log_event("queue.reorder", from_position=payload.from_position, to_position=payload.to_position)
 
 
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:

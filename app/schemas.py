@@ -136,3 +136,8 @@ class QueueInjectResponse(BaseModel):
     position: int
     label: str
     queue_depth: int
+
+
+class QueueReorderRequest(BaseModel):
+    from_position: int
+    to_position: int
