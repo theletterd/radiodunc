@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import struct
+import time
 import urllib.error
 import urllib.request
 import wave
@@ -68,15 +69,20 @@ class OpenAITTSProvider:
             },
             method="POST",
         )
+        t0 = time.perf_counter()
         try:
             with urllib.request.urlopen(request, timeout=40) as response:  # noqa: S310
                 audio_bytes = response.read()
+            elapsed = time.perf_counter() - t0
+            logger.info("OpenAI TTS synthesis completed", extra={"elapsed_s": round(elapsed, 2), "model": self.model, "voice": resolved_voice, "text_len": len(text)})
         except urllib.error.HTTPError as exc:
+            elapsed = time.perf_counter() - t0
             body = exc.read().decode("utf-8", errors="replace")
-            logger.warning("OpenAI TTS HTTP error", extra={"status_code": exc.code, "response_body": body[:500]})
+            logger.warning("OpenAI TTS HTTP error", extra={"status_code": exc.code, "response_body": body[:500], "elapsed_s": round(elapsed, 2)})
             raise RuntimeError(f"OpenAI TTS failed ({exc.code}): {body}") from exc
         except urllib.error.URLError as exc:
-            logger.warning("OpenAI TTS network error", extra={"reason": str(exc.reason)})
+            elapsed = time.perf_counter() - t0
+            logger.warning("OpenAI TTS network error", extra={"reason": str(exc.reason), "elapsed_s": round(elapsed, 2)})
             raise RuntimeError(f"OpenAI TTS network error: {exc.reason}") from exc
 
         output_path.write_bytes(audio_bytes)

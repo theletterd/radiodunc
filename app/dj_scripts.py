@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 
@@ -185,20 +186,27 @@ def _call_openai_text(prompt: str, config: AppConfig) -> str | None:
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.openai_api_key}"},
         method="POST",
     )
+    t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
             data = json.loads(response.read().decode("utf-8"))
+        elapsed = time.perf_counter() - t0
+        logger.info("OpenAI text generation completed", extra={"elapsed_s": round(elapsed, 2), "model": config.openai_text_model})
     except urllib.error.HTTPError as exc:
-        logger.warning("OpenAI text request failed status=%s", exc.code)
+        elapsed = time.perf_counter() - t0
+        logger.warning("OpenAI text request failed status=%s elapsed_s=%s", exc.code, round(elapsed, 2))
         return None
     except urllib.error.URLError as exc:
-        logger.warning("OpenAI text request failed reason=%s", exc.reason)
+        elapsed = time.perf_counter() - t0
+        logger.warning("OpenAI text request failed reason=%s elapsed_s=%s", exc.reason, round(elapsed, 2))
         return None
     except TimeoutError:
-        logger.warning("OpenAI text request timed out")
+        elapsed = time.perf_counter() - t0
+        logger.warning("OpenAI text request timed out elapsed_s=%s", round(elapsed, 2))
         return None
     except json.JSONDecodeError:
-        logger.warning("OpenAI text response was not valid JSON")
+        elapsed = time.perf_counter() - t0
+        logger.warning("OpenAI text response was not valid JSON elapsed_s=%s", round(elapsed, 2))
         return None
 
     output_text = data.get("output_text")

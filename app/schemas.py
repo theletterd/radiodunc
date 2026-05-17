@@ -141,3 +141,17 @@ class QueueInjectResponse(BaseModel):
 class QueueReorderRequest(BaseModel):
     from_position: int
     to_position: int
+
+
+class LibraryStatusResponse(BaseModel):
+    track_count: int
+    last_scan_at: str | None = None
+
+
+class QueueExtendRequest(BaseModel):
+    count: int = Field(default=10, ge=1, le=50)
+
+
+class QueueExtendResponse(BaseModel):
+    added: int
+    queue_depth: int

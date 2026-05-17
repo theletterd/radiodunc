@@ -48,6 +48,52 @@ aside h2 {
   margin: 0 0 14px;
 }
 
+aside details {
+  margin: 0;
+}
+
+aside details summary {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 14px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  transition: color 0.15s;
+}
+
+aside details summary::-webkit-details-marker {
+  display: none;
+}
+
+aside details summary::before {
+  content: '▸';
+  font-size: 0.65rem;
+  color: var(--muted);
+  transition: transform 0.2s, color 0.15s;
+  display: inline-block;
+}
+
+aside details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+aside details summary:hover {
+  color: var(--text);
+}
+
+aside details summary:hover::before {
+  color: var(--pink);
+}
+
 /* ── Main ── */
 main {
   padding: 28px 28px 40px;
@@ -287,3 +333,12 @@ ul {
 .muted { color: var(--muted); }
 .status { font-size: 0.82rem; margin-top: 6px; }
 .station { cursor: pointer; }
+
+/* ── Library status widget ── */
+.library-status {
+  font-size: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 14px;
+}

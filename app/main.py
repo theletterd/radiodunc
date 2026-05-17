@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
@@ -36,6 +36,9 @@ from .schemas import (
     QueueItemOut,
     QueuePreviewResponse,
     QueueReorderRequest,
+    LibraryStatusResponse,
+    QueueExtendRequest,
+    QueueExtendResponse,
 )
 from .scheduler import build_station_queue
 from .tts import build_tts_provider, get_or_create_dj_clip
@@ -205,6 +208,14 @@ def scan_library_endpoint(payload: LibraryScanRequest, db: Session = Depends(get
         raise HTTPException(status_code=500, detail=f"Failed to scan library: {exc}") from exc
 
 
+@app.get("/library/status", response_model=LibraryStatusResponse)
+def library_status(db: Session = Depends(get_db)):
+    track_count = db.query(Track).count()
+    last_scan_dt = db.query(func.max(Track.created_at)).scalar()
+    last_scan_at = last_scan_dt.isoformat() if last_scan_dt is not None else None
+    return LibraryStatusResponse(track_count=track_count, last_scan_at=last_scan_at)
+
+
 @app.get("/tracks", response_model=list[TrackOut])
 def list_tracks(db: Session = Depends(get_db)):
     return db.query(Track).order_by(Track.artist.asc(), Track.album.asc(), Track.title.asc()).all()
@@ -343,6 +354,33 @@ def reorder_queue_item(payload: QueueReorderRequest, db: Session = Depends(get_d
     _log_event("queue.reorder", from_position=payload.from_position, to_position=payload.to_position)
 
 
+@app.post("/player/queue/extend", response_model=QueueExtendResponse)
+def queue_extend(payload: QueueExtendRequest, db: Session = Depends(get_db)):
+    state = _get_or_create_player_state(db)
+    if not state.queue_json:
+        raise HTTPException(status_code=400, detail="No active player queue")
+
+    queue = json.loads(state.queue_json)
+    config = load_config()
+
+    already_queued = {item["track_id"] for item in queue if item.get("track_id")}
+
+    try:
+        candidates = build_station_queue(db, config, size=payload.count * 3, seed=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    new_tracks = [t for t in candidates["tracks"] if t.id not in already_queued][: payload.count]
+
+    new_items = [{"type": "track", "track_id": t.id, "label": _track_label(t)} for t in new_tracks]
+    queue.extend(new_items)
+    state.queue_json = json.dumps(queue)
+    db.commit()
+
+    _log_event("queue.extend", added=len(new_items), queue_depth=len(queue))
+    return QueueExtendResponse(added=len(new_items), queue_depth=len(queue))
+
+
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
     media_path = Path(raw_path).expanduser().resolve()
     allowed_roots = [Path(config.music_folder).expanduser().resolve(), Path("generated_audio").resolve()]
@@ -467,15 +505,18 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
 
             voice = station.voice or None
             instructions = station.voice_instructions or None
+            t0 = time.perf_counter()
             try:
-                clip, _path, _cached = get_or_create_dj_clip(
+                clip, _path, dj_cached = get_or_create_dj_clip(
                     db, script_text=script_response.script_text, voice=voice, provider=provider,
                     voice_instructions=instructions,
                 )
             except RuntimeError:
-                clip, _path, _cached = get_or_create_dj_clip(
+                clip, _path, dj_cached = get_or_create_dj_clip(
                     db, script_text=script_response.script_text, voice=None, provider=provider,
                 )
+            elapsed = time.perf_counter() - t0
+            logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
             if clip is None:
                 return
 
@@ -578,6 +619,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         script_text = script_response.script_text
 
         instructions = station.voice_instructions or None
+        t0 = time.perf_counter()
         try:
             clip, _audio_path, dj_cached = get_or_create_dj_clip(
                 db, script_text=script_text, voice=voice, provider=provider,
@@ -588,6 +630,8 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
             clip, _audio_path, dj_cached = get_or_create_dj_clip(
                 db, script_text=script_text, voice=None, provider=provider,
             )
+        elapsed = time.perf_counter() - t0
+        logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 

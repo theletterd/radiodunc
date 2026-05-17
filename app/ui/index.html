@@ -11,15 +11,21 @@
 <body>
   <div class="wrap">
     <aside>
-      <h2>Library Setup</h2>
-      <div class="card">
-        <label class="muted" for="libraryPath" style="display:block; margin-bottom:6px; font-size:0.8rem;">Music folder</label>
-        <input id="libraryPath" placeholder="/path/to/music" />
-        <div class="row" style="margin-top:10px;">
-          <button id="scanBtn" class="primary">Scan Library</button>
-        </div>
-        <p id="scanStatus" class="status muted">Idle</p>
+      <div id="libraryStatus" class="library-status muted">
+        <span id="libTrackCount">— tracks</span>
+        <span id="libLastScan"></span>
       </div>
+      <details>
+        <summary>Library Setup</summary>
+        <div class="card">
+          <label class="muted" for="libraryPath" style="display:block; margin-bottom:6px; font-size:0.8rem;">Music folder</label>
+          <input id="libraryPath" placeholder="/path/to/music" />
+          <div class="row" style="margin-top:10px;">
+            <button id="scanBtn" class="primary">Scan Library</button>
+          </div>
+          <p id="scanStatus" class="status muted">Idle</p>
+        </div>
+      </details>
     </aside>
 
     <main>
@@ -38,6 +44,7 @@
       <div class="card now-playing" id="nowPlayingCard">
         <h3>Now Playing</h3>
         <p id="nowPlaying">-</p>
+        <p id="nowPlayingFile" class="muted" style="font-size:0.8rem; margin:0; font-family: monospace;"></p>
         <p id="playerFlags" class="muted">-</p>
       </div>
 

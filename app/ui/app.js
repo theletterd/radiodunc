@@ -191,6 +191,8 @@ async function triggerTransition(reason) {
     if (next.current_track_label) {
       document.getElementById('nowPlaying').textContent = next.current_track_label;
     }
+    const fname = next.current_track_metadata?.file_path?.split('/').pop() || '';
+    document.getElementById('nowPlayingFile').textContent = fname;
 
     // 3. Decode DJ clip and load next track in parallel.
     //    The gainNode on the alt slot is already at 0 from the previous transition
@@ -386,6 +388,10 @@ function renderPlayer() {
   const label = serverState?.now_playing_label || '-';
   document.getElementById('nowPlaying').textContent = label;
 
+  const track = serverState?.current_track;
+  const filename = track?.file_path ? track.file_path.split('/').pop() : '';
+  document.getElementById('nowPlayingFile').textContent = filename;
+
   const isPlaying = !!serverState?.is_playing;
   document.getElementById('nowPlayingCard').classList.toggle('active', isPlaying);
 
@@ -477,6 +483,30 @@ async function renderQueue() {
     li.appendChild(btn);
     list.appendChild(li);
   }
+
+  // Append "Add more" button as a sibling of the list (not inside it),
+  // but only once — reuse the existing button if already present.
+  const parent = list.parentNode;
+  let extendBtn = document.getElementById('extendQueueBtn');
+  if (!extendBtn) {
+    extendBtn = document.createElement('button');
+    extendBtn.id = 'extendQueueBtn';
+    extendBtn.style.cssText = 'margin-top:10px; width:100%; font-size:0.85rem;';
+    extendBtn.onclick = async () => {
+      extendBtn.disabled = true;
+      extendBtn.textContent = 'Adding…';
+      try {
+        await api('/player/queue/extend', { method: 'POST', body: JSON.stringify({ count: 10 }) });
+        await renderQueue();
+      } catch (e) {
+        extendBtn.disabled = false;
+        extendBtn.textContent = '+ Add more tracks';
+      }
+    };
+    parent.appendChild(extendBtn);
+  }
+  extendBtn.disabled = false;
+  extendBtn.textContent = '+ Add more tracks';
 }
 
 function renderAll() { renderPlayer(); renderQueue(); }
@@ -503,6 +533,7 @@ document.getElementById('scanBtn').addEventListener('click', async () => {
       body: JSON.stringify({ folder_path: folderPath }),
     });
     status.textContent = `Scanned ${result.scanned} files, added ${result.inserted}, updated ${result.updated}.`;
+    refreshLibraryStatus();
   } catch (err) {
     status.textContent = `Scan failed: ${err.message}`;
   }
@@ -591,6 +622,17 @@ document.getElementById('trackSearch').addEventListener('input', (e) => {
   }, 300);
 });
 
+// ── Library status ────────────────────────────────────────────────────────────
+async function refreshLibraryStatus() {
+  try {
+    const data = await api('/library/status');
+    document.getElementById('libTrackCount').textContent = `${data.track_count} tracks`;
+    document.getElementById('libLastScan').textContent = data.last_scan_at
+      ? `Last scan: ${new Date(data.last_scan_at).toLocaleString()}`
+      : '';
+  } catch (_) {}
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   // Pre-set slider from localStorage so it doesn't jump when serverState arrives.
@@ -603,6 +645,7 @@ async function init() {
   renderAll();
   // Light polling — client drives playback now, so we don't need frequent syncs.
   setInterval(refreshServerState, 10_000);
+  refreshLibraryStatus();
 }
 
 init();
