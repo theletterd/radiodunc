@@ -158,6 +158,17 @@ def get_station():
     return _station_out(active_station(config.station, config))
 
 
+def _track_label(track: Track) -> str:
+    """Display label for a track. Falls back to filename stem when metadata is missing."""
+    if track.artist and track.title:
+        return f"{track.artist} - {track.title}"
+    if track.artist or track.title:
+        return f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"
+    if track.file_path:
+        return Path(track.file_path).stem
+    return f"Track {track.id}"
+
+
 def _station_out(station: StationConfig) -> StationOut:
     return StationOut(
         name=station.name,
@@ -219,7 +230,7 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
     if not queue:
         raise HTTPException(status_code=400, detail="Queue is empty")
 
-    label = f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"
+    label = _track_label(track)
     item = {"type": "track", "track_id": track.id, "label": label}
     insert_at = state.queue_index + 1
     queue.insert(insert_at, item)
@@ -349,7 +360,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     sequence = [
-        {"type": "track", "track_id": track.id, "label": f"{track.artist or 'Unknown'} - {track.title or 'Untitled'}"}
+        {"type": "track", "track_id": track.id, "label": _track_label(track)}
         for track in queue["tracks"]
     ]
 
