@@ -10,14 +10,14 @@
 - ✅ Injected tracks flagged as audience requests (`requested: true` in queue item → `reason = "request"` in prompt)
 
 ## UI — library panel
-- [ ] Hide the scanner behind a collapsible dropdown (it's rarely used)
-- [ ] Add a "Library status" widget to the sidebar showing track count, last scan time, etc.
+- ✅ Hide the scanner behind a collapsible dropdown (it's rarely used)
+- ✅ Add a "Library status" widget to the sidebar showing track count, last scan time, etc.
 
 ## UI — queue
 - ✅ Queue shows all upcoming tracks (was capped at 5), scrollable with max-height
 - ✅ Queue start size bumped to 30 tracks
 - ✅ Drag-to-reorder queue items (HTML5 drag-and-drop, blue drop indicator, ⠿ handle)
-- [ ] "Add more" button to extend the queue
+- ✅ "Add more tracks" button extends the queue on demand
 
 ## UI — layout / bugs
 - ✅ Search bar overflow fixed (box-sizing: border-box on inputs globally)
@@ -28,16 +28,16 @@
 - ✅ Cache ad clips forever; configurable `pool_size` (default 100), picks randomly from pool once full
 
 ## Observability
-- [ ] Add timing logs for LLM and TTS steps (how long each segment takes end-to-end)
+- ✅ Add timing logs for LLM and TTS steps (`elapsed_s` logged on all OpenAI calls)
 
 ## UI — now playing
-- [ ] Show the MP3 filename in the now-playing display
+- ✅ Show the MP3 filename in the now-playing display (monospace, below track title)
 
 ## Config
-- [ ] Sync radio_config.json to match the new example config shape (voice → voices list for ads, voice_instructions on roster entries)
+- ✅ Sync radio_config.json to match the new example config shape (voice → voices list for ads, voice_instructions on roster entries)
 
 ## Docs
-- [ ] Update README to reflect current architecture (Web Audio, single-station config, persona system, etc.)
+- ✅ Update README to reflect current architecture (Web Audio, single-station config, persona system, etc.)
 
 ---
 

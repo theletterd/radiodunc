@@ -1,212 +1,177 @@
-# Local AI Radio Station Generator (Backend Skeleton)
+# RadioDunc
 
-This repository contains a FastAPI backend skeleton for scanning a local music library and storing metadata for a future AI radio station app.
+A personal AI radio station that plays your local music library with an LLM-scripted DJ and text-to-speech voiceovers between every track.
 
-## Features (current)
+## What it does
 
-- SQLite database (`radio.db`)
-- SQLAlchemy models:
-  - `Track`
-  - `Station`
-  - `DJClip`
-- Config file support (checked-in `example-radio_config.json` + local `radio_config.json`) for:
-  - default music folder to scan
-  - weather alerts location
-  - local time zone
-  - news alert preferences
-  - station persona presets (format/tagline/DJ naming/style/voice hints)
-  - optional `station_generation_seed` for deterministic station shuffle order
-- configurable `playlist_artist_repeat_window` anti-repeat setting for queue scheduling
-- `GET /config` and `PUT /config`
-- `POST /library/scan` endpoint:
-  - accepts optional folder path
-  - falls back to configured `music_folder`
-  - scans recursively for `.mp3`, `.flac`, `.m4a`, `.ogg`
-  - extracts metadata using Mutagen
-  - deduplicates by `file_path`
-- `GET /tracks` endpoint to list scanned tracks
-- `POST /stations/generate` endpoint for phase 2 station creation
-- `GET /stations` endpoint to list generated stations
-- `POST /stations/{station_id}/queue` endpoint for phase 3 playlist scheduling
-- `POST /stations/{station_id}/dj-clip` endpoint for phase 5 clip synthesis + cache reuse
-- `GET /player/status`, `POST /player/play`, `POST /player/next`, and `POST /player/stop` endpoints for phase 6 playback orchestration
-- `GET /broadcast/status` and `GET /broadcast/live.m3u8` endpoints for backend-owned single-stream broadcast output
-- Basic error handling for invalid paths and scan failures
-
-## Project Structure
-
-- `app/main.py` — FastAPI app and routes
-- `app/config.py` — app config schema + file load/save
-- `app/database.py` — SQLAlchemy engine/session setup
-- `app/models.py` — ORM models
-- `app/schemas.py` — Pydantic schemas
-- `app/scanner.py` — audio scan + metadata extraction logic
-- `app/stations.py` — station generation logic
-- `example-radio_config.json` — template config committed to git
-- `radio_config.json` — local personal config (gitignored, auto-created)
-- `requirements.txt` — dependencies
+- Scans your music library (MP3, FLAC, M4A, OGG) and builds a shuffled queue
+- Generates DJ transition scripts using OpenAI (GPT-4o-mini by default)
+- Synthesises voice clips via OpenAI TTS and caches them so repeats are instant
+- Weaves in real weather, live news headlines, and fake ad breaks on a configurable cadence
+- Streams audio in your browser via Web Audio API (no icecast, no external broadcast)
+- Lets you request tracks, skip, drag-reorder the queue, and veto upcoming songs from the UI
 
 ## Setup
-
-1. Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-```
-
-2. Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-3. Run the server:
+Copy the example config and fill in your details:
 
 ```bash
-uvicorn app.main:app --reload
+cp example-radio_config.json radio_config.json
 ```
 
-Or with Make:
-
-```bash
-make run
-```
-
-Server will start at `http://127.0.0.1:8000`.
-
-## Running Tests
-
-Run the test suite directly:
-
-```bash
-pytest -q
-```
-
-Or with Make:
-
-```bash
-make test
-```
-
-## Common Make Targets
-
-- `make install` — install Python dependencies from `requirements.txt`
-- `make run` — run the FastAPI app with auto-reload
-- `make test` — run the unit test suite
-
-## API Usage
-
-### Read config
-
-```bash
-curl http://127.0.0.1:8000/config
-```
-
-### Update config
-
-```bash
-curl -X PUT http://127.0.0.1:8000/config \
-  -H "Content-Type: application/json" \
-  -d '{
-    "music_folder": "~/Music",
-    "station_generation_count": 6,
-    "alerts": {
-      "weather_location": "Portland, OR",
-      "local_time_zone": "America/Los_Angeles",
-      "news": {
-        "enabled": true,
-        "categories": ["local", "music"],
-        "briefing_minutes": 20
-      }
-    }
-  }'
-```
-
-### Scan a library
-
-```bash
-curl -X POST http://127.0.0.1:8000/library/scan \
-  -H "Content-Type: application/json" \
-  -d '{"folder_path": "/path/to/your/music"}'
-```
-
-You can also omit `folder_path` to use `music_folder` from your local `radio_config.json` (auto-created from `example-radio_config.json`).
-
-### List tracks
-
-```bash
-curl http://127.0.0.1:8000/tracks
-```
-
-### Generate stations
-
-Station generation now uses `station_presets` from config rather than hardcoded code presets. Set `station_generation_seed` to any integer to get reproducible preset shuffle order for a given library.
-
-```bash
-curl -X POST http://127.0.0.1:8000/stations/generate \
-  -H "Content-Type: application/json" \
-  -d '{"count": 6}'
-```
-
-### List stations
-
-```bash
-curl http://127.0.0.1:8000/stations
-```
-
-## Notes
-
-- Metadata extraction depends on file tags; missing tags are stored as `null`.
-- Phase 2.5 adds config-driven station persona presets, deterministic optional seed control, and fail-fast config validation for invalid preset entries.
-
-## Project Planning
-
-See `plan.md` for phased roadmap and status tracking.
-
-
-### Generate station queue
-
-```bash
-curl -X POST http://127.0.0.1:8000/stations/1/queue \
-  -H "Content-Type: application/json" \
-  -d '{"size": 12, "seed": 123}'
-```
-
-This queue generator prefers station `core_artists` when available, avoids same-artist repetition within `playlist_artist_repeat_window`, and supports deterministic output via request `seed`.
-
-
-### Synthesize a DJ clip
-
-```bash
-curl -X POST http://127.0.0.1:8000/stations/1/dj-clip \
-  -H "Content-Type: application/json" \
-  -d "{"script_text":"You're listening to Night Drive FM.","voice":"default"}"
-```
-
-The clip is cached by a script+voice hash, so repeated requests return the same stored audio path.
-
-
-## OpenAI Script + TTS (Phase 8)
-
-You can use OpenAI for both DJ script generation and DJ clip TTS with these config fields:
-
-- `script_provider`: `"openai"` (or `"template"` for local fallback)
-- `tts_provider`: `"openai"` (or `"tone"` for local fallback)
-- optional `openai_text_model` (defaults to `gpt-4o-mini`)
-- optional `openai_tts_model` (defaults to `gpt-4o-mini-tts`)
-- optional `openai_tts_voice` (defaults to `alloy`)
-
-Set your API key via environment variable (recommended) or a local `.env` file (already gitignored):
+Set your OpenAI API key (required for DJ scripts and TTS):
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-```
-
-or:
-
-```bash
+# or add it to a local .env file (gitignored)
 echo 'OPENAI_API_KEY="sk-..."' >> .env
 ```
 
-The UI volume slider updates playback volume live while dragging.
+Start the server:
+
+```bash
+make run
+# or: uvicorn app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000` and hit **Play**.
+
+## Configuration
+
+`radio_config.json` (gitignored, auto-created from `example-radio_config.json`) controls everything.
+
+### Top-level fields
+
+| Field | Default | Description |
+|---|---|---|
+| `music_folder` | `~/Music` | Path to your music library |
+| `tts_provider` | `"tone"` | `"openai"` for real TTS, `"tone"` for a local beep placeholder |
+| `script_provider` | `"template"` | `"openai"` for LLM scripts, `"template"` for canned sentences |
+| `openai_text_model` | `"gpt-4o-mini"` | Model used for DJ script generation |
+| `openai_tts_model` | `"gpt-4o-mini-tts"` | Model used for TTS synthesis |
+| `openai_tts_voice` | `"alloy"` | Default TTS voice (OpenAI voice name) |
+| `playlist_artist_repeat_window` | `3` | Minimum tracks between same-artist plays |
+
+### Station
+
+```json
+"station": {
+  "name": "My Radio FM",
+  "tagline": "Your music, forever.",
+  "format": "Eclectic Mixtape",
+  "description": "No rules, only great songs.",
+  "dj_name": "DJ Name",
+  "dj_style": "warm storyteller with dry wit",
+  "voice": null,
+  "voice_instructions": null,
+  "dj_prompt_template": null,
+  "dj_roster": []
+}
+```
+
+`voice` overrides `openai_tts_voice` for this station's DJ. `voice_instructions` is a natural-language delivery hint passed to the TTS model (e.g. `"Soft and unhurried. Like a quiet morning."`).
+
+`dj_prompt_template` accepts a Python format string with these placeholders: `{station_name}`, `{dj_name}`, `{dj_style}`, `{station_format}`, `{previous_track}`, `{next_track}`, `{current_time}`, `{current_weekday}`, `{weather_block}`, `{news_block}`, `{ad_block}`, `{reason_block}`, `{max_sentences}`. Omit it to use the built-in template.
+
+### DJ roster (scheduled personas)
+
+Add entries to `dj_roster` to swap DJ personality by day/hour:
+
+```json
+"dj_roster": [
+  {
+    "name": "Saturday Night Sam",
+    "style": "high-energy party host",
+    "voice": "fable",
+    "voice_instructions": "Upbeat and punchy. Fast-paced with infectious energy.",
+    "days": ["friday", "saturday"],
+    "start_hour": 20,
+    "end_hour": 23
+  }
+]
+```
+
+The first roster entry whose `days`/`start_hour`/`end_hour` matches the current time wins. Falls back to the base station DJ when nothing matches. `voice` and `voice_instructions` are optional per entry.
+
+### Alerts
+
+```json
+"alerts": {
+  "weather_location": "Portland, OR",
+  "local_time_zone": "America/Los_Angeles",
+  "weather": { "enabled": true, "every_n_breaks": 4 },
+  "news": {
+    "enabled": true,
+    "rss_url": "https://feeds.bbci.co.uk/news/rss.xml",
+    "every_n_breaks": 5
+  },
+  "ads": {
+    "enabled": true,
+    "voices": [
+      { "voice": "echo", "voice_instructions": "Classic radio announcer. Warm, punchy, slightly retro." },
+      { "voice": "onyx", "voice_instructions": "Deep and authoritative. Like a prestige brand voiceover." }
+    ],
+    "pool_size": 100,
+    "every_n_breaks": 6
+  }
+}
+```
+
+- **weather** — pulls live conditions from Open-Meteo, reported in Celsius
+- **news** — fetches a random headline from any RSS feed
+- **ads** — generates fake ad-break scripts via OpenAI; one voice is picked at random per break. Once `pool_size` clips are cached, new breaks are drawn from the pool instead of generating fresh ones
+
+## Project structure
+
+```
+app/
+  main.py          — FastAPI routes
+  config.py        — config schema and file load/save
+  database.py      — SQLAlchemy engine/session
+  models.py        — ORM models (Track, DJClip)
+  schemas.py       — Pydantic request/response schemas
+  scanner.py       — library scan and metadata extraction
+  dj_scripts.py    — DJ script generation (prompt building, OpenAI call)
+  tts.py           — TTS synthesis and clip cache
+  weather.py       — Open-Meteo weather fetch
+  news.py          — RSS news headline fetch
+  ui/
+    index.html     — single-page UI
+    app.js         — Web Audio playback, queue management, UI logic
+    styles.css     — dark theme with pink accents
+example-radio_config.json  — template config (committed)
+radio_config.json          — your local config (gitignored)
+```
+
+## Running tests
+
+```bash
+pytest -q
+# or: make test
+```
+
+## API overview
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/library/scan` | Scan music folder, extract metadata |
+| `GET` | `/library/status` | Track count and last scan timestamp |
+| `GET` | `/tracks` | List all scanned tracks |
+| `POST` | `/player/play` | Start playback (builds initial queue) |
+| `POST` | `/player/next` | Advance to next track, trigger DJ clip |
+| `POST` | `/player/stop` | Stop playback |
+| `GET` | `/player/status` | Current player state |
+| `GET` | `/player/queue` | Current queue |
+| `DELETE` | `/player/queue/{position}` | Remove a queue item |
+| `POST` | `/player/queue/reorder` | Drag-reorder queue items |
+| `POST` | `/player/queue/inject` | Inject a requested track |
+| `POST` | `/player/queue/extend` | Append more tracks to the queue |
+| `GET` | `/media/{track_id}` | Serve audio file |
+| `GET` | `/config` | Read current config |
+| `PUT` | `/config` | Update config |
