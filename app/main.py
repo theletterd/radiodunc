@@ -2,10 +2,9 @@ import json
 import logging
 import os
 import time
-import hashlib
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -78,8 +77,6 @@ def _ensure_player_state_schema() -> None:
 _ensure_player_state_schema()
 
 logger = logging.getLogger(__name__)
-
-_admin_auth_disabled_logged = False
 
 _RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
 
@@ -297,20 +294,6 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     )
 
 
-def _require_admin(x_admin_token: str | None = Header(default=None)) -> None:
-    global _admin_auth_disabled_logged
-    expected = os.getenv("ADMIN_API_TOKEN")
-    if not expected:
-        if not _admin_auth_disabled_logged:
-            logger.warning("admin.auth.disabled reason=missing_env ADMIN_API_TOKEN")
-            _admin_auth_disabled_logged = True
-        return
-    if not x_admin_token:
-        raise HTTPException(status_code=403, detail="Missing X-Admin-Token header")
-    if not hashlib.sha256(x_admin_token.encode()).digest() == hashlib.sha256(expected.encode()).digest():
-        raise HTTPException(status_code=403, detail="Admin authentication failed")
-
-
 @app.get("/player/status", response_model=PlayerStateResponse)
 def player_status(db: Session = Depends(get_db)):
     return _build_player_state_response(db, _get_or_create_player_state(db))
@@ -343,7 +326,6 @@ def player_queue(db: Session = Depends(get_db)):
 def delete_queue_item(
     position: int,
     db: Session = Depends(get_db),
-    _admin: None = Depends(_require_admin),
 ):
     state = _get_or_create_player_state(db)
     queue = json.loads(state.queue_json) if state.queue_json else []
@@ -426,7 +408,7 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
-def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
+def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.play.requested", station_id=payload.station_id, queue_size=payload.queue_size, seed=payload.seed)
     config = load_config()
@@ -459,7 +441,7 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db), _admi
 
 
 @app.post("/player/next", response_model=PlayerNextResponse)
-def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_admin)):
+def player_next(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     _log_event("player.next.requested", current_index=state.queue_index)
 
