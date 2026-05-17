@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from app.main import (
     player_next,
     player_stop,
     player_current_media,
+    player_queue,
+    delete_queue_item,
     media_track,
     media_dj_clip,
 )
@@ -515,4 +518,110 @@ def test_media_dj_clip_not_found_raises_404():
     db = _make_db_session()
     with pytest.raises(HTTPException) as exc:
         media_dj_clip("nosuchhash", db)
+    assert exc.value.status_code == 404
+
+
+def _make_queue_state(db, queue, index=0):
+    """Insert a PlayerState with the given queue list and return it."""
+    state = PlayerState(
+        is_playing=True,
+        queue_json=json.dumps(queue),
+        queue_index=index,
+    )
+    db.add(state)
+    db.commit()
+    db.refresh(state)
+    return state
+
+
+def test_player_queue_returns_upcoming_items():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Artist A - Song 1"},
+        {"type": "track", "track_id": 2, "label": "Artist B - Song 2"},
+        {"type": "track", "track_id": 3, "label": "Artist C - Song 3"},
+        {"type": "track", "track_id": 4, "label": "Artist D - Song 4"},
+        {"type": "track", "track_id": 5, "label": "Artist E - Song 5"},
+        {"type": "track", "track_id": 6, "label": "Artist F - Song 6"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    result = player_queue(db)
+
+    assert result.queue_position == 0
+    assert result.queue_depth == 6
+    assert len(result.items) == 5  # up to 5 upcoming
+    assert result.items[0].position == 1
+    assert result.items[0].track_id == 2
+    assert result.items[0].label == "Artist B - Song 2"
+    assert result.items[4].position == 5
+    assert result.items[4].track_id == 6
+
+
+def test_player_queue_empty_when_at_end():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Only Track"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    result = player_queue(db)
+
+    assert result.items == []
+
+
+def test_player_queue_skips_non_track_items():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Track One"},
+        {"type": "dj", "label": "DJ break", "script_text": "hello"},
+        {"type": "track", "track_id": 3, "label": "Track Three"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    result = player_queue(db)
+
+    assert len(result.items) == 1
+    assert result.items[0].track_id == 3
+
+
+def test_delete_queue_item_removes_future_track():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Current"},
+        {"type": "track", "track_id": 2, "label": "Next"},
+        {"type": "track", "track_id": 3, "label": "After"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    delete_queue_item(1, db)
+
+    state = db.query(PlayerState).first()
+    remaining = json.loads(state.queue_json)
+    assert len(remaining) == 2
+    assert remaining[1]["track_id"] == 3
+
+
+def test_delete_queue_item_rejects_current_position():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Current"},
+        {"type": "track", "track_id": 2, "label": "Next"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    with pytest.raises(HTTPException) as exc:
+        delete_queue_item(0, db)
+    assert exc.value.status_code == 404
+
+
+def test_delete_queue_item_rejects_out_of_range():
+    db = _make_db_session()
+    queue = [
+        {"type": "track", "track_id": 1, "label": "Only"},
+    ]
+    _make_queue_state(db, queue, index=0)
+
+    with pytest.raises(HTTPException) as exc:
+        delete_queue_item(5, db)
     assert exc.value.status_code == 404

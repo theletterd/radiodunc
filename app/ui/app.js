@@ -31,7 +31,8 @@ let transitioning    = false;
 let autoTriggerTimer = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function musicVolume()    { return Math.max(0, Math.min(1, (serverState?.volume ?? 80) / 100)); }
+function savedVolume()    { return Number(localStorage.getItem('volume') ?? serverState?.volume ?? 80); }
+function musicVolume()    { return Math.max(0, Math.min(1, savedVolume() / 100)); }
 function stationLabel(id) { return stations.find(s => s.id === id)?.name || `#${id}`; }
 
 async function api(path, opts = {}) {
@@ -53,7 +54,7 @@ function initAudio() {
   if (ctx) return;
   ctx        = new AudioContext();
   masterGain = ctx.createGain();
-  masterGain.gain.value = musicVolume();
+  masterGain.gain.value = musicVolume(); // pre-set from localStorage before first status poll
   masterGain.connect(ctx.destination);
 
   for (const key of ['A', 'B']) {
@@ -127,11 +128,18 @@ async function triggerTransition(reason) {
     try {
       next = await api('/player/next', { method: 'POST' });
     } catch (err) {
-      console.error('[audio] /player/next failed — restoring gain:', err);
-      const now = ctx.currentTime;
-      curGain.cancelScheduledValues(now);
-      curGain.setValueAtTime(curGain.value, now);
-      curGain.linearRampToValueAtTime(1.0, now + 0.3);
+      const isEndOfQueue = err.message?.includes('400');
+      if (isEndOfQueue) {
+        console.log('[audio] end of queue — stopping playback');
+        document.getElementById('scanStatus').textContent = 'End of queue.';
+        await stopPlayback();
+      } else {
+        console.error('[audio] /player/next failed — restoring gain:', err);
+        const now = ctx.currentTime;
+        curGain.cancelScheduledValues(now);
+        curGain.setValueAtTime(curGain.value, now);
+        curGain.linearRampToValueAtTime(1.0, now + 0.3);
+      }
       return;
     }
 
@@ -204,18 +212,13 @@ async function triggerTransition(reason) {
       oldSlot.el.src = '';
     }, cleanupMs);
 
-    // 7. Schedule auto-trigger for the new track.
-    //    next.next_track_metadata.duration_seconds is the *new current* track's duration
-    //    (the one at current_track_url), returned by the server for exactly this purpose.
+    // 7. Schedule auto-trigger for the new track via loadedmetadata.
     const triggerSetupMs = Math.max(0, (trackGainStart + 0.3 - ctx.currentTime) * 1000);
-    if (next.next_track_metadata?.duration_seconds) {
-      setTimeout(() => scheduleAutoTrigger(next.next_track_metadata.duration_seconds), triggerSetupMs);
-    } else {
-      // Fall back to the audio element's own loadedmetadata
+    setTimeout(() => {
       curSlot().el.addEventListener('loadedmetadata', () => {
         scheduleAutoTrigger(curSlot().el.duration);
       }, { once: true });
-    }
+    }, triggerSetupMs);
 
     // 8. Refresh display after the new track has settled.
     setTimeout(async () => {
@@ -335,7 +338,7 @@ function renderPlayer() {
   document.getElementById('stationMeta').textContent = cur
     ? (cur.tagline || cur.format || 'Live radio')
     : 'Pick a station, then press Play.';
-  document.getElementById('volume').value = serverState?.volume ?? 80;
+  document.getElementById('volume').value = savedVolume();
   if (masterGain) masterGain.gain.value = musicVolume();
 
   const label = serverState?.now_playing_label || '-';
@@ -461,6 +464,7 @@ document.getElementById('volume').addEventListener('input', async (e) => {
   const vol = Number(e.target.value);
   // Update gain immediately — no round-trip latency.
   if (masterGain) masterGain.gain.value = vol / 100;
+  localStorage.setItem('volume', vol);
   // Persist to server (best effort; we don't block on it).
   try {
     const resp = await api('/player/state', { method: 'PUT', body: JSON.stringify({ volume: vol }) });
@@ -474,6 +478,10 @@ document.addEventListener('visibilitychange', () => {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  // Pre-set slider from localStorage so it doesn't jump when serverState arrives.
+  const savedVol = localStorage.getItem('volume');
+  if (savedVol !== null) document.getElementById('volume').value = savedVol;
+
   const config = await api('/config');
   document.getElementById('libraryPath').value = config.music_folder || '';
   stations    = await api('/stations');
