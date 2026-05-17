@@ -62,10 +62,12 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 
 ```json
 "station": {
-  "name": "My Radio FM",
+  "name": "RadioDunc 107.2 FM",
   "tagline": "Your music, forever.",
   "format": "Eclectic Mixtape",
   "description": "No rules, only great songs.",
+  "era": null,
+  "genre_focus": [],
   "dj_name": "DJ Name",
   "dj_style": "warm storyteller with dry wit",
   "voice": null,
@@ -75,9 +77,16 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 }
 ```
 
-`voice` overrides `openai_tts_voice` for this station's DJ. `voice_instructions` is a natural-language delivery hint passed to the TTS model (e.g. `"Soft and unhurried. Like a quiet morning."`).
+All of these feed directly into the LLM prompt on every transition:
 
-`dj_prompt_template` accepts a Python format string with these placeholders: `{station_name}`, `{dj_name}`, `{dj_style}`, `{station_format}`, `{previous_track}`, `{next_track}`, `{current_time}`, `{current_weekday}`, `{weather_block}`, `{news_block}`, `{ad_block}`, `{reason_block}`, `{max_sentences}`. Omit it to use the built-in template.
+- **`dj_style`** — describes the DJ's on-air personality to the LLM. The more vivid, the better: `"warm storyteller with dry wit"` gets a different result from `"hyper-energetic 90s Top 40 host who's had too much coffee"`.
+- **`era`** — adds `Era: X.` to the station description, nudging the DJ to reference that period (e.g. `"80s and 90s"`, `"late 60s psychedelia"`). Leave `null` for no era bias.
+- **`genre_focus`** — list of genres added to the station description (e.g. `["indie rock", "post-punk"]`). Helps the DJ make genre-aware connections between tracks.
+- **`description`** — free-form station flavour text appended to the format line.
+- **`voice`** — overrides `openai_tts_voice` for this station's DJ.
+- **`voice_instructions`** — natural-language delivery hint passed to the TTS model. This is where the magic is: describe the exact vocal character you want, as specifically as you like (pacing, affect, quirks, references).
+
+`dj_prompt_template` accepts a Python format string with these placeholders: `{station_name}`, `{dj_name}`, `{dj_style}`, `{station_format}`, `{station_description}`, `{station_era}`, `{station_genre_focus}`, `{previous_track}`, `{next_track}`, `{current_time}`, `{current_weekday}`, `{weather_block}`, `{news_block}`, `{ad_block}`, `{reason_block}`, `{max_sentences}`. Omit it to use the built-in default.
 
 ### DJ roster (scheduled personas)
 

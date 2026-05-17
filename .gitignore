@@ -218,6 +218,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
 # Local radio app personal config
 radio_config.json
 config.local.*
