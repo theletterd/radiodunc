@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -329,6 +329,8 @@ def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
     return media_path
 
 
+_AUDIO_MEDIA_TYPES = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".m4a": "audio/mp4", ".ogg": "audio/ogg"}
+
 @app.get("/media/track/{track_id}")
 def media_track(track_id: int, db: Session = Depends(get_db)):
     track = db.query(Track).filter(Track.id == track_id).first()
@@ -336,7 +338,13 @@ def media_track(track_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Track not found")
     config = load_config()
     media_path = _safe_media_path(track.file_path, config)
-    return FileResponse(str(media_path), filename=(track.title or "track") + media_path.suffix)
+    try:
+        data = media_path.read_bytes()
+    except OSError as exc:
+        logger.warning("Track temporarily unavailable path=%s err=%s", media_path, exc)
+        raise HTTPException(status_code=503, detail="Track temporarily unavailable") from exc
+    media_type = _AUDIO_MEDIA_TYPES.get(media_path.suffix.lower(), "application/octet-stream")
+    return Response(content=data, media_type=media_type)
 
 
 @app.get("/media/dj-clip/{clip_hash}")
@@ -434,13 +442,15 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
                 provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
 
             voice = station.voice_hint or None
+            instructions = station.voice_instructions or None
             try:
                 clip, _path, _cached = get_or_create_dj_clip(
-                    db, script_text=script_response.script_text, voice=voice, provider=provider
+                    db, script_text=script_response.script_text, voice=voice, provider=provider,
+                    voice_instructions=instructions,
                 )
             except RuntimeError:
                 clip, _path, _cached = get_or_create_dj_clip(
-                    db, script_text=script_response.script_text, voice=None, provider=provider
+                    db, script_text=script_response.script_text, voice=None, provider=provider,
                 )
             if clip is None:
                 return
@@ -538,9 +548,11 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         )
         script_text = script_response.script_text
 
+        instructions = station.voice_instructions or None
         try:
             clip, _audio_path, dj_cached = get_or_create_dj_clip(
                 db, script_text=script_text, voice=voice, provider=provider,
+                voice_instructions=instructions,
             )
         except RuntimeError:
             logger.warning("DJ clip synthesis failed with voice=%r; retrying with default voice", voice)

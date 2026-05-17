@@ -80,7 +80,7 @@ def test_skip_reason_adds_reason_block_to_prompt():
     cfg = _make_config(name="X FM")
     payload = DJScriptGenerateRequest(max_sentences=1, reason="skip")
     prompt = _build_prompt(cfg.station, payload, None, None, cfg)
-    assert "pressed Skip" in prompt
+    assert "audience" in prompt
 
 
 def test_no_reason_omits_reason_block():
@@ -187,19 +187,18 @@ def test_generate_ad_script_returns_text_from_openai_call():
     with patch("app.dj_scripts._call_openai_text", return_value="Try Acme Beans, the bean for every scene.") as call:
         result = generate_ad_script(cfg.station, cfg)
     assert result == "Try Acme Beans, the bean for every scene."
-    # Prompt is built and includes station name
     sent_prompt = call.call_args[0][0]
-    assert "Test FM" in sent_prompt
+    assert "radio sponsor spot" in sent_prompt
 
 
 def test_generate_ad_script_uses_custom_template():
     cfg = AppConfig(
-        station=StationConfig(name="Custom FM"),
-        alerts={"ads": AdBreakPreferences(prompt_template="AD for {station_name}")},
+        station=StationConfig(name="Custom FM", format="Eclectic"),
+        alerts={"ads": AdBreakPreferences(prompt_template="AD for {station_name} playing {station_format}")},
     )
     with patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
         generate_ad_script(cfg.station, cfg)
-    assert call.call_args[0][0] == "AD for Custom FM"
+    assert call.call_args[0][0] == "AD for Custom FM playing Eclectic"
 
 
 def test_generate_ad_script_returns_none_on_openai_failure():

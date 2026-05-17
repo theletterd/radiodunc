@@ -330,7 +330,8 @@ def test_media_track_serves_file(monkeypatch, tmp_path):
     monkeypatch.setattr("app.main.load_config", lambda: AppConfig(music_folder=str(tmp_path)))
 
     response = media_track(track.id, db)
-    assert response.path == str(audio)
+    assert response.body == b"fake-mp3"
+    assert response.media_type == "audio/mpeg"
 
 
 def test_media_track_not_found_raises_404():

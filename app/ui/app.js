@@ -100,6 +100,37 @@ function whenDuration(el, cb) {
   }
 }
 
+// Load a track URL into an <audio> element, retrying on error (e.g. network
+// drive temporarily unavailable → 503). Resolves when metadata is ready,
+// rejects after all attempts are exhausted.
+function loadWithRetry(el, url, { attempts = 3, delayMs = 2000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let remaining = attempts;
+    function attempt() {
+      el.src = url;
+      el.load();
+      function onMeta() { cleanup(); resolve(); }
+      function onError() {
+        cleanup();
+        remaining -= 1;
+        if (remaining <= 0) {
+          reject(new Error(`Failed to load track after ${attempts} attempts: ${url}`));
+        } else {
+          console.warn(`[audio] Track load failed, retrying in ${delayMs}ms (${remaining} left)…`);
+          setTimeout(attempt, delayMs);
+        }
+      }
+      function cleanup() {
+        el.removeEventListener('loadedmetadata', onMeta);
+        el.removeEventListener('error', onError);
+      }
+      el.addEventListener('loadedmetadata', onMeta, { once: true });
+      el.addEventListener('error', onError, { once: true });
+    }
+    attempt();
+  });
+}
+
 // ── Core crossfade transition ────────────────────────────────────────────────
 //
 // Timeline (happy path — API returns in < FADE_OUT_S):
@@ -159,20 +190,22 @@ async function triggerTransition(reason) {
       document.getElementById('nowPlaying').textContent = next.current_track_label;
     }
 
-    // 3. Decode DJ clip and start loading next track (parallel work).
+    // 3. Decode DJ clip and load next track in parallel.
     //    The gainNode on the alt slot is already at 0 from the previous transition
     //    or from init; just make sure.
     const alt = altSlot();
     alt.gainNode.gain.cancelScheduledValues(ctx.currentTime);
     alt.gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    alt.el.src = next.current_track_url;
-    alt.el.load();
 
     let djBuf = null;
-    try {
-      djBuf = await fetchAndDecode(next.dj_clip_url);
-    } catch (err) {
-      console.warn('[audio] DJ clip unavailable, crossfading without it:', err);
+    const [djResult] = await Promise.allSettled([
+      fetchAndDecode(next.dj_clip_url),
+      loadWithRetry(alt.el, next.current_track_url),
+    ]);
+    if (djResult.status === 'fulfilled') {
+      djBuf = djResult.value;
+    } else {
+      console.warn('[audio] DJ clip unavailable, crossfading without it:', djResult.reason);
     }
 
     // Optional ad clip plays right after the DJ clip.
@@ -302,15 +335,14 @@ async function startPlayback() {
   activeSlot = 'A';
 
   const cur = curSlot();
-  cur.el.src = `/media/track/${serverState.current_track?.id}`;
-  cur.el.load();
+  await loadWithRetry(cur.el, `/media/track/${serverState.current_track?.id}`);
   await cur.el.play();
 
   // Fade in gently
   cur.gainNode.gain.setValueAtTime(0, ctx.currentTime);
   cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
 
-  whenDuration(cur.el, () => scheduleAutoTrigger(cur.el.duration));
+  scheduleAutoTrigger(cur.el.duration); // metadata already loaded by loadWithRetry
 
   renderAll();
 }

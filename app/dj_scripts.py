@@ -61,27 +61,28 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
         "dj_name": persona.name,
         "dj_style": persona.style,
         "voice_hint": persona.voice_hint or station.voice_hint,
+        "voice_instructions": persona.voice_instructions or station.voice_instructions,
         "dj_prompt_template": persona.prompt_template or station.dj_prompt_template,
     })
 
 
 DEFAULT_DJ_PROMPT_TEMPLATE = """\
-Write a {max_sentences}-sentence radio DJ transition for {station_name}.
+Write a {max_sentences}-sentence radio DJ transition for '{station_name}'.
 DJ: {dj_name} ({dj_style}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
 Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
 Up next: {next_track}.
 {reason_block}{weather_block}{news_block}{ad_block}\
-Return plain text only — no headings, no markdown."""
+Return plain text only — no headings, no markdown.
+When mentioning the station name, you MUST say it in full, e.g 'KVW 98 point 6 FM'"""
 
 
 DEFAULT_AD_PROMPT_TEMPLATE = """\
-Write a 2-sentence late-night radio sponsor spot. Invent a fake but plausible
-brand and product (food, gadget, app, local service — be creative and varied).
+Write a 2-sentence late-night radio sponsor spot. Invent a fake (sometimes wacky, sometimes plausible)
+brand and product (For example: a local service (e.g., window cleaners, mechanic, restaurant), food, gadget or dating app) — be creative and varied.
 Vintage radio-ad voice: punchy, slightly cheesy, with a memorable tagline.
-Make it clearly sound like an ad break, not DJ banter. Station context: \
-{station_name} ({station_format}).
+Make it clearly sound like an ad break, not DJ banter.
 Return plain text only — no headings, no markdown, no quotation marks."""
 
 
@@ -117,11 +118,11 @@ def _build_prompt(
             news_block = f"News context — work in this real headline naturally: \"{headline}\".\n"
         else:
             news_block = "News context: include a one-sentence top-of-hour news tease.\n"
-    ad_block = "Ad context: include a brief sponsor-style ad break line.\n" if payload.include_fake_ad else ""
+    ad_block = "Ad context: include a brief sponsor-style ad break line. Include the fact that the next song plays after the break.\n" if payload.include_fake_ad else ""
     reason_block = ""
     if payload.reason == "skip":
         reason_block = (
-            "Reason: the listener pressed Skip on the previous track. "
+            "Reason: the audience didn't like the previous track. "
             "Acknowledge that lightly and tee up the next one with extra enthusiasm.\n"
         )
 
@@ -222,6 +223,7 @@ def _generate_openai_script(
 ) -> str | None:
     logger.info("Generating DJ transition script via OpenAI model=%s", config.openai_text_model)
     prompt = _build_prompt(station, payload, previous_track, next_track, config)
+    logger.info(prompt)
     text = _call_openai_text(prompt, config)
     if text is None:
         logger.warning("OpenAI DJ script failed; will fall back to sentence pool")
@@ -302,4 +304,3 @@ def generate_dj_script(
         sentences=sentences,
         script_text=" ".join(sentences),
     )
-

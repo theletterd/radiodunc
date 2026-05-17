@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class ToneTTSProvider:
     """Local placeholder TTS provider that creates a short WAV tone."""
 
-    def synthesize(self, text: str, voice: str, output_path: Path) -> None:
+    def synthesize(self, text: str, voice: str, output_path: Path, instructions: str | None = None) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         logger.info("Synthesizing local tone clip", extra={"voice": voice, "output_path": str(output_path), "text_len": len(text)})
         duration_seconds = max(0.4, min(2.4, 0.4 + (len(text) / 220.0)))
@@ -51,12 +51,14 @@ class OpenAITTSProvider:
         self.model = model
         self.voice = voice
 
-    def synthesize(self, text: str, voice: str, output_path: Path) -> None:
+    def synthesize(self, text: str, voice: str, output_path: Path, instructions: str | None = None) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         requested_voice = (voice or "").strip()
         resolved_voice = self.voice if not requested_voice or requested_voice == "default" else requested_voice
         logger.info("Synthesizing OpenAI TTS clip", extra={"voice": resolved_voice, "output_path": str(output_path), "text_len": len(text), "model": self.model})
         payload = {"model": self.model, "voice": resolved_voice, "input": text, "response_format": "wav"}
+        if instructions:
+            payload["instructions"] = instructions
         request = urllib.request.Request(
             "https://api.openai.com/v1/audio/speech",
             data=json.dumps(payload).encode("utf-8"),
@@ -89,14 +91,20 @@ def build_tts_provider(config: AppConfig):
     logger.info("Using tone fallback TTS provider")
     return ToneTTSProvider()
 
-def _clip_hash(script_text: str, voice: str) -> str:
-    key = f"{voice}\n{script_text.strip()}".encode("utf-8")
+def _clip_hash(script_text: str, voice: str, instructions: str | None = None) -> str:
+    key = f"{voice}\n{instructions or ''}\n{script_text.strip()}".encode("utf-8")
     return hashlib.sha256(key).hexdigest()
 
 
-def get_or_create_dj_clip(db: Session, script_text: str, voice: str | None = None, provider=None) -> tuple[DJClip | None, str, bool]:
+def get_or_create_dj_clip(
+    db: Session,
+    script_text: str,
+    voice: str | None = None,
+    provider=None,
+    voice_instructions: str | None = None,
+) -> tuple[DJClip | None, str, bool]:
     normalized_voice = (voice or "default").strip() or "default"
-    digest = _clip_hash(script_text, normalized_voice)
+    digest = _clip_hash(script_text, normalized_voice, voice_instructions)
     clips_dir = Path("generated_audio")
     local_provider = provider or ToneTTSProvider()
 
@@ -107,7 +115,7 @@ def get_or_create_dj_clip(db: Session, script_text: str, voice: str | None = Non
 
     output_path = clips_dir / f"{digest}.wav"
     logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
-    local_provider.synthesize(script_text, normalized_voice, output_path)
+    local_provider.synthesize(script_text, normalized_voice, output_path, instructions=voice_instructions)
 
     clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice)
     db.add(clip)

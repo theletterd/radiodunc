@@ -51,6 +51,7 @@ class DJPersona(BaseModel):
     style: str = Field(min_length=1)
     voice_hint: str | None = None
     prompt_template: str | None = None
+    voice_instructions: str | None = None
     days: list[str] = Field(
         default_factory=list,
         description="Weekday names (lowercase: monday..sunday). Empty means any day.",
@@ -68,7 +69,7 @@ class DJPersona(BaseModel):
             raise ValueError("must not be blank")
         return stripped
 
-    @field_validator("voice_hint", "prompt_template", mode="before")
+    @field_validator("voice_hint", "prompt_template", "voice_instructions", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -107,6 +108,7 @@ class StationConfig(BaseModel):
     dj_name: str = Field(default="DJ", min_length=1)
     dj_style: str = Field(default="warm and conversational", min_length=1)
     voice_hint: str | None = None
+    voice_instructions: str | None = None
     dj_prompt_template: str | None = Field(
         default=None,
         description=(
@@ -137,7 +139,7 @@ class StationConfig(BaseModel):
             raise ValueError("must not be blank")
         return stripped
 
-    @field_validator("description", "era", "voice_hint", "dj_prompt_template", mode="before")
+    @field_validator("description", "era", "voice_hint", "voice_instructions", "dj_prompt_template", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
