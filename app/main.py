@@ -258,6 +258,9 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
     state.queue_json = json.dumps(queue)
     db.commit()
 
+    with _prefetch_lock:
+        _prefetch_cache.clear()
+
     _log_event("queue.inject", track_id=track.id, position=insert_at, queue_depth=len(queue))
     return QueueInjectResponse(position=insert_at, label=label, queue_depth=len(queue))
 
@@ -337,6 +340,8 @@ def delete_queue_item(
     queue.pop(position)
     state.queue_json = json.dumps(queue)
     db.commit()
+    with _prefetch_lock:
+        _prefetch_cache.clear()
 
 
 @app.post("/player/queue/reorder", status_code=204)
@@ -353,6 +358,8 @@ def reorder_queue_item(payload: QueueReorderRequest, db: Session = Depends(get_d
     queue.insert(payload.to_position, item)
     state.queue_json = json.dumps(queue)
     db.commit()
+    with _prefetch_lock:
+        _prefetch_cache.clear()
     _log_event("queue.reorder", from_position=payload.from_position, to_position=payload.to_position)
 
 
