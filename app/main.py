@@ -439,7 +439,6 @@ def player_next(db: Session = Depends(get_db), _admin: None = Depends(_require_a
             script_text=script_response.script_text,
             voice=voice,
             provider=provider,
-            persist=True,
         )
     except RuntimeError:
         logger.warning(
