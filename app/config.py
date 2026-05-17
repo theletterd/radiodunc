@@ -13,11 +13,18 @@ class WeatherPreferences(BaseModel):
 
 
 class NewsVoice(BaseModel):
-    """A voice+instructions pair for news bulletins."""
+    """A voice+name+instructions tuple for news bulletins. Each entry is a 'character'."""
 
     model_config = ConfigDict(extra="forbid")
 
     voice: str = Field(min_length=1, description="TTS voice identifier (e.g. 'onyx', 'sage').")
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Newsreader's on-air name (e.g. 'Alex Morgan'). Referenced in the bulletin "
+            "intro and outro. Leave null for an anonymous bulletin."
+        ),
+    )
     voice_instructions: str | None = Field(
         default=None,
         description="Natural language delivery guidance passed to the TTS model.",
@@ -38,6 +45,7 @@ class NewsPreferences(BaseModel):
         default_factory=lambda: [
             NewsVoice(
                 voice="onyx",
+                name="Alex Morgan",
                 voice_instructions=(
                     "Calm, measured newsreader. Authoritative, neutral, clearly enunciated. "
                     "Think BBC World Service: no theatrics, no warmth, no editorial slant — "

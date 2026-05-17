@@ -88,14 +88,30 @@ Return plain text only — no headings, no markdown, no quotation marks."""
 
 
 DEFAULT_NEWS_PROMPT_TEMPLATE = """\
-Write a short radio news bulletin, about 25–35 seconds when spoken aloud.
-Open with a brief, professional greeting that names the source — e.g. 'Now to the top international stories from {rss_source}…' or 'Here are this hour's headlines from {rss_source}.'
-Cover these {headline_count} stories from today's feed, in the order given:
+Write a short radio news bulletin, delivered by {newsreader_name} from the {rss_source} news desk.
+Total length: about 30–40 seconds when spoken aloud.
+
+Structure the bulletin in three parts:
+
+1. INTRO — one short sentence that opens the bulletin and establishes the newsreader. Examples:
+   - "Good evening — I'm {newsreader_name} with the latest from {rss_source}."
+   - "{rss_source} News, I'm {newsreader_name}."
+   - "This is the {rss_source} news bulletin. I'm {newsreader_name}."
+   Pick one of these or write something similar in feel. Vary it across bulletins.
+
+2. BODY — cover these {headline_count} stories from today's feed, in the order given:
 {headlines_block}
-For each story, write one clean sentence that adds slight context beyond the bare headline.
-Sober, neutral, professional newsreader tone. No editorial, no jokes, no station mentions, no music banter.
-End cleanly. Do NOT sign off with phrases like 'back to the music' or 'now back to your DJ' — that's the DJ's job.
-Return plain text only — no headings, no markdown, no quotation marks."""
+   For each story, write one clean sentence that adds slight context beyond the bare headline.
+
+3. OUTRO — one short sign-off sentence that names the newsreader again. Examples:
+   - "I'm {newsreader_name} — more headlines later."
+   - "That's the latest from {rss_source}. {newsreader_name} reporting."
+   - "Back soon with more from the {rss_source} news desk. I'm {newsreader_name}."
+   Pick one of these or write something similar in feel. Vary it across bulletins.
+
+Sober, neutral, professional newsreader tone throughout. No editorial, no jokes, no station mentions, no music banter.
+Do NOT sign off with phrases like 'back to the music' or 'now back to your DJ' — that's the DJ's job.
+Return plain text only — no headings, no markdown, no quotation marks, no section labels."""
 
 
 def _track_ref(track: Track | None) -> str:
@@ -270,9 +286,11 @@ def _generate_openai_script(
     return text
 
 
-def generate_news_script(config: AppConfig) -> str | None:
+def generate_news_script(config: AppConfig, newsreader_name: str | None = None) -> str | None:
     """Generate a news bulletin via OpenAI from the configured RSS feed.
 
+    `newsreader_name` is the on-air name to use in the intro/outro. If None, falls
+    back to "your newsreader" so the template still has something to substitute.
     Returns None on failure (caller should skip the news segment).
     """
     news_cfg = config.alerts.news
@@ -289,6 +307,7 @@ def generate_news_script(config: AppConfig) -> str | None:
         "headline_count": len(feed["items"]),
         "rss_source": feed["source"],
         "headlines_block": headlines_block,
+        "newsreader_name": newsreader_name or "your newsreader",
     }
     template = news_cfg.prompt_template or DEFAULT_NEWS_PROMPT_TEMPLATE
     try:
@@ -296,7 +315,10 @@ def generate_news_script(config: AppConfig) -> str | None:
     except KeyError as exc:
         logger.warning("news.prompt_template has unknown placeholder %s; using default", exc)
         prompt = DEFAULT_NEWS_PROMPT_TEMPLATE.format_map(fields)
-    logger.info("Generating news bulletin via OpenAI", extra={"headline_count": len(feed["items"]), "source": feed["source"]})
+    logger.info(
+        "Generating news bulletin via OpenAI",
+        extra={"headline_count": len(feed["items"]), "source": feed["source"], "newsreader": newsreader_name or "anonymous"},
+    )
     return _call_openai_text(prompt, config)
 
 

@@ -647,15 +647,17 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
     # Optional news clip — always fresh (no caching, news goes stale fast).
+    # Pick the newsreader voice first so we can pass its name into the script prompt.
     news_clip_url: str | None = None
     news_script_text: str | None = None
     if config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks):
         news_cfg = config.alerts.news
-        news_script_text = generate_news_script(config)
+        news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
+        news_voice = news_voice_cfg.voice if news_voice_cfg else None
+        news_instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
+        newsreader_name = news_voice_cfg.name if news_voice_cfg else None
+        news_script_text = generate_news_script(config, newsreader_name=newsreader_name)
         if news_script_text:
-            news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
-            news_voice = news_voice_cfg.voice if news_voice_cfg else None
-            news_instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
             try:
                 news_clip, _, _ = get_or_create_dj_clip(
                     db,
@@ -665,7 +667,11 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
                     provider=provider,
                 )
                 news_clip_url = f"/media/dj-clip/{news_clip.script_hash}"
-                _log_event("player.next.news_attached", source=config.alerts.news.rss_url)
+                _log_event(
+                    "player.next.news_attached",
+                    source=config.alerts.news.rss_url,
+                    newsreader=newsreader_name or "anonymous",
+                )
             except RuntimeError:
                 logger.warning("News clip synthesis failed with voice=%r; skipping", news_voice)
 

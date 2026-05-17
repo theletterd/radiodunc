@@ -223,13 +223,26 @@ def test_generate_news_script_builds_prompt_and_calls_openai():
     cfg = AppConfig()
     with patch("app.dj_scripts.fetch_top_headlines", return_value=_fake_feed(3)), \
          patch("app.dj_scripts._call_openai_text", return_value="Top story: a thing happened.") as call:
-        result = generate_news_script(cfg)
+        result = generate_news_script(cfg, newsreader_name="Alex Morgan")
     assert result == "Top story: a thing happened."
     sent_prompt = call.call_args[0][0]
     assert "The Guardian — World" in sent_prompt
     assert "Headline 1" in sent_prompt
     assert "Description 1" in sent_prompt
     assert "Headline 3" in sent_prompt
+    assert "Alex Morgan" in sent_prompt
+    # Prompt should describe intro/outro structure
+    assert "INTRO" in sent_prompt
+    assert "OUTRO" in sent_prompt
+
+
+def test_generate_news_script_falls_back_to_generic_name():
+    cfg = AppConfig()
+    with patch("app.dj_scripts.fetch_top_headlines", return_value=_fake_feed(2)), \
+         patch("app.dj_scripts._call_openai_text", return_value="bulletin") as call:
+        generate_news_script(cfg)  # no name passed
+    sent_prompt = call.call_args[0][0]
+    assert "your newsreader" in sent_prompt
 
 
 def test_generate_news_script_returns_none_when_feed_unavailable():
@@ -248,7 +261,7 @@ def test_generate_news_script_uses_custom_template():
     )
     with patch("app.dj_scripts.fetch_top_headlines", return_value=_fake_feed(2)), \
          patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
-        generate_news_script(cfg)
+        generate_news_script(cfg, newsreader_name="Alex Morgan")
     sent_prompt = call.call_args[0][0]
     assert sent_prompt.startswith("NEWS from The Guardian — World:")
     assert "Headline 1" in sent_prompt
