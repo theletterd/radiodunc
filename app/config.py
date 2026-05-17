@@ -19,6 +19,61 @@ class AlertConfig(BaseModel):
     news: NewsPreferences = Field(default_factory=NewsPreferences)
 
 
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+class DJPersona(BaseModel):
+    """A DJ persona that can take over the station on certain days/hours."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    style: str = Field(min_length=1)
+    voice_hint: str | None = None
+    prompt_template: str | None = None
+    days: list[str] = Field(
+        default_factory=list,
+        description="Weekday names (lowercase: monday..sunday). Empty means any day.",
+    )
+    start_hour: int | None = Field(default=None, ge=0, le=23, description="Inclusive (24h). None = any.")
+    end_hour: int | None = Field(default=None, ge=0, le=23, description="Inclusive (24h). None = any.")
+
+    @field_validator("name", "style", mode="before")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("voice_hint", "prompt_template", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def normalize_days(cls, value: list[str]) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("must be a list")
+        normalized = []
+        for day in value:
+            if not isinstance(day, str):
+                raise ValueError("each day must be a string")
+            d = day.strip().lower()
+            if d not in WEEKDAYS:
+                raise ValueError(f"unknown weekday {day!r}; expected one of {WEEKDAYS}")
+            normalized.append(d)
+        return normalized
+
+
 class StationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -40,6 +95,14 @@ class StationConfig(BaseModel):
             "{station_era}, {station_genre_focus}, {dj_name}, {dj_style}, "
             "{previous_track}, {next_track}, {weather_block}, {news_block}, {ad_block}. "
             "Leave null to use the built-in default."
+        ),
+    )
+    dj_roster: list[DJPersona] = Field(
+        default_factory=list,
+        description=(
+            "Optional list of DJ personas with day/hour scheduling. When a persona's "
+            "days/hours match the current time, it overrides dj_name/dj_style/voice_hint/"
+            "dj_prompt_template. Empty roster = always use the station's default DJ."
         ),
     )
 

@@ -13,7 +13,7 @@ from sqlalchemy import text
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, engine, get_db
 from .models import DJClip, PlayerState, Track
-from .dj_scripts import generate_dj_script
+from .dj_scripts import active_station, generate_dj_script
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
@@ -154,7 +154,7 @@ def update_config(config: AppConfig):
 @app.get("/station", response_model=StationOut)
 def get_station():
     config = load_config()
-    return _station_out(config.station)
+    return _station_out(active_station(config.station, config))
 
 
 def _station_out(station: StationConfig) -> StationOut:
@@ -251,7 +251,7 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     return PlayerStateResponse(
         is_playing=state.is_playing,
         volume=state.volume,
-        station=_station_out(config.station),
+        station=_station_out(active_station(config.station, config)),
         current_track=current_track,
         queue_depth=len(queue),
         queue_position=state.queue_index,
@@ -396,8 +396,9 @@ def player_next(db: Session = Depends(get_db)):
     if next_track is None:
         raise HTTPException(status_code=404, detail="Next track not found in library")
 
+    station = active_station(config.station, config)
     script_response = generate_dj_script(
-        config.station,
+        station,
         DJScriptGenerateRequest(max_sentences=3),
         previous_track,
         next_track,
@@ -409,7 +410,7 @@ def player_next(db: Session = Depends(get_db)):
     except ValueError:
         provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
 
-    voice = config.station.voice_hint or None
+    voice = station.voice_hint or None
     try:
         clip, _audio_path, dj_cached = get_or_create_dj_clip(
             db,
@@ -500,7 +501,7 @@ def generate_dj_script_endpoint(payload: DJScriptGenerateRequest, db: Session = 
         if not next_track:
             raise HTTPException(status_code=404, detail=f"Track {payload.next_track_id} not found")
 
-    return generate_dj_script(config.station, payload, previous_track, next_track, config=config)
+    return generate_dj_script(active_station(config.station, config), payload, previous_track, next_track, config=config)
 
 
 @app.post("/dj-clip", response_model=DJClipResponse)

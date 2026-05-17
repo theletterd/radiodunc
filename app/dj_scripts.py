@@ -5,14 +5,63 @@ import logging
 import urllib.error
 import urllib.request
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from .config import AppConfig, StationConfig
+from .config import WEEKDAYS, AppConfig, DJPersona, StationConfig
 from .models import Track
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
 from .weather import fetch_weather_summary
 
 logger = logging.getLogger(__name__)
+
+
+def _persona_matches(persona: DJPersona, now: datetime) -> bool:
+    if persona.days:
+        weekday_name = WEEKDAYS[now.weekday()]
+        if weekday_name not in persona.days:
+            return False
+    if persona.start_hour is not None or persona.end_hour is not None:
+        start = persona.start_hour if persona.start_hour is not None else 0
+        end = persona.end_hour if persona.end_hour is not None else 23
+        hour = now.hour
+        if start <= end:
+            if not (start <= hour <= end):
+                return False
+        else:
+            # Wrapping window, e.g. 22..3 covers 22, 23, 0, 1, 2, 3
+            if not (hour >= start or hour <= end):
+                return False
+    return True
+
+
+def pick_active_persona(station: StationConfig, now: datetime) -> DJPersona | None:
+    """Return the first roster persona whose schedule matches now, or None."""
+    for persona in station.dj_roster:
+        if _persona_matches(persona, now):
+            return persona
+    return None
+
+
+def active_station(station: StationConfig, config: AppConfig, now: datetime | None = None) -> StationConfig:
+    """Return station with DJ fields overridden by any matching roster persona."""
+    if not station.dj_roster:
+        return station
+    if now is None:
+        try:
+            now = datetime.now(ZoneInfo(config.alerts.local_time_zone))
+        except Exception:  # noqa: BLE001
+            now = datetime.now()
+    persona = pick_active_persona(station, now)
+    if persona is None:
+        return station
+    return station.model_copy(update={
+        "dj_name": persona.name,
+        "dj_style": persona.style,
+        "voice_hint": persona.voice_hint or station.voice_hint,
+        "dj_prompt_template": persona.prompt_template or station.dj_prompt_template,
+    })
 
 
 DEFAULT_DJ_PROMPT_TEMPLATE = """\

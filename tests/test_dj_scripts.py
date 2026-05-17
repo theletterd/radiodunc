@@ -1,5 +1,12 @@
-from app.config import AppConfig, StationConfig
-from app.dj_scripts import DEFAULT_DJ_PROMPT_TEMPLATE, _build_prompt
+from datetime import datetime
+
+from app.config import AppConfig, DJPersona, StationConfig
+from app.dj_scripts import (
+    DEFAULT_DJ_PROMPT_TEMPLATE,
+    _build_prompt,
+    active_station,
+    pick_active_persona,
+)
 from app.models import Track
 from app.schemas import DJScriptGenerateRequest
 
@@ -64,3 +71,77 @@ def test_optional_blocks_appear_when_requested():
     prompt = _build_prompt(cfg.station, payload, None, None, cfg)
     assert "News context" in prompt
     assert "Ad context" in prompt
+
+
+# ── DJ persona / roster scheduling ────────────────────────────────────────────
+
+MONDAY_NOON = datetime(2026, 5, 18, 12, 0)       # weekday() == 0
+SATURDAY_22 = datetime(2026, 5, 23, 22, 0)       # weekday() == 5
+
+
+def test_empty_roster_returns_no_persona():
+    station = StationConfig()
+    assert pick_active_persona(station, MONDAY_NOON) is None
+
+
+def test_persona_matches_by_day():
+    weekday_dj = DJPersona(name="Weekday Wendy", style="brisk", days=["monday", "tuesday"])
+    weekend_dj = DJPersona(name="Weekend Wally", style="loose", days=["saturday", "sunday"])
+    station = StationConfig(dj_roster=[weekday_dj, weekend_dj])
+    assert pick_active_persona(station, MONDAY_NOON).name == "Weekday Wendy"
+    assert pick_active_persona(station, SATURDAY_22).name == "Weekend Wally"
+
+
+def test_persona_matches_by_hour_range():
+    late_dj = DJPersona(name="Late Larry", style="hushed", start_hour=20, end_hour=23)
+    day_dj = DJPersona(name="Day Dora", style="bright", start_hour=6, end_hour=19)
+    station = StationConfig(dj_roster=[late_dj, day_dj])
+    assert pick_active_persona(station, MONDAY_NOON).name == "Day Dora"
+    assert pick_active_persona(station, SATURDAY_22).name == "Late Larry"
+
+
+def test_persona_matches_by_day_and_hour():
+    only_sat_night = DJPersona(
+        name="Saturday Sam", style="party", days=["saturday"], start_hour=20, end_hour=23
+    )
+    station = StationConfig(dj_roster=[only_sat_night])
+    assert pick_active_persona(station, SATURDAY_22).name == "Saturday Sam"
+    assert pick_active_persona(station, MONDAY_NOON) is None
+
+
+def test_persona_with_wrapping_hour_range():
+    overnight = DJPersona(name="Owl", style="mellow", start_hour=22, end_hour=3)
+    station = StationConfig(dj_roster=[overnight])
+    midnight = datetime(2026, 5, 18, 0, 30)
+    early = datetime(2026, 5, 18, 4, 0)
+    assert pick_active_persona(station, midnight).name == "Owl"
+    assert pick_active_persona(station, early) is None
+
+
+def test_active_station_overrides_dj_fields():
+    persona = DJPersona(
+        name="Override Olive",
+        style="dramatic",
+        voice_hint="echo",
+        prompt_template="custom {dj_name}",
+    )
+    station = StationConfig(
+        dj_name="Default Dan",
+        dj_style="plain",
+        voice_hint="alloy",
+        dj_roster=[persona],
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg, now=MONDAY_NOON)
+    assert eff.dj_name == "Override Olive"
+    assert eff.dj_style == "dramatic"
+    assert eff.voice_hint == "echo"
+    assert eff.dj_prompt_template == "custom {dj_name}"
+
+
+def test_active_station_falls_back_when_no_match():
+    persona = DJPersona(name="X", style="y", days=["sunday"])
+    station = StationConfig(dj_name="Default Dan", dj_roster=[persona])
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg, now=MONDAY_NOON)  # Monday, persona only Sunday
+    assert eff.dj_name == "Default Dan"
