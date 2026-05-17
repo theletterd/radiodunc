@@ -10,7 +10,32 @@ from html import unescape
 logger = logging.getLogger(__name__)
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_ITEM_RE = re.compile(r"<item[^>]*>(.*?)</item>", re.IGNORECASE | re.DOTALL)
+_DESC_RE = re.compile(r"<description[^>]*>(.*?)</description>", re.IGNORECASE | re.DOTALL)
 _CDATA_RE = re.compile(r"^<!\[CDATA\[(.*?)\]\]>$", re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_cdata(text: str) -> str:
+    text = text.strip()
+    match = _CDATA_RE.match(text)
+    return (match.group(1) if match else text).strip()
+
+
+def _clean_html(text: str) -> str:
+    """Strip HTML tags and decode entities. RSS descriptions often contain markup."""
+    return unescape(_HTML_TAG_RE.sub("", text)).strip()
+
+
+def _fetch_rss(rss_url: str) -> str | None:
+    logger.info("Fetching RSS feed", extra={"rss_url": rss_url})
+    try:
+        req = urllib.request.Request(rss_url, headers={"User-Agent": "RadioDunc/0.3"})
+        with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310
+            return response.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logger.warning("RSS fetch failed", extra={"rss_url": rss_url, "error": str(exc)})
+        return None
 
 
 def fetch_random_headline(rss_url: str) -> str | None:
@@ -18,24 +43,12 @@ def fetch_random_headline(rss_url: str) -> str | None:
 
     Skips the first <title> in the feed (which is the channel title, not an item).
     """
-    logger.info("Fetching RSS feed for headline", extra={"rss_url": rss_url})
-    try:
-        req = urllib.request.Request(rss_url, headers={"User-Agent": "RadioDunc/0.3"})
-        with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310
-            body = response.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError) as exc:
-        logger.warning("RSS fetch failed", extra={"rss_url": rss_url, "error": str(exc)})
+    body = _fetch_rss(rss_url)
+    if body is None:
         return None
 
     raw_titles = _TITLE_RE.findall(body)
-    # Drop the channel title (first match) and strip CDATA/HTML entities
-    cleaned = []
-    for raw in raw_titles[1:]:
-        match = _CDATA_RE.match(raw.strip())
-        text = unescape((match.group(1) if match else raw).strip())
-        if text:
-            cleaned.append(text)
-
+    cleaned = [t for t in (unescape(_strip_cdata(raw)) for raw in raw_titles[1:]) if t]
     if not cleaned:
         logger.warning("RSS feed had no item titles", extra={"rss_url": rss_url})
         return None
@@ -43,3 +56,44 @@ def fetch_random_headline(rss_url: str) -> str | None:
     headline = random.choice(cleaned)
     logger.info("Selected RSS headline", extra={"rss_url": rss_url, "headline": headline})
     return headline
+
+
+def fetch_top_headlines(rss_url: str, count: int = 3) -> dict | None:
+    """Fetch top N RSS items with title + description, plus the channel title.
+
+    Returns None on failure. On success: {'source': str, 'items': [{'title', 'description'}, ...]}.
+    Items are returned in feed order (most RSS feeds put newest first).
+    """
+    body = _fetch_rss(rss_url)
+    if body is None:
+        return None
+
+    # Channel title is the first <title> outside any <item>. Items come later.
+    # Simplest reliable approach: grab the first <title> before the first <item>.
+    first_item_pos = body.lower().find("<item")
+    channel_blob = body[:first_item_pos] if first_item_pos >= 0 else body
+    channel_match = _TITLE_RE.search(channel_blob)
+    source = unescape(_strip_cdata(channel_match.group(1))) if channel_match else "the news"
+
+    items = []
+    for raw_item in _ITEM_RE.findall(body):
+        title_m = _TITLE_RE.search(raw_item)
+        desc_m = _DESC_RE.search(raw_item)
+        if not title_m:
+            continue
+        title = unescape(_strip_cdata(title_m.group(1)))
+        description = _clean_html(_strip_cdata(desc_m.group(1))) if desc_m else ""
+        if title:
+            items.append({"title": title, "description": description})
+        if len(items) >= count:
+            break
+
+    if not items:
+        logger.warning("RSS feed had no items", extra={"rss_url": rss_url})
+        return None
+
+    logger.info(
+        "Fetched top headlines",
+        extra={"rss_url": rss_url, "source": source, "count": len(items)},
+    )
+    return {"source": source, "items": items}

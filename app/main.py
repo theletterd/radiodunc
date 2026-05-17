@@ -15,7 +15,7 @@ from sqlalchemy import func, text
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
 from .models import DJClip, PlayerState, Track
-from .dj_scripts import active_station, generate_ad_script, generate_dj_script
+from .dj_scripts import active_station, generate_ad_script, generate_dj_script, generate_news_script
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
@@ -492,7 +492,8 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
                 return every > 0 and target_idx % every == 0
 
             include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
-            include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+            news_break_follows = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+            ad_break_follows = config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks)
 
             script_response = generate_dj_script(
                 station,
@@ -500,7 +501,8 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
                     max_sentences=3,
                     reason="auto",  # prefetch assumes auto-advance; skip invalidates the cache
                     include_weather=include_weather,
-                    include_news=include_news,
+                    news_break_follows=news_break_follows,
+                    ad_break_follows=ad_break_follows,
                 ),
                 previous_track,
                 next_track,
@@ -606,7 +608,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
 
     if clip is None:
         include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
-        include_news = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
+        news_break_follows = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
         ad_break_follows = config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks)
         effective_reason = reason
         if next_item.get("requested") and reason != "skip":
@@ -618,7 +620,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
                 max_sentences=3,
                 reason=effective_reason,
                 include_weather=include_weather,
-                include_news=include_news,
+                news_break_follows=news_break_follows,
                 ad_break_follows=ad_break_follows,
             ),
             previous_track,
@@ -643,6 +645,29 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
+
+    # Optional news clip — always fresh (no caching, news goes stale fast).
+    news_clip_url: str | None = None
+    news_script_text: str | None = None
+    if config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks):
+        news_cfg = config.alerts.news
+        news_script_text = generate_news_script(config)
+        if news_script_text:
+            news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
+            news_voice = news_voice_cfg.voice if news_voice_cfg else None
+            news_instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
+            try:
+                news_clip, _, _ = get_or_create_dj_clip(
+                    db,
+                    script_text=news_script_text,
+                    voice=news_voice,
+                    voice_instructions=news_instructions,
+                    provider=provider,
+                )
+                news_clip_url = f"/media/dj-clip/{news_clip.script_hash}"
+                _log_event("player.next.news_attached", source=config.alerts.news.rss_url)
+            except RuntimeError:
+                logger.warning("News clip synthesis failed with voice=%r; skipping", news_voice)
 
     # Optional ad clip: serve from pool or generate a new one.
     ad_clip_url: str | None = None
@@ -721,6 +746,8 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         dj_clip_url=f"/media/dj-clip/{clip.script_hash}",
         ad_clip_url=ad_clip_url,
         ad_script=ad_script_text,
+        news_clip_url=news_clip_url,
+        news_script=news_script_text,
         next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
         dj_script=script_text or "",

@@ -39,6 +39,9 @@ After each transition, the backend pre-generates the *next* DJ clip in a backgro
 ### Ad break follows flag
 When an ad break is about to play, `ad_break_follows=True` is passed to DJ script generation. The prompt tells the DJ to tease the break ("coming up after the break, [song]"). The ad clip itself uses a random voice from `config.alerts.ads.voices`.
 
+### News segment
+Mirrors the ads architecture. When `alerts.news.enabled` is true and the break is on cadence, `player_next` calls `generate_news_script()` (fetches top N headlines from the RSS feed, asks LLM to write a sober bulletin) and synthesises a clip with one of the configured `news.voices`. The clip URL is returned as `news_clip_url` in the response; the frontend plays it after the DJ clip and before any ad clip. **News clips are not cached** (they go stale within hours) — every break that fires generates fresh audio. The DJ teases the bulletin via `news_break_follows=True` in the DJ script request (same pattern as `ad_break_follows`). On the frontend, news shows a blue `📰 News` badge.
+
 ### Audience request flag
 Queue items injected via `POST /player/queue/inject` carry `"requested": True`. `player_next` detects this and passes `reason="request"` to `generate_dj_script`, which adds a "someone called in for this" flavour to the prompt.
 

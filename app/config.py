@@ -12,10 +12,51 @@ class WeatherPreferences(BaseModel):
     every_n_breaks: int = Field(default=4, ge=0, description="0 = never; 1 = every break; N = every Nth break")
 
 
+class NewsVoice(BaseModel):
+    """A voice+instructions pair for news bulletins."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    voice: str = Field(min_length=1, description="TTS voice identifier (e.g. 'onyx', 'sage').")
+    voice_instructions: str | None = Field(
+        default=None,
+        description="Natural language delivery guidance passed to the TTS model.",
+    )
+
+
 class NewsPreferences(BaseModel):
     enabled: bool = True
-    rss_url: str = "https://feeds.bbci.co.uk/news/rss.xml"
+    rss_url: str = "https://www.theguardian.com/world/rss"
     every_n_breaks: int = Field(default=5, ge=0)
+    headline_count: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Number of top headlines to include in each news bulletin.",
+    )
+    voices: list[NewsVoice] = Field(
+        default_factory=lambda: [
+            NewsVoice(
+                voice="onyx",
+                voice_instructions=(
+                    "Calm, measured newsreader. Authoritative, neutral, clearly enunciated. "
+                    "Think BBC World Service: no theatrics, no warmth, no editorial slant — "
+                    "just deliver the news with professional clarity."
+                ),
+            )
+        ],
+        description=(
+            "Pool of voices used for news bulletins. One is picked at random each break. "
+            "Each entry has a 'voice' (TTS identifier) and optional 'voice_instructions'."
+        ),
+    )
+    prompt_template: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for the news bulletin prompt. Placeholders: "
+            "{headline_count}, {rss_source}, {headlines_block}. Leave null for the built-in default."
+        ),
+    )
 
 
 class AdVoice(BaseModel):

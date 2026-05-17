@@ -1,13 +1,15 @@
 from datetime import datetime
 from unittest.mock import patch
 
-from app.config import AppConfig, AdBreakPreferences, DJPersona, StationConfig
+from app.config import AppConfig, AdBreakPreferences, DJPersona, NewsPreferences, StationConfig
 from app.dj_scripts import (
     DEFAULT_AD_PROMPT_TEMPLATE,
     DEFAULT_DJ_PROMPT_TEMPLATE,
+    DEFAULT_NEWS_PROMPT_TEMPLATE,
     _build_prompt,
     active_station,
     generate_ad_script,
+    generate_news_script,
     pick_active_persona,
 )
 from app.models import Track
@@ -205,3 +207,62 @@ def test_generate_ad_script_returns_none_on_openai_failure():
     cfg = AppConfig(station=StationConfig())
     with patch("app.dj_scripts._call_openai_text", return_value=None):
         assert generate_ad_script(cfg.station, cfg) is None
+
+
+# ── News script generation ───────────────────────────────────────────────────
+
+def _fake_feed(count: int = 3) -> dict:
+    items = [
+        {"title": f"Headline {i}", "description": f"Description {i}"}
+        for i in range(1, count + 1)
+    ]
+    return {"source": "The Guardian — World", "items": items}
+
+
+def test_generate_news_script_builds_prompt_and_calls_openai():
+    cfg = AppConfig()
+    with patch("app.dj_scripts.fetch_top_headlines", return_value=_fake_feed(3)), \
+         patch("app.dj_scripts._call_openai_text", return_value="Top story: a thing happened.") as call:
+        result = generate_news_script(cfg)
+    assert result == "Top story: a thing happened."
+    sent_prompt = call.call_args[0][0]
+    assert "The Guardian — World" in sent_prompt
+    assert "Headline 1" in sent_prompt
+    assert "Description 1" in sent_prompt
+    assert "Headline 3" in sent_prompt
+
+
+def test_generate_news_script_returns_none_when_feed_unavailable():
+    cfg = AppConfig()
+    with patch("app.dj_scripts.fetch_top_headlines", return_value=None):
+        assert generate_news_script(cfg) is None
+
+
+def test_generate_news_script_uses_custom_template():
+    cfg = AppConfig(
+        alerts={
+            "news": NewsPreferences(
+                prompt_template="NEWS from {rss_source}: {headlines_block}",
+            )
+        }
+    )
+    with patch("app.dj_scripts.fetch_top_headlines", return_value=_fake_feed(2)), \
+         patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
+        generate_news_script(cfg)
+    sent_prompt = call.call_args[0][0]
+    assert sent_prompt.startswith("NEWS from The Guardian — World:")
+    assert "Headline 1" in sent_prompt
+
+
+def test_dj_prompt_includes_news_handoff_when_news_break_follows():
+    cfg = AppConfig()
+    prev = Track(file_path="/m/a.mp3", title="A", artist="X")
+    nxt = Track(file_path="/m/b.mp3", title="B", artist="Y")
+    prompt = _build_prompt(
+        cfg.station,
+        DJScriptGenerateRequest(max_sentences=3, news_break_follows=True),
+        prev, nxt, cfg,
+    )
+    assert "news bulletin follows" in prompt
+    # Should NOT include the inline headline-weaving instruction.
+    assert "work in this real headline" not in prompt

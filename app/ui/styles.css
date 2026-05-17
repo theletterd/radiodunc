@@ -180,6 +180,10 @@ h1#stationName {
   color: #fb923c;
 }
 
+#nowPlaying[data-mode="news"] {
+  color: #60a5fa;
+}
+
 #playerFlags {
   font-size: 0.78rem;
   color: var(--muted);

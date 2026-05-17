@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from app.news import fetch_random_headline
+from app.news import fetch_random_headline, fetch_top_headlines
 
 
 SAMPLE_RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -64,3 +64,64 @@ def test_fetch_random_headline_handles_no_items():
     rss = b"<?xml version='1.0'?><rss><channel><title>Empty</title></channel></rss>"
     with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(rss)):
         assert fetch_random_headline("https://example.com/rss") is None
+
+
+_SAMPLE_RSS_WITH_DESCRIPTIONS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>The Guardian — World</title>
+  <item>
+    <title>Storm hits coastal town</title>
+    <description><![CDATA[<p>Residents told to <b>stay indoors</b> as winds reach 90mph.</p>]]></description>
+  </item>
+  <item>
+    <title>Council approves new park</title>
+    <description>Mayor signs off on a 12-acre green space.</description>
+  </item>
+  <item>
+    <title>Tech firm announces layoffs</title>
+    <description>The cuts affect roughly 8% of the workforce.</description>
+  </item>
+  <item>
+    <title>Fourth story we should not see</title>
+    <description>Surplus.</description>
+  </item>
+</channel>
+</rss>""".encode("utf-8")
+
+
+def test_fetch_top_headlines_returns_titles_descriptions_and_source():
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(_SAMPLE_RSS_WITH_DESCRIPTIONS)):
+        result = fetch_top_headlines("https://example.com/rss", count=3)
+    assert result is not None
+    assert result["source"] == "The Guardian — World"
+    titles = [item["title"] for item in result["items"]]
+    assert titles == [
+        "Storm hits coastal town",
+        "Council approves new park",
+        "Tech firm announces layoffs",
+    ]
+
+
+def test_fetch_top_headlines_strips_html_from_descriptions():
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(_SAMPLE_RSS_WITH_DESCRIPTIONS)):
+        result = fetch_top_headlines("https://example.com/rss", count=1)
+    assert result["items"][0]["description"] == "Residents told to stay indoors as winds reach 90mph."
+
+
+def test_fetch_top_headlines_respects_count():
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(_SAMPLE_RSS_WITH_DESCRIPTIONS)):
+        result = fetch_top_headlines("https://example.com/rss", count=2)
+    assert len(result["items"]) == 2
+
+
+def test_fetch_top_headlines_handles_network_failure():
+    import urllib.error
+    with patch("app.news.urllib.request.urlopen", side_effect=urllib.error.URLError("boom")):
+        assert fetch_top_headlines("https://example.com/rss", count=3) is None
+
+
+def test_fetch_top_headlines_returns_none_when_no_items():
+    rss = b"<?xml version='1.0'?><rss><channel><title>Empty</title></channel></rss>"
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(rss)):
+        assert fetch_top_headlines("https://example.com/rss", count=3) is None

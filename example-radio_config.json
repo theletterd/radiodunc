@@ -11,8 +11,20 @@
     },
     "news": {
       "enabled": true,
-      "rss_url": "https://feeds.bbci.co.uk/news/rss.xml",
-      "every_n_breaks": 5
+      "rss_url": "https://www.theguardian.com/world/rss",
+      "every_n_breaks": 5,
+      "headline_count": 3,
+      "voices": [
+        {
+          "voice": "onyx",
+          "voice_instructions": "Calm, measured newsreader. Authoritative, neutral, clearly enunciated. Think BBC World Service: no theatrics, no warmth, no editorial slant — just deliver the news with professional clarity."
+        },
+        {
+          "voice": "sage",
+          "voice_instructions": "Thoughtful and composed, like a long-running public radio host. Even pacing, careful phrasing, no rush. Trusts the listener to follow along."
+        }
+      ],
+      "prompt_template": null
     },
     "ads": {
       "enabled": false,

@@ -122,8 +122,13 @@ The first roster entry whose `days`/`start_hour`/`end_hour` matches the current 
   "weather": { "enabled": true, "every_n_breaks": 4 },
   "news": {
     "enabled": true,
-    "rss_url": "https://feeds.bbci.co.uk/news/rss.xml",
-    "every_n_breaks": 5
+    "rss_url": "https://www.theguardian.com/world/rss",
+    "every_n_breaks": 5,
+    "headline_count": 3,
+    "voices": [
+      { "voice": "onyx", "voice_instructions": "Calm, measured BBC newsreader. Authoritative, neutral, clearly enunciated." }
+    ],
+    "prompt_template": null
   },
   "ads": {
     "enabled": true,
@@ -138,7 +143,7 @@ The first roster entry whose `days`/`start_hour`/`end_hour` matches the current 
 ```
 
 - **weather** — pulls live conditions from Open-Meteo, reported in Celsius. Set `weather_latitude` and `weather_longitude` to bypass geocoding (useful for small cities or suburbs the Open-Meteo geocoder doesn't recognise — find coords at latlong.net). `weather_location` is still used as the spoken name in DJ lines.
-- **news** — fetches a random headline from any RSS feed
+- **news** — a full news bulletin segment that plays right after the DJ's hand-off. Fetches the top `headline_count` items from any RSS feed (default: Guardian World), and asks the LLM to write a short professional bulletin covering all of them. Voiced by one of the configured `voices` (default: `onyx` with BBC-newsreader instructions). Never cached — every bulletin is fresh.
 - **ads** — generates fake ad-break scripts via OpenAI; one voice is picked at random per break. Once `pool_size` clips are cached, new breaks are drawn from the pool instead of generating fresh ones
 
 ## Project structure

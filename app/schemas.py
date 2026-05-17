@@ -81,6 +81,7 @@ class DJScriptGenerateRequest(BaseModel):
     include_news: bool = False
     include_fake_ad: bool = False
     ad_break_follows: bool = False
+    news_break_follows: bool = False
     max_sentences: int = Field(default=3, ge=1, le=3)
     reason: str | None = None  # "skip" = user skipped; "request" = audience request; "auto"/None = natural end
 
@@ -111,6 +112,8 @@ class PlayerNextResponse(BaseModel):
     dj_clip_url: str
     ad_clip_url: str | None = None    # plays right after the DJ clip when an ad fires
     ad_script: str | None = None
+    news_clip_url: str | None = None  # plays right after the DJ clip when news fires (before ads if both)
+    news_script: str | None = None
     next_track_url: str | None = None
     next_track_metadata: TrackOut | None = None  # look-ahead (N+2) for prefetch hints
     dj_script: str

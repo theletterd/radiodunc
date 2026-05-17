@@ -51,8 +51,9 @@ function setOnAirMode(mode, label = null) {
   const el = document.getElementById('nowPlaying');
   el.dataset.mode = mode;
   let text;
-  if (mode === 'ad')  text = '📻 Ad break';
-  else if (mode === 'dj') text = '🎙️ On air';
+  if (mode === 'ad')        text = '📻 Ad break';
+  else if (mode === 'news') text = '📰 News';
+  else if (mode === 'dj')   text = '🎙️ On air';
   else text = label || serverState?.now_playing_label || el.textContent || '-';
   animateLabel(el, text);
 }
@@ -263,73 +264,78 @@ async function triggerTransition(reason) {
       console.warn('[audio] DJ clip unavailable, crossfading without it:', djResult.reason);
     }
 
-    // Optional ad clip plays right after the DJ clip.
+    // Optional news + ad clips play after the DJ clip.
+    let newsBuf = null;
     let adBuf = null;
+    const segmentFetches = [];
+    if (next.news_clip_url) {
+      segmentFetches.push(
+        fetchAndDecode(next.news_clip_url)
+          .then(b => { newsBuf = b; })
+          .catch(err => console.warn('[audio] news clip unavailable, skipping:', err))
+      );
+    }
     if (next.ad_clip_url) {
-      try {
-        adBuf = await fetchAndDecode(next.ad_clip_url);
-      } catch (err) {
-        console.warn('[audio] ad clip unavailable, skipping:', err);
-      }
+      segmentFetches.push(
+        fetchAndDecode(next.ad_clip_url)
+          .then(b => { adBuf = b; })
+          .catch(err => console.warn('[audio] ad clip unavailable, skipping:', err))
+      );
+    }
+    if (segmentFetches.length) await Promise.allSettled(segmentFetches);
+
+    // Helper: place an arbitrary buffer on the timeline with a small in/out fade.
+    function scheduleSegment(buf, startAt, label) {
+      const src  = ctx.createBufferSource();
+      src.buffer = buf;
+      const g    = ctx.createGain();
+      src.connect(g);
+      g.connect(masterGain);
+      g.gain.setValueAtTime(0, startAt);
+      g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + DJ_EDGE_S);
+      g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - DJ_EDGE_S);
+      g.gain.linearRampToValueAtTime(0, startAt + buf.duration);
+      src.start(startAt);
+      console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)}`);
+      return startAt + buf.duration;
     }
 
-    // 4. Place the DJ clip (and optional ad) on the AudioContext timeline.
-    //    djStart adapts: if we're on time, it overlaps the fade-out tail;
-    //    if we're late, it fires immediately.
+    // 4. Place clips on the AudioContext timeline. djStart may already be in
+    //    the past (we awaited above); AudioContext handles that gracefully.
+    //    Order: DJ → News → Ad → Track.
     const djStart = ctx.currentTime + 0.05;
-    let djEnd = djStart; // advances as each clip is scheduled
+    let cursor  = djStart;
+    let djEnd   = djStart;
+    let newsStart = null;
+    let adStart   = null;
 
-    if (djBuf) {
-      const djSrc  = ctx.createBufferSource();
-      djSrc.buffer = djBuf;
-      const djGain = ctx.createGain();
-      djSrc.connect(djGain);
-      djGain.connect(masterGain);
+    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip');     cursor = djEnd; }
+    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip'); }
+    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip'); }
+    djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
-      djGain.gain.setValueAtTime(0, djStart);
-      djGain.gain.linearRampToValueAtTime(DJ_GAIN, djStart + DJ_EDGE_S);
-      djGain.gain.setValueAtTime(DJ_GAIN, djStart + djBuf.duration - DJ_EDGE_S);
-      djGain.gain.linearRampToValueAtTime(0, djStart + djBuf.duration);
-
-      djSrc.start(djStart);
-      djEnd = djStart + djBuf.duration;
-      console.log(`[audio] DJ clip: start=${djStart.toFixed(3)} dur=${djBuf.duration.toFixed(2)}`);
-    }
-
-    let adStart = djEnd; // set inside the block below; used for mode scheduling
-    if (adBuf) {
-      adStart = djEnd + 0.1; // tiny gap between DJ and ad
-      const adSrc  = ctx.createBufferSource();
-      adSrc.buffer = adBuf;
-      const adGain = ctx.createGain();
-      adSrc.connect(adGain);
-      adGain.connect(masterGain);
-
-      adGain.gain.setValueAtTime(0, adStart);
-      adGain.gain.linearRampToValueAtTime(DJ_GAIN, adStart + DJ_EDGE_S);
-      adGain.gain.setValueAtTime(DJ_GAIN, adStart + adBuf.duration - DJ_EDGE_S);
-      adGain.gain.linearRampToValueAtTime(0, adStart + adBuf.duration);
-
-      adSrc.start(adStart);
-      djEnd = adStart + adBuf.duration; // next track waits until after the ad
-      console.log(`[audio] AD clip: start=${adStart.toFixed(3)} dur=${adBuf.duration.toFixed(2)}`);
-    }
-
-    // 4b. Schedule on-air mode indicators.
-    //     djStart is often already in the past (we awaited decode above), so
-    //     Math.max(0, ...) makes those fire immediately.
+    // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
     const nowT = ctx.currentTime;
+    const scheduleAt = (mode, audioTime, label = null) =>
+      scheduleMode(mode, Math.max(0, (audioTime - nowT) * 1000), label);
+
     if (djBuf) {
-      scheduleMode('dj',   Math.max(0, (djStart - nowT) * 1000));
-      if (adBuf) {
-        scheduleMode('ad',    Math.max(0, (adStart - nowT) * 1000));
-        scheduleMode('track', Math.max(0, (adStart + adBuf.duration - nowT) * 1000), next.current_track_label);
-      } else {
-        scheduleMode('track', Math.max(0, (djStart + djBuf.duration - nowT) * 1000), next.current_track_label);
-      }
+      scheduleAt('dj', djStart);
+      if (newsBuf) scheduleAt('news', newsStart);
+      if (adBuf)   scheduleAt('ad',   adStart);
+      scheduleAt('track', cursor, next.current_track_label);
     } else {
-      // No DJ clip: show track label immediately
-      setOnAirMode('track', next.current_track_label);
+      // No DJ clip: jump straight to whatever's first, or to the track.
+      if (newsBuf) {
+        scheduleAt('news', newsStart || djStart);
+        if (adBuf) scheduleAt('ad', adStart);
+        scheduleAt('track', cursor, next.current_track_label);
+      } else if (adBuf) {
+        scheduleAt('ad', adStart || djStart);
+        scheduleAt('track', cursor, next.current_track_label);
+      } else {
+        setOnAirMode('track', next.current_track_label);
+      }
     }
 
     // 5. Schedule next track gain ramp and el.play().
