@@ -13,10 +13,6 @@
 
 ## Station / DJ personality
 
-- [ ] **Single curated station** — collapse the multi-station model into one well-defined
-  station with a clear personality, era, and genre focus, configured directly in
-  `radio_config.json` rather than auto-generated.
-
 - [ ] **Per-day DJ personas** — assign different DJ names / voices / styles to different
   days of the week (or time-of-day slots). Possible approach: a `dj_roster` list in
   config with `days` and `hours` fields; `player_next` picks the active DJ from the
@@ -69,3 +65,4 @@
 - ✅ Upcoming queue display with veto buttons
 - ✅ Track request search bar with queue inject
 - ✅ Removed `ADMIN_API_TOKEN` auth (local app)
+- ✅ Single curated station — collapsed multi-station model into config-driven `StationConfig`
