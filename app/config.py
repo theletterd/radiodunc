@@ -113,10 +113,15 @@ class StationIDPreferences(BaseModel):
 
     enabled: bool = True
     phrase_count: int = Field(
-        default=8,
-        ge=2,
-        le=20,
-        description="How many varied stinger phrases to generate per station name.",
+        default=40,
+        ge=5,
+        le=100,
+        description=(
+            "Target number of stinger phrases to generate per station name. "
+            "Phrases are split into 5 'vibe' batches (classic / hyped / warm / "
+            "cheeky / confident) generated in parallel, so the actual count is "
+            "rounded up to a multiple of 5."
+        ),
     )
 
 
