@@ -456,7 +456,9 @@ ul {
   filter: brightness(1.3);
   box-shadow: 0 0 14px rgba(255,255,255,0.55);
   z-index: 8;
-  cursor: ns-resize;
+  cursor: grabbing;
+  /* Hide text-selection highlight while dragging since text might be under the cursor. */
+  user-select: none;
 }
 
 /* Top/bottom resize handles — 6px-tall strips overlaid on the block edges. */

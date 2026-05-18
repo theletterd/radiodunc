@@ -944,18 +944,39 @@ function _setSchedulerSubView(name) {
 async function _attachBlockClickHandlers() {
   const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
   blocks.forEach(block => {
-    block.style.cursor = 'pointer';
-    block.addEventListener('click', (e) => {
-      // Ignore clicks that originated on a resize handle.
-      if (e.target.classList.contains('resize-handle')) return;
-      const idx = Number(block.dataset.personaIdx);
-      if (!Number.isNaN(idx)) _openPersonaEditor(idx);
-    });
+    // Wrap-around shifts can't be moved/resized in v1; keep them as a plain
+    // click-to-edit affordance with no grab cursor.
+    block.style.cursor = block.dataset.isWrap ? 'pointer' : 'grab';
+    block.addEventListener('mousedown', _onBlockMouseDown);
+    block.addEventListener('click', _onBlockClick);
   });
 
   document.querySelectorAll('#scheduleGrid .resize-handle').forEach(handle => {
     handle.addEventListener('mousedown', _startResizeDrag);
   });
+}
+
+let _suppressNextClick = false;
+
+function _onBlockMouseDown(e) {
+  // Resize handles take precedence (they have their own mousedown handler).
+  if (e.target.classList.contains('resize-handle')) return;
+  // Wrap-around blocks don't move; let the click through to open the editor.
+  if (e.currentTarget.dataset.isWrap) return;
+  _startMoveDrag(e);
+}
+
+function _onBlockClick(e) {
+  // A move-drag completing fires mouseup, then click. Skip the click in that case.
+  if (_suppressNextClick) {
+    _suppressNextClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+    return;
+  }
+  if (e.target.classList.contains('resize-handle')) return;
+  const idx = Number(e.currentTarget.dataset.personaIdx);
+  if (!Number.isNaN(idx)) _openPersonaEditor(idx);
 }
 
 // ── Drag-to-resize for shift blocks ─────────────────────────────────────────
@@ -1048,6 +1069,9 @@ async function _onDragEnd() {
   document.removeEventListener('mousemove', _onDragMove);
   _dragState.block.classList.remove('dragging');
   _dragState.readout?.remove();
+  // Defensive: a drag-resize that lands on the block body could otherwise
+  // trigger _onBlockClick and open the editor.
+  _suppressNextClick = true;
 
   const changed = _dragState.newStartHour !== _dragState.originalStartHour
                 || _dragState.newEndHour   !== _dragState.originalEndHour;
@@ -1067,6 +1091,136 @@ async function _onDragEnd() {
     _attachBlockClickHandlers();
   } catch (err) {
     console.warn('[schedule] save after resize failed:', err);
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  }
+}
+
+// ── Drag-to-move for shift blocks ───────────────────────────────────────────
+// mousedown on block body → start tracking. Wait for movement past a small
+// threshold before entering drag mode, so a quick click still opens the editor.
+// Once in drag mode, snap-to-cell on both axes; clamp inside the grid; save on
+// release. Wrap-around shifts are excluded (would need to handle the two-block
+// rendering on day change — out of scope for v1).
+const MOVE_THRESHOLD_PX = 4;
+let _moveState = null;
+
+function _gridColWidthPx() {
+  const cell = document.querySelector('#scheduleGrid .grid-day-header');
+  return cell ? cell.getBoundingClientRect().width + 2 /* gap */ : 100;
+}
+
+async function _startMoveDrag(e) {
+  e.preventDefault();
+  const block = e.currentTarget;
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const personaIdx = Number(block.dataset.personaIdx);
+  const shiftIdx = Number(block.dataset.shiftIdx);
+  const persona = config.station?.dj_roster?.[personaIdx];
+  const shift = persona?.shifts?.[shiftIdx];
+  if (!shift) return;
+
+  const start = Number(shift.start_hour);
+  const end = Number(shift.end_hour);
+  // Skip wrap-around defensively (the mousedown guard should already have
+  // bailed for these, but belt-and-braces).
+  if (start > end) return;
+
+  _moveState = {
+    config,
+    persona,
+    shift,
+    block,
+    startX: e.clientX,
+    startY: e.clientY,
+    rowHeight: _gridRowHeightPx(),
+    colWidth: _gridColWidthPx(),
+    originalDayIdx: DAYS_FULL.indexOf(shift.day),
+    originalStart: start,
+    duration: end - start,
+    newDayIdx: DAYS_FULL.indexOf(shift.day),
+    newStart: start,
+    moved: false,
+    readout: null,
+  };
+
+  document.addEventListener('mousemove', _onMoveDragMove);
+  document.addEventListener('mouseup', _onMoveDragEnd, { once: true });
+}
+
+function _onMoveDragMove(e) {
+  if (!_moveState) return;
+  const dx = e.clientX - _moveState.startX;
+  const dy = e.clientY - _moveState.startY;
+
+  // Below the threshold, stay in click mode (no visual change yet).
+  if (!_moveState.moved) {
+    if (Math.abs(dx) < MOVE_THRESHOLD_PX && Math.abs(dy) < MOVE_THRESHOLD_PX) return;
+    _moveState.moved = true;
+    _moveState.block.classList.add('dragging');
+    _moveState.block.style.cursor = 'grabbing';
+    _moveState.readout = document.createElement('div');
+    _moveState.readout.className = 'drag-readout';
+    document.body.appendChild(_moveState.readout);
+  }
+
+  const dayDelta = Math.round(dx / _moveState.colWidth);
+  const hourDelta = Math.round(dy / _moveState.rowHeight);
+
+  _moveState.newDayIdx = Math.max(0, Math.min(6, _moveState.originalDayIdx + dayDelta));
+  // Keep the shift inside 0..23. If duration is N hours, start is bounded by
+  // [0, 23 - N] so end never exceeds 23.
+  const maxStart = 23 - _moveState.duration;
+  _moveState.newStart = Math.max(0, Math.min(maxStart, _moveState.originalStart + hourDelta));
+
+  // Live grid position update.
+  _moveState.block.style.gridColumn = String(_moveState.newDayIdx + 2);
+  _moveState.block.style.gridRow = `${_moveState.newStart + 2} / ${_moveState.newStart + _moveState.duration + 3}`;
+
+  // Readout follows the cursor: "Wed 14:00 – 16:00"
+  const fmt = (h) => String(h).padStart(2, '0') + ':00';
+  _moveState.readout.textContent =
+    `${DAYS_SHORT[_moveState.newDayIdx]}  ${fmt(_moveState.newStart)} – ${fmt(_moveState.newStart + _moveState.duration)}`;
+  _moveState.readout.style.left = `${e.clientX + 14}px`;
+  _moveState.readout.style.top  = `${e.clientY + 4}px`;
+}
+
+async function _onMoveDragEnd(e) {
+  if (!_moveState) return;
+  document.removeEventListener('mousemove', _onMoveDragMove);
+
+  if (!_moveState.moved) {
+    // No movement → was a click. Let the click handler fire normally.
+    _moveState = null;
+    return;
+  }
+
+  _moveState.block.classList.remove('dragging');
+  _moveState.block.style.cursor = 'grab';
+  _moveState.readout?.remove();
+  // Block the click that fires after mouseup on the same element.
+  _suppressNextClick = true;
+
+  const dayChanged = _moveState.newDayIdx !== _moveState.originalDayIdx;
+  const startChanged = _moveState.newStart !== _moveState.originalStart;
+  if (!dayChanged && !startChanged) {
+    _moveState = null;
+    return;
+  }
+
+  _moveState.shift.day = DAYS_FULL[_moveState.newDayIdx];
+  _moveState.shift.start_hour = _moveState.newStart;
+  _moveState.shift.end_hour = _moveState.newStart + _moveState.duration;
+  const configToSave = _moveState.config;
+  _moveState = null;
+
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(configToSave) });
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  } catch (err) {
+    console.warn('[schedule] save after move failed:', err);
     await renderSchedule();
     _attachBlockClickHandlers();
   }
