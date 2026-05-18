@@ -2,6 +2,8 @@
 
 A personal AI radio station that plays your local music library with an LLM-scripted DJ and text-to-speech voiceovers between every track.
 
+![RadioDunc UI](docs/screenshot.png)
+
 ## What it does
 
 - Scans your music library (MP3, FLAC, M4A, OGG) and builds a shuffled queue
