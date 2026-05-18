@@ -556,6 +556,114 @@ def _take_prefetched(target_idx: int) -> dict | None:
         return _prefetch_cache.pop(target_idx, None)
 
 
+# ── News clip cache ───────────────────────────────────────────────────────────
+# News bulletins are expensive to produce (LLM + TTS, ~5 s). We keep one ready
+# at all times: hand back the cached clip immediately, and refresh in the
+# background once it crosses the "stale" threshold so the next request still
+# gets something recent without paying the latency.
+NEWS_STALE_AFTER_S  = 20 * 60   # spawn background refresh after this
+NEWS_EXPIRE_AFTER_S = 30 * 60   # block and regenerate inline after this
+
+_news_cache: dict | None = None
+_news_cache_lock = threading.Lock()
+_news_refresh_in_flight = False
+
+
+def _build_news_clip(config: AppConfig) -> dict | None:
+    """Generate a fresh news script + TTS clip. Returns the cache entry or None."""
+    news_cfg = config.alerts.news
+    news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
+    voice = news_voice_cfg.voice if news_voice_cfg else None
+    instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
+    name = news_voice_cfg.name if news_voice_cfg else None
+
+    script = generate_news_script(config, newsreader_name=name)
+    if not script:
+        return None
+
+    try:
+        provider = build_tts_provider(config)
+    except ValueError:
+        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+
+    db = SessionLocal()
+    try:
+        try:
+            clip, _, _ = get_or_create_dj_clip(
+                db, script_text=script, voice=voice,
+                voice_instructions=instructions, provider=provider,
+                clip_type="news",
+            )
+        except RuntimeError:
+            logger.warning("News clip synthesis failed with voice=%r; retrying with default", voice)
+            clip, _, _ = get_or_create_dj_clip(
+                db, script_text=script, voice=None, provider=provider, clip_type="news",
+            )
+        if clip is None:
+            return None
+        return {
+            "generated_at": time.time(),
+            "clip_hash": clip.script_hash,
+            "script_text": script,
+        }
+    finally:
+        db.close()
+
+
+def _refresh_news_background(config: AppConfig) -> None:
+    global _news_cache, _news_refresh_in_flight
+    try:
+        entry = _build_news_clip(config)
+        if entry:
+            with _news_cache_lock:
+                _news_cache = entry
+            _log_event("news.cache.refreshed")
+    except Exception:  # noqa: BLE001
+        logger.exception("Background news refresh failed")
+    finally:
+        with _news_cache_lock:
+            _news_refresh_in_flight = False
+
+
+def get_news_clip(config: AppConfig) -> dict | None:
+    """Return a cached news clip, refreshing in the background if it's aging."""
+    global _news_cache, _news_refresh_in_flight
+    now = time.time()
+    with _news_cache_lock:
+        cached = _news_cache
+    age = (now - cached["generated_at"]) if cached else None
+
+    # No cache yet — generate inline (only happens on the first call after startup).
+    if cached is None:
+        entry = _build_news_clip(config)
+        if entry:
+            with _news_cache_lock:
+                _news_cache = entry
+        return entry
+
+    # Expired — regenerate inline; fall back to stale cache if that fails.
+    if age > NEWS_EXPIRE_AFTER_S:
+        _log_event("news.cache.expired", age_s=round(age))
+        entry = _build_news_clip(config)
+        if entry:
+            with _news_cache_lock:
+                _news_cache = entry
+            return entry
+        return cached
+
+    # Aging — spawn background refresh (if one isn't already running) and return stale.
+    if age > NEWS_STALE_AFTER_S:
+        with _news_cache_lock:
+            if not _news_refresh_in_flight:
+                _news_refresh_in_flight = True
+                threading.Thread(
+                    target=_refresh_news_background, args=(config,), daemon=True,
+                ).start()
+                _log_event("news.cache.refresh_scheduled", age_s=round(age))
+
+    return cached
+
+
 @app.post("/player/next", response_model=PlayerNextResponse)
 def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -654,35 +762,18 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
-    # Optional news clip — always fresh (no caching, news goes stale fast).
-    # Pick the newsreader voice first so we can pass its name into the script prompt.
+    # Optional news clip — served from a cache that refreshes itself in the
+    # background. The first call after server startup blocks; subsequent calls
+    # return immediately and trigger an async refresh once the cache ages.
     news_clip_url: str | None = None
     news_script_text: str | None = None
     if config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks):
-        news_cfg = config.alerts.news
-        news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
-        news_voice = news_voice_cfg.voice if news_voice_cfg else None
-        news_instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
-        newsreader_name = news_voice_cfg.name if news_voice_cfg else None
-        news_script_text = generate_news_script(config, newsreader_name=newsreader_name)
-        if news_script_text:
-            try:
-                news_clip, _, _ = get_or_create_dj_clip(
-                    db,
-                    script_text=news_script_text,
-                    voice=news_voice,
-                    voice_instructions=news_instructions,
-                    provider=provider,
-                    clip_type="news",
-                )
-                news_clip_url = f"/media/dj-clip/{news_clip.script_hash}"
-                _log_event(
-                    "player.next.news_attached",
-                    source=config.alerts.news.rss_url,
-                    newsreader=newsreader_name or "anonymous",
-                )
-            except RuntimeError:
-                logger.warning("News clip synthesis failed with voice=%r; skipping", news_voice)
+        entry = get_news_clip(config)
+        if entry:
+            news_clip_url = f"/media/dj-clip/{entry['clip_hash']}"
+            news_script_text = entry["script_text"]
+            age_s = round(time.time() - entry["generated_at"])
+            _log_event("player.next.news_attached", source=config.alerts.news.rss_url, age_s=age_s)
 
     # Optional ad clip: serve from pool or generate a new one.
     ad_clip_url: str | None = None
