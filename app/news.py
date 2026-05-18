@@ -3,11 +3,20 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from html import unescape
 
 logger = logging.getLogger(__name__)
+
+# 30-min RSS feed cache. The news bulletin cache in main.py already gates
+# most calls, but this guards against repeat fetches across server restarts
+# and during cold-start back-to-back generations.
+_HEADLINES_TTL_S = 30 * 60
+_headlines_cache: dict[tuple, tuple[float, dict]] = {}
+_headlines_cache_lock = threading.Lock()
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _ITEM_RE = re.compile(r"<item[^>]*>(.*?)</item>", re.IGNORECASE | re.DOTALL)
@@ -28,7 +37,7 @@ def _clean_html(text: str) -> str:
 
 
 def _fetch_rss(rss_url: str) -> str | None:
-    logger.info("Fetching RSS feed", extra={"rss_url": rss_url})
+    logger.debug("Fetching RSS feed", extra={"rss_url": rss_url})
     try:
         req = urllib.request.Request(rss_url, headers={"User-Agent": "RadioDunc/0.3"})
         with urllib.request.urlopen(req, timeout=15) as response:  # noqa: S310
@@ -54,7 +63,7 @@ def fetch_random_headline(rss_url: str) -> str | None:
         return None
 
     headline = random.choice(cleaned)
-    logger.info("Selected RSS headline", extra={"rss_url": rss_url, "headline": headline})
+    logger.debug("Selected RSS headline", extra={"rss_url": rss_url, "headline": headline})
     return headline
 
 
@@ -62,8 +71,17 @@ def fetch_top_headlines(rss_url: str, count: int = 3) -> dict | None:
     """Fetch top N RSS items with title + description, plus the channel title.
 
     Returns None on failure. On success: {'source': str, 'items': [{'title', 'description'}, ...]}.
-    Items are returned in feed order (most RSS feeds put newest first).
+    Items are returned in feed order (most RSS feeds put newest first). Successful
+    results are cached for 30 minutes per (rss_url, count) — failures are not cached.
     """
+    key = (rss_url, count)
+    now = time.time()
+    with _headlines_cache_lock:
+        cached = _headlines_cache.get(key)
+    if cached and now - cached[0] < _HEADLINES_TTL_S:
+        logger.debug("Headlines cache hit", extra={"rss_url": rss_url, "age_s": round(now - cached[0])})
+        return cached[1]
+
     body = _fetch_rss(rss_url)
     if body is None:
         return None
@@ -96,4 +114,7 @@ def fetch_top_headlines(rss_url: str, count: int = 3) -> dict | None:
         "Fetched top headlines",
         extra={"rss_url": rss_url, "source": source, "count": len(items)},
     )
-    return {"source": source, "items": items}
+    result = {"source": source, "items": items}
+    with _headlines_cache_lock:
+        _headlines_cache[key] = (time.time(), result)
+    return result
