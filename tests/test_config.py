@@ -54,3 +54,64 @@ def test_save_config_does_not_persist_openai_api_key(tmp_path, monkeypatch):
     save_config(cfg)
     raw = config_path.read_text(encoding="utf-8")
     assert "openai_api_key" not in raw
+
+
+# ── save_config atomicity + load_config resilience ──────────────────────────
+
+def test_save_config_writes_atomically_via_tempfile(tmp_path, monkeypatch):
+    """Bytes either look fully-valid or stay as the previous version — never
+    zero-byte mid-write. Verified by checking the temp file lifecycle."""
+    from app.config import AppConfig, StationConfig, save_config
+    monkeypatch.setattr("app.config.CONFIG_PATH", tmp_path / "radio_config.json")
+    cfg = AppConfig(station=StationConfig(name="Atomic FM"))
+    save_config(cfg)
+    final = tmp_path / "radio_config.json"
+    assert final.exists()
+    # Temp file should be gone after the rename.
+    assert not (tmp_path / "radio_config.json.tmp").exists()
+    # File is valid JSON.
+    import json as _json
+    assert _json.loads(final.read_text())["station"]["name"] == "Atomic FM"
+
+
+def test_load_config_recovers_from_empty_file(tmp_path, monkeypatch, caplog):
+    """An empty (zero-byte) config — possible from a pre-fix non-atomic crash —
+    should not 500. It should rebootstrap from the example template."""
+    import logging as _logging
+    from app.config import AppConfig, load_config
+    config_path = tmp_path / "radio_config.json"
+    example_path = tmp_path / "example-radio_config.json"
+    config_path.write_text("")  # zero-byte
+    example_path.write_text(
+        '{"station": {"name": "Bootstrap FM", "format": "Eclectic"}}'
+    )
+    monkeypatch.setattr("app.config.CONFIG_PATH", config_path)
+    monkeypatch.setattr("app.config.EXAMPLE_CONFIG_PATH", example_path)
+    caplog.set_level(_logging.WARNING)
+    cfg = load_config()
+    assert cfg.station.name == "Bootstrap FM"
+    # The file is repopulated so subsequent reads succeed.
+    assert config_path.read_text().strip() != ""
+
+
+def test_load_config_recovers_from_malformed_file(tmp_path, monkeypatch):
+    from app.config import load_config
+    config_path = tmp_path / "radio_config.json"
+    example_path = tmp_path / "example-radio_config.json"
+    config_path.write_text("{not valid json")
+    example_path.write_text('{"station": {"name": "Recovery FM", "format": "Eclectic"}}')
+    monkeypatch.setattr("app.config.CONFIG_PATH", config_path)
+    monkeypatch.setattr("app.config.EXAMPLE_CONFIG_PATH", example_path)
+    cfg = load_config()
+    assert cfg.station.name == "Recovery FM"
+
+
+def test_load_config_whitespace_only_treated_as_empty(tmp_path, monkeypatch):
+    from app.config import load_config
+    config_path = tmp_path / "radio_config.json"
+    example_path = tmp_path / "example-radio_config.json"
+    config_path.write_text("   \n\n  \t")
+    example_path.write_text('{"station": {"name": "Whitespace FM", "format": "Eclectic"}}')
+    monkeypatch.setattr("app.config.CONFIG_PATH", config_path)
+    monkeypatch.setattr("app.config.EXAMPLE_CONFIG_PATH", example_path)
+    assert load_config().station.name == "Whitespace FM"

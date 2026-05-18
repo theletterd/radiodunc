@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -398,21 +399,40 @@ def _validate_and_format_config(source: str, raw_data: dict) -> AppConfig:
         raise ValueError(f"Invalid config in {source}: {details}") from exc
 
 
-def load_config() -> AppConfig:
-    if not CONFIG_PATH.exists():
-        if EXAMPLE_CONFIG_PATH.exists():
-            data = json.loads(EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8"))
-            config = _validate_and_format_config(str(EXAMPLE_CONFIG_PATH), data)
-        else:
-            config = AppConfig()
-        save_config(config)
-        env_api_key = _load_dotenv_api_key()
-        if env_api_key:
-            config = config.model_copy(update={"openai_api_key": env_api_key})
-        return config
+def _bootstrap_from_example_or_default() -> AppConfig:
+    """Build a config from the example file if present, else AppConfig defaults."""
+    if EXAMPLE_CONFIG_PATH.exists():
+        data = json.loads(EXAMPLE_CONFIG_PATH.read_text(encoding="utf-8"))
+        return _validate_and_format_config(str(EXAMPLE_CONFIG_PATH), data)
+    return AppConfig()
 
-    data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    config = _validate_and_format_config(str(CONFIG_PATH), data)
+
+def load_config() -> AppConfig:
+    bootstrap_needed = not CONFIG_PATH.exists()
+
+    if not bootstrap_needed:
+        text = CONFIG_PATH.read_text(encoding="utf-8")
+        if not text.strip():
+            # Defensive: an empty / whitespace-only file should never exist with
+            # the atomic-rename save_config below, but if something external
+            # zeroed it out (manual edit, disk weirdness, killed process from
+            # before the fix) we don't want to 500 every request — rebootstrap
+            # silently from the example template.
+            logging.getLogger(__name__).warning("radio_config.json was empty; re-bootstrapping from example template")
+            bootstrap_needed = True
+        else:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as exc:
+                logging.getLogger(__name__).warning("radio_config.json could not be parsed (%s); re-bootstrapping from example", exc)
+                bootstrap_needed = True
+
+    if bootstrap_needed:
+        config = _bootstrap_from_example_or_default()
+        save_config(config)
+    else:
+        config = _validate_and_format_config(str(CONFIG_PATH), data)
+
     env_api_key = _load_dotenv_api_key()
     if env_api_key:
         config = config.model_copy(update={"openai_api_key": env_api_key})
@@ -420,9 +440,14 @@ def load_config() -> AppConfig:
 
 
 def save_config(config: AppConfig) -> None:
+    """Write the config atomically: temp file + rename so concurrent readers
+    never catch a partially-written or zero-byte file. POSIX rename on the
+    same filesystem is atomic, so the file either contains the old bytes or
+    the new bytes — never silence."""
     serialized = config.model_dump()
     serialized.pop("openai_api_key", None)
-    CONFIG_PATH.write_text(
-        json.dumps(serialized, indent=2),
-        encoding="utf-8",
-    )
+    payload = json.dumps(serialized, indent=2)
+
+    tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(CONFIG_PATH)
