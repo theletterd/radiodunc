@@ -57,7 +57,8 @@
         }
       ],
       "pool_size": 100,
-      "every_n_breaks": 6
+      "every_n_breaks": 6,
+      "risque_chance": 0.1
     },
     "station_id": {
       "enabled": true,
