@@ -300,9 +300,10 @@ async function triggerTransition(reason) {
       console.warn('[audio] DJ clip unavailable, crossfading without it:', djResult.reason);
     }
 
-    // Optional news + ad clips play after the DJ clip.
+    // Optional news + ad + station-ID clips play after the DJ clip.
     let newsBuf = null;
     let adBuf = null;
+    let sidBuf = null;
     const segmentFetches = [];
     if (next.news_clip_url) {
       segmentFetches.push(
@@ -316,6 +317,13 @@ async function triggerTransition(reason) {
         fetchAndDecode(next.ad_clip_url)
           .then(b => { adBuf = b; })
           .catch(err => console.warn('[audio] ad clip unavailable, skipping:', err))
+      );
+    }
+    if (next.station_id_clip_url) {
+      segmentFetches.push(
+        fetchAndDecode(next.station_id_clip_url)
+          .then(b => { sidBuf = b; })
+          .catch(err => console.warn('[audio] station ID clip unavailable, skipping:', err))
       );
     }
     if (segmentFetches.length) await Promise.allSettled(segmentFetches);
@@ -338,19 +346,22 @@ async function triggerTransition(reason) {
 
     // 4. Place clips on the AudioContext timeline. djStart may already be in
     //    the past (we awaited above); AudioContext handles that gracefully.
-    //    Order: DJ → News → Ad → Track.
+    //    Order: DJ → News → Ad → Station ID → Track.
     const djStart = ctx.currentTime + 0.05;
     let cursor  = djStart;
     let djEnd   = djStart;
     let newsStart = null;
     let adStart   = null;
+    let sidStart  = null;
 
     if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip');     cursor = djEnd; }
     if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip'); }
     if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip'); }
+    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID'); }
     djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
     // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
+    //     Station ID reuses the pink 'dj' badge — it's a DJ-voice throw back to music.
     const nowT = ctx.currentTime;
     const scheduleAt = (mode, audioTime, label = null) =>
       scheduleMode(mode, Math.max(0, (audioTime - nowT) * 1000), label);
@@ -359,15 +370,18 @@ async function triggerTransition(reason) {
       scheduleAt('dj', djStart);
       if (newsBuf) scheduleAt('news', newsStart);
       if (adBuf)   scheduleAt('ad',   adStart);
+      if (sidBuf)  scheduleAt('dj',   sidStart);
       scheduleAt('track', cursor, next.current_track_label);
     } else {
       // No DJ clip: jump straight to whatever's first, or to the track.
       if (newsBuf) {
         scheduleAt('news', newsStart || djStart);
-        if (adBuf) scheduleAt('ad', adStart);
+        if (adBuf)  scheduleAt('ad', adStart);
+        if (sidBuf) scheduleAt('dj', sidStart);
         scheduleAt('track', cursor, next.current_track_label);
       } else if (adBuf) {
         scheduleAt('ad', adStart || djStart);
+        if (sidBuf) scheduleAt('dj', sidStart);
         scheduleAt('track', cursor, next.current_track_label);
       } else {
         setOnAirMode('track', next.current_track_label);
