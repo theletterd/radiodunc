@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
+
+# 30-min in-memory cache. The DJ-script and prefetch threads often hit weather
+# back-to-back for adjacent transitions; without this we'd double-call
+# Open-Meteo for the exact same location twice within seconds.
+_SUMMARY_TTL_S = 30 * 60
+_summary_cache: dict[tuple, tuple[float, str]] = {}
+_summary_cache_lock = threading.Lock()
 
 _WEATHER_CODE_LABELS = {
     0: "clear skies",
@@ -45,10 +54,20 @@ def fetch_weather_summary(
     latitude: float | None = None,
     longitude: float | None = None,
 ) -> str | None:
-    logger.info("Starting weather lookup for requested location=%s", location)
+    # Cache hit fast path. Only successful summaries get cached — on failure we
+    # want to retry next time rather than be stuck with a stale 'None' for 30 min.
+    key = (location, latitude, longitude)
+    now = time.time()
+    with _summary_cache_lock:
+        cached = _summary_cache.get(key)
+    if cached and now - cached[0] < _SUMMARY_TTL_S:
+        logger.debug("Weather cache hit", extra={"location": location, "age_s": round(now - cached[0])})
+        return cached[1]
+
+    logger.debug("Starting weather lookup for requested location=%s", location)
 
     if latitude is not None and longitude is not None:
-        logger.info(
+        logger.debug(
             "Using pinned coordinates for location=%s lat=%s lon=%s (geocoding skipped)",
             location, latitude, longitude,
         )
@@ -70,7 +89,7 @@ def fetch_weather_summary(
         if not isinstance(results, list) or not results:
             logger.warning("Weather geocoding returned no results for location=%s", location)
             return None
-        logger.info("Weather geocoding returned %d result(s) for location=%s", len(results), location)
+        logger.debug("Weather geocoding returned %d result(s) for location=%s", len(results), location)
         top_result = results[0]
         if not isinstance(top_result, dict):
             logger.warning("Weather geocoding top result was not a dict for location=%s", location)
@@ -83,7 +102,7 @@ def fetch_weather_summary(
         if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
             logger.warning("Weather geocoding missing coordinates for location=%s", location)
             return None
-        logger.info(
+        logger.debug(
             "Weather geocoding resolved location=%s to match=%s, admin=%s, country=%s at lat=%s lon=%s",
             location, matched_name, matched_admin, matched_country, latitude, longitude,
         )
@@ -136,4 +155,7 @@ def fetch_weather_summary(
         round(wind) if isinstance(wind, (int, float)) else None,
     )
     logger.debug("Weather summary generated for location=%s: %s", location, summary)
+
+    with _summary_cache_lock:
+        _summary_cache[key] = (time.time(), summary)
     return summary

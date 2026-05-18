@@ -1,6 +1,16 @@
+import pytest
 from unittest.mock import patch
 
+import app.news as _news_mod
 from app.news import fetch_random_headline, fetch_top_headlines
+
+
+@pytest.fixture(autouse=True)
+def _reset_headlines_cache():
+    """Reset the 30-min RSS cache between tests so mocked urlopen always fires."""
+    _news_mod._headlines_cache.clear()
+    yield
+    _news_mod._headlines_cache.clear()
 
 
 SAMPLE_RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -125,3 +135,30 @@ def test_fetch_top_headlines_returns_none_when_no_items():
     rss = b"<?xml version='1.0'?><rss><channel><title>Empty</title></channel></rss>"
     with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(rss)):
         assert fetch_top_headlines("https://example.com/rss", count=3) is None
+
+
+def test_fetch_top_headlines_caches_successful_fetches():
+    url = "https://example.com/rss"
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(_SAMPLE_RSS_WITH_DESCRIPTIONS)) as mock_open:
+        first = fetch_top_headlines(url, count=3)
+        second = fetch_top_headlines(url, count=3)
+    assert first is not None
+    assert second == first
+    assert mock_open.call_count == 1  # second call served from cache
+
+
+def test_fetch_top_headlines_does_not_cache_failures():
+    import urllib.error
+    url = "https://example.com/rss"
+    with patch("app.news.urllib.request.urlopen", side_effect=urllib.error.URLError("boom")) as mock_open:
+        fetch_top_headlines(url, count=3)
+        fetch_top_headlines(url, count=3)
+    assert mock_open.call_count == 2  # both calls hit the network
+
+
+def test_fetch_top_headlines_cache_keyed_separately_per_count():
+    url = "https://example.com/rss"
+    with patch("app.news.urllib.request.urlopen", return_value=_FakeResponse(_SAMPLE_RSS_WITH_DESCRIPTIONS)) as mock_open:
+        fetch_top_headlines(url, count=3)
+        fetch_top_headlines(url, count=2)
+    assert mock_open.call_count == 2  # different counts → different cache keys
