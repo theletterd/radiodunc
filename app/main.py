@@ -741,15 +741,6 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         ad_attached=bool(ad_clip_url),
     )
 
-    # Fire-and-forget: pre-generate the DJ clip for the next transition.
-    prefetch_target = next_idx + 1
-    if prefetch_target < len(queue):
-        threading.Thread(
-            target=_prefetch_dj_clip,
-            args=(prefetch_target, list(queue), next_idx),
-            daemon=True,
-        ).start()
-
     return PlayerNextResponse(
         current_track_url=f"/media/track/{next_track.id}",
         current_track_metadata=TrackOut.model_validate(next_track),
@@ -763,6 +754,26 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
         dj_script=script_text or "",
     )
+
+
+@app.post("/player/prefetch", status_code=202)
+def player_prefetch(db: Session = Depends(get_db)):
+    """Called by the client ~20 s before a track ends to pre-generate the next DJ clip."""
+    state = _get_or_create_player_state(db)
+    if not state.is_playing or not state.queue_json:
+        return {"status": "idle"}
+    queue = json.loads(state.queue_json)
+    current_idx = state.queue_index
+    prefetch_target = current_idx + 1
+    if prefetch_target >= len(queue):
+        return {"status": "end_of_queue"}
+    threading.Thread(
+        target=_prefetch_dj_clip,
+        args=(prefetch_target, list(queue), current_idx),
+        daemon=True,
+    ).start()
+    _log_event("player.prefetch.requested", target_idx=prefetch_target)
+    return {"status": "scheduled"}
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)
