@@ -1,5 +1,27 @@
 # RadioDunc — Backlog
 
+## ☐ Persona definition refactor — split personality from voice
+
+Today a persona is `dj_style` (free-text) + `voice` + `voice_instructions`.
+The free-text style field mixes two distinct concerns: **what they say**
+(personality, slang, attitude, what they'd talk about) and **how they sound**
+(pacing, accent, delivery characteristics). These should be separate fields.
+
+The base prompt template (DJ role, ad-break teases, time mentions, weather/
+news handoffs, station-name pronunciation rules) should remain unchangeable
+scaffolding — personas slot personality + voice into clearly-named placeholders
+inside it, rather than overriding the whole template.
+
+End state lets us swap in distinct vibes cleanly:
+  - "Flirty late-night naughty DJ" (personality) + (breathy, low, intimate voice)
+  - "Perky kids morning DJ" (personality) + (bright, energetic voice)
+
+Implementation when picked up:
+- Rename `dj_style` → `personality` on StationConfig + DJPersona, with a
+  migration validator that keeps existing configs working
+- Document the base prompt template as the locked-in scaffolding
+- UI Phase 3 should expose personality and voice_description as separate fields
+
 ## DJ / personality system
 - ✅ Consolidate DJ config: station fields are the default DJ, `dj_roster` entries are scheduled overrides
 - ✅ Renamed `voice_hint` → `voice` everywhere (consistent with `voice_instructions`)

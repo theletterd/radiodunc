@@ -10,23 +10,55 @@
   <link rel="stylesheet" href="/ui/styles.css" />
 </head>
 <body>
-  <div class="wrap">
-    <aside>
-      <div id="libraryStatus" class="library-status muted">
-        <span id="libTrackCount">— tracks</span>
-        <span id="libLastScan"></span>
-      </div>
-      <details>
-        <summary>Library Setup</summary>
-        <div class="card">
-          <label class="muted" for="libraryPath" style="display:block; margin-bottom:6px; font-size:0.8rem;">Music folder</label>
-          <input id="libraryPath" placeholder="/path/to/music" />
-          <div class="row" style="margin-top:10px;">
-            <button id="scanBtn" class="primary">Scan Library</button>
-          </div>
-          <p id="scanStatus" class="status muted">Idle</p>
+  <div class="wrap" id="wrap" data-mode="default">
+    <aside id="sidebar">
+      <!-- Default sidebar content -->
+      <div class="sidebar-view sidebar-default">
+        <div id="libraryStatus" class="library-status muted">
+          <span id="libTrackCount">— tracks</span>
+          <span id="libLastScan"></span>
         </div>
-      </details>
+
+        <button id="openSchedulerBtn" class="sidebar-action">
+          <span class="emoji">📅</span> The Schedule
+        </button>
+
+        <details>
+          <summary>Library Setup</summary>
+          <div class="card">
+            <label class="muted" for="libraryPath" style="display:block; margin-bottom:6px; font-size:0.8rem;">Music folder</label>
+            <input id="libraryPath" placeholder="/path/to/music" />
+            <div class="row" style="margin-top:10px;">
+              <button id="scanBtn" class="primary">Scan Library</button>
+            </div>
+            <p id="scanStatus" class="status muted">Idle</p>
+          </div>
+        </details>
+      </div>
+
+      <!-- Scheduler view (sidebar expands when this is shown) -->
+      <div class="sidebar-view sidebar-scheduler" data-sub-view="grid">
+        <div class="scheduler-header">
+          <h2 class="scheduler-title">📅 The Schedule</h2>
+          <button id="closeSchedulerBtn" class="icon-button" title="Close schedule">✕</button>
+        </div>
+
+        <!-- Grid sub-view -->
+        <div class="scheduler-grid-view">
+          <div id="scheduleLegend" class="schedule-legend"></div>
+          <div id="scheduleGrid" class="schedule-grid"></div>
+          <div class="row" style="margin-top:14px; justify-content:space-between;">
+            <button id="addPersonaBtn" class="primary">+ New persona</button>
+            <span class="muted" style="font-size:0.72rem;">Click a block to edit</span>
+          </div>
+        </div>
+
+        <!-- Edit sub-view -->
+        <div class="scheduler-edit-view">
+          <button id="backToGridBtn" class="icon-button" style="margin-bottom:12px;">← Back</button>
+          <form id="personaForm" class="persona-form" autocomplete="off"></form>
+        </div>
+      </div>
     </aside>
 
     <main>
@@ -62,16 +94,6 @@
         <ul id="searchResults" style="margin-top:6px;"></ul>
       </div>
 
-      <details class="card schedule-card">
-        <summary>
-          <h3 style="display:inline-block; margin:0;">📅 The Schedule</h3>
-        </summary>
-        <div id="scheduleLegend" class="schedule-legend"></div>
-        <div id="scheduleGrid" class="schedule-grid"></div>
-        <p class="muted" style="margin-top:8px; font-size:0.75rem;">
-          Empty cells = base DJ. Personas overlap by roster order — the first match wins on air.
-        </p>
-      </details>
     </main>
   </div>
 
