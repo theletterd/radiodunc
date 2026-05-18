@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.request
@@ -325,19 +327,50 @@ def generate_news_script(config: AppConfig, newsreader_name: str | None = None) 
 
 STATION_ID_CACHE_FILE = Path("generated_station_ids.json")
 
-DEFAULT_STATION_ID_PROMPT = """\
+# Each vibe gets its own LLM call so the model stays focused on one tone per
+# batch — much better variety and quality than asking for "vary the vibe" in a
+# single 30-line prompt, where the LLM tends to drift and repeat itself.
+STATION_ID_VIBES: list[tuple[str, str]] = [
+    (
+        "classic",
+        "Classic, professional radio station IDs. Neutral, clearly enunciated, "
+        "the kind a real FM affiliate would use. Confident but not flashy.",
+    ),
+    (
+        "hyped",
+        "Punchy and high-energy. Like a DJ shouting over the intro of a hit "
+        "single. Big, bold, attention-grabbing. Exclamations are fair game.",
+    ),
+    (
+        "warm",
+        "Warm and welcoming. Like a host inviting an old friend in. "
+        "Conversational, gentle, intimate — could fit a Sunday morning slot.",
+    ),
+    (
+        "cheeky",
+        "Cheeky and playful. A wink at the listener. Lightly irreverent, "
+        "mildly self-aware, fun without trying too hard.",
+    ),
+    (
+        "confident",
+        "Cool and confident. Late-night-radio swagger. Understated, smooth, "
+        "the kind of line a DJ delivers half-smiling.",
+    ),
+]
+
+STATION_ID_PROMPT_TEMPLATE = """\
 Write {count} short station-ID stingers for a radio station called "{station_name}".
 Tagline: "{tagline}".
 
+Vibe for this batch: {vibe}
+
 Each stinger should be:
 - ONE sentence, 4–10 words. Short and snappy.
-- Upbeat, easy to say out loud, with a clear sense of personality.
-- Vary the vibe across the {count}: some classic ("This is X"), some punchy and
-  hyped, some warm and welcoming, some confident and cool, some cheeky.
-- Reference the station name naturally. Use the full name sometimes; just the
-  call letters or numbers other times.
+- Easy to say out loud.
+- Reference the station name naturally. Sometimes use the full name; sometimes
+  just the call letters or numbers.
 - Plain text only. No quotation marks, no numbering, no markdown, no emojis,
-  no extra commentary.
+  no commentary.
 
 Return them as a plain list, one per line."""
 
@@ -360,41 +393,102 @@ def _save_station_id_cache(cache: dict[str, list[str]]) -> None:
         logger.warning("Could not write %s: %s", STATION_ID_CACHE_FILE, exc)
 
 
+def _parse_phrase_lines(response: str | None) -> list[str]:
+    if not response:
+        return []
+    phrases: list[str] = []
+    for line in response.splitlines():
+        cleaned = line.strip().strip('"').strip("'").lstrip("-•*0123456789. )").strip()
+        if 3 < len(cleaned) < 200:
+            phrases.append(cleaned)
+    return phrases
+
+
+def _generate_station_id_batch(
+    vibe_name: str,
+    vibe_instruction: str,
+    count: int,
+    station_name: str,
+    tagline: str,
+    config: AppConfig,
+) -> list[str]:
+    prompt = STATION_ID_PROMPT_TEMPLATE.format(
+        count=count,
+        station_name=station_name,
+        tagline=tagline,
+        vibe=vibe_instruction,
+    )
+    response = _call_openai_text(prompt, config)
+    phrases = _parse_phrase_lines(response)
+    logger.info(
+        "Station ID batch generated",
+        extra={"vibe": vibe_name, "requested": count, "got": len(phrases)},
+    )
+    return phrases
+
+
 def get_station_id_phrases(config: AppConfig) -> list[str]:
     """Return the cached stinger phrases for the current station name.
 
-    Generated once via the LLM on first call and persisted to disk. If the station
-    name changes, a fresh set is generated (and the old set stays cached, in case
-    you switch back). Falls back to a single hard-coded line if the LLM is
-    unavailable or returns nothing usable.
+    Generated once via the LLM on first call and persisted to disk. Generation
+    happens in parallel across several distinct "vibe" batches (classic, hyped,
+    warm, cheeky, confident) so the resulting set has real tonal variety rather
+    than the repetitive output a single big-list LLM call tends to produce.
+
+    If the station name changes, a fresh set is generated and the old set stays
+    cached, in case you switch back. Falls back to a single hard-coded line if
+    every batch returns nothing usable.
     """
     station_name = config.station.name
     cache = _load_station_id_cache()
     if cached := cache.get(station_name):
         return cached
 
-    prompt = DEFAULT_STATION_ID_PROMPT.format(
-        count=config.alerts.station_id.phrase_count,
-        station_name=station_name,
-        tagline=config.station.tagline or "",
+    total = config.alerts.station_id.phrase_count
+    per_vibe = max(1, math.ceil(total / len(STATION_ID_VIBES)))
+    tagline = config.station.tagline or ""
+
+    logger.info(
+        "Generating station ID phrases via OpenAI",
+        extra={
+            "station_name": station_name,
+            "vibes": len(STATION_ID_VIBES),
+            "per_vibe": per_vibe,
+            "target_total": total,
+        },
     )
-    logger.info("Generating station ID phrases via OpenAI", extra={"station_name": station_name})
-    response = _call_openai_text(prompt, config)
 
     phrases: list[str] = []
-    if response:
-        for line in response.splitlines():
-            cleaned = line.strip().strip('"').strip("'").lstrip("-•*0123456789. )").strip()
-            if 3 < len(cleaned) < 200:
-                phrases.append(cleaned)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(STATION_ID_VIBES)) as pool:
+        futures = [
+            pool.submit(
+                _generate_station_id_batch,
+                name, instr, per_vibe, station_name, tagline, config,
+            )
+            for name, instr in STATION_ID_VIBES
+        ]
+        for fut in futures:
+            try:
+                phrases.extend(fut.result())
+            except Exception:  # noqa: BLE001
+                logger.exception("Station ID vibe batch failed")
 
-    if not phrases:
+    # Dedupe case-insensitively while preserving the original order/casing.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for phrase in phrases:
+        key = phrase.lower().strip(" .!?,")
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(phrase)
+
+    if not deduped:
         logger.warning("Station ID generation returned no usable phrases; using fallback")
-        phrases = [f"This is {station_name}."]
+        deduped = [f"This is {station_name}."]
 
-    cache[station_name] = phrases
+    cache[station_name] = deduped
     _save_station_id_cache(cache)
-    return phrases
+    return deduped
 
 
 def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:

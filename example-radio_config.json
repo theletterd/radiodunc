@@ -61,7 +61,7 @@
     },
     "station_id": {
       "enabled": true,
-      "phrase_count": 8
+      "phrase_count": 40
     }
   },
   "station": {
