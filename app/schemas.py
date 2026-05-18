@@ -114,6 +114,7 @@ class PlayerNextResponse(BaseModel):
     ad_script: str | None = None
     news_clip_url: str | None = None  # plays right after the DJ clip when news fires (before ads if both)
     news_script: str | None = None
+    station_id_clip_url: str | None = None  # short stinger played after an ad break
     next_track_url: str | None = None
     next_track_metadata: TrackOut | None = None  # look-ahead (N+2) for prefetch hints
     dj_script: str

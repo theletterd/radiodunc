@@ -58,6 +58,15 @@
       ],
       "pool_size": 100,
       "every_n_breaks": 6
+    },
+    "station_id": {
+      "enabled": true,
+      "phrases": [
+        "This is {station_name}.",
+        "You're listening to {station_name}.",
+        "{station_name} — {tagline}",
+        "You're tuned in to {station_name}."
+      ]
     }
   },
   "station": {

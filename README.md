@@ -147,6 +147,7 @@ The first roster entry whose `days`/`start_hour`/`end_hour` matches the current 
 - **weather** — pulls live conditions from Open-Meteo, reported in Celsius. Set `weather_latitude` and `weather_longitude` to bypass geocoding (useful for small cities or suburbs the Open-Meteo geocoder doesn't recognise — find coords at latlong.net). `weather_location` is still used as the spoken name in DJ lines.
 - **news** — a full news bulletin segment that plays right after the DJ's hand-off. Fetches the top `headline_count` items from any RSS feed (default: Guardian World), and asks the LLM to write a short professional bulletin with an intro / body / outro structure. Voiced by one of the configured `voices` (default: `onyx` as "Alex Morgan", with BBC-newsreader instructions). Each voice can have its own `name`, which is referenced in the bulletin's intro and outro. Never cached — every bulletin is fresh.
 - **ads** — generates fake ad-break scripts via OpenAI; one voice is picked at random per break. Once `pool_size` clips are cached, new breaks are drawn from the pool instead of generating fresh ones
+- **station_id** — short stinger ("This is RadioDunc 107.2 FM", "You're listening to…") played right after every ad break, in the active DJ's voice. `{station_name}` and `{tagline}` are substituted into each phrase. Clips are cached forever via the standard TTS hash, so each phrase+voice pair generates only once.
 
 ## Project structure
 

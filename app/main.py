@@ -722,6 +722,32 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
             ad_clip_url = f"/media/dj-clip/{ad_clip.script_hash}"
             _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
 
+    # Station ID stinger — plays right after the ad break in the active DJ voice.
+    # Each phrase is cached forever via the existing TTS hash (script + voice).
+    station_id_clip_url: str | None = None
+    sid_cfg = config.alerts.station_id
+    if ad_clip_url and sid_cfg.enabled and sid_cfg.phrases:
+        phrase_template = random.choice(sid_cfg.phrases)
+        sid_text = phrase_template.format(
+            station_name=station.name,
+            tagline=station.tagline or "",
+        ).strip()
+        if sid_text:
+            try:
+                sid_clip, _, sid_cached = get_or_create_dj_clip(
+                    db,
+                    script_text=sid_text,
+                    voice=voice,
+                    voice_instructions=station.voice_instructions,
+                    provider=provider,
+                    clip_type="station_ids",
+                )
+                if sid_clip is not None:
+                    station_id_clip_url = f"/media/dj-clip/{sid_clip.script_hash}"
+                    _log_event("player.next.station_id_attached", phrase=sid_text[:60], cached=sid_cached)
+            except RuntimeError:
+                logger.warning("Station ID synthesis failed with voice=%r; skipping", voice)
+
     state.queue_index = next_idx
     state.current_track_id = next_track.id
     db.commit()
@@ -750,6 +776,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         ad_script=ad_script_text,
         news_clip_url=news_clip_url,
         news_script=news_script_text,
+        station_id_clip_url=station_id_clip_url,
         next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
         dj_script=script_text or "",

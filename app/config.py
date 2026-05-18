@@ -103,6 +103,25 @@ class AdBreakPreferences(BaseModel):
     )
 
 
+class StationIDPreferences(BaseModel):
+    """Short 'This is RadioDunc 107.2 FM' style stingers played after ad breaks."""
+
+    enabled: bool = True
+    phrases: list[str] = Field(
+        default_factory=lambda: [
+            "This is {station_name}.",
+            "You're listening to {station_name}.",
+            "{station_name} — {tagline}",
+            "You're tuned in to {station_name}.",
+        ],
+        description=(
+            "Pool of stinger phrases — one is picked at random each time. "
+            "Supports {station_name} and {tagline} placeholders. Clips are cached "
+            "forever (the TTS clip cache keys on script + voice)."
+        ),
+    )
+
+
 class AlertConfig(BaseModel):
     weather_location: str = Field(
         default="Seattle, WA",
@@ -127,6 +146,7 @@ class AlertConfig(BaseModel):
     weather: WeatherPreferences = Field(default_factory=WeatherPreferences)
     news: NewsPreferences = Field(default_factory=NewsPreferences)
     ads: AdBreakPreferences = Field(default_factory=AdBreakPreferences)
+    station_id: StationIDPreferences = Field(default_factory=StationIDPreferences)
 
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")

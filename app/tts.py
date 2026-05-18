@@ -106,6 +106,7 @@ _CLIP_TYPE_SUBDIRS = {
     "transitions": "transitions",
     "ads": "ads",
     "news": "news",
+    "station_ids": "station_ids",
 }
 
 
