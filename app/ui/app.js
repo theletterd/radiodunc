@@ -439,6 +439,32 @@ async function triggerTransition(reason) {
 }
 
 // ── Start playback ────────────────────────────────────────────────────────────
+// Loads the server's current_track into slot A and starts playback with a gentle
+// fade-in. Shared between startPlayback (fresh queue) and resumeAfterRefresh.
+async function _playCurrentTrackFromServer() {
+  if (!serverState?.current_track?.id) throw new Error('Server returned no current track');
+
+  for (const key of ['A', 'B']) {
+    slots[key].gainNode.gain.cancelScheduledValues(ctx.currentTime);
+    slots[key].gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    slots[key].el.pause();
+    slots[key].el.src = '';
+  }
+  activeSlot = 'A';
+
+  const cur = curSlot();
+  await loadWithRetry(cur.el, `/media/track/${serverState.current_track.id}`);
+  await cur.el.play();
+
+  cur.gainNode.gain.setValueAtTime(0, ctx.currentTime);
+  cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
+
+  scheduleAutoTrigger(cur.el.duration);
+  schedulePrefetch(cur.el.duration);
+
+  renderAll();
+}
+
 async function startPlayback() {
   paused = false;
   _autoTriggerRemaining = null;
@@ -450,29 +476,19 @@ async function startPlayback() {
     body: JSON.stringify({ queue_size: 30 }),
   });
   serverState = resp.state;
-  if (!serverState.current_track?.id) throw new Error('Server returned no current track');
+  await _playCurrentTrackFromServer();
+}
 
-  // Reset slots for a clean start
-  for (const key of ['A', 'B']) {
-    slots[key].gainNode.gain.cancelScheduledValues(ctx.currentTime);
-    slots[key].gainNode.gain.setValueAtTime(0, ctx.currentTime);
-    slots[key].el.pause();
-    slots[key].el.src = '';
-  }
-  activeSlot = 'A';
-
-  const cur = curSlot();
-  await loadWithRetry(cur.el, `/media/track/${serverState.current_track?.id}`);
-  await cur.el.play();
-
-  // Fade in gently
-  cur.gainNode.gain.setValueAtTime(0, ctx.currentTime);
-  cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
-
-  scheduleAutoTrigger(cur.el.duration); // metadata already loaded by loadWithRetry
-  schedulePrefetch(cur.el.duration);
-
-  renderAll();
+// After a page refresh while paused (or while playing), the server still thinks
+// is_playing=true but the client has no AudioContext. This picks up the current
+// track at position 0 and resumes without rebuilding the queue.
+async function resumeAfterRefresh() {
+  paused = false;
+  _autoTriggerRemaining = null;
+  initAudio();
+  await ctx.resume();
+  serverState = await api('/player/status');
+  await _playCurrentTrackFromServer();
 }
 
 // ── Stop playback ─────────────────────────────────────────────────────────────
@@ -576,10 +592,15 @@ function renderPlayer() {
   document.getElementById('nowPlayingFile').textContent = filename;
 
   const isPlaying = !!serverState?.is_playing;
-  document.getElementById('nowPlayingCard').classList.toggle('active', isPlaying && !paused);
+  // After a refresh, server says we're playing but ctx is null — treat that as
+  // a "ready to resume" state, not a live one.
+  const audioLive = isPlaying && !!ctx && !paused;
+  document.getElementById('nowPlayingCard').classList.toggle('active', audioLive);
 
   const flags = document.getElementById('playerFlags');
-  if (isPlaying && paused) {
+  if (isPlaying && !ctx) {
+    flags.textContent = 'Ready — click Play to resume';
+  } else if (isPlaying && paused) {
     flags.textContent = 'Paused';
   } else if (isPlaying) {
     const statusText = transitioning ? 'Transitioning…' : 'On air';
@@ -589,11 +610,7 @@ function renderPlayer() {
   }
 
   const playBtn = document.getElementById('playBtn');
-  if (isPlaying && !paused) {
-    playBtn.textContent = 'Pause';
-  } else {
-    playBtn.textContent = 'Play';
-  }
+  playBtn.textContent = audioLive ? 'Pause' : 'Play';
 }
 
 async function renderQueue() {
@@ -735,7 +752,10 @@ document.getElementById('playBtn').addEventListener('click', async () => {
   const status = document.getElementById('scanStatus');
   status.textContent = '';
   try {
-    if (serverState?.is_playing && !paused) {
+    if (serverState?.is_playing && !ctx) {
+      // Server has an active queue but the page was refreshed — resume current track.
+      await resumeAfterRefresh();
+    } else if (serverState?.is_playing && !paused) {
       await pausePlayback();
     } else if (serverState?.is_playing && paused) {
       await resumePlayback();
