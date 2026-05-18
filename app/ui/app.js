@@ -29,21 +29,34 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 let transitioning    = false;
 let autoTriggerTimer = null;
 
+// ── Pause state ───────────────────────────────────────────────────────────────
+let paused = false;
+// Sentinel: true if the auto-trigger timer was running when we paused (reschedule on resume).
+let _autoTriggerRemaining = null;
+
 // ── On-air mode ───────────────────────────────────────────────────────────────
 // Tracks what's currently playing so renderPlayer() never stomps a badge.
 // Values: 'track' | 'dj' | 'ad'
 let onAirMode   = 'track';
-let _modeTimers = [];   // pending setTimeout IDs for mode switches
+// Each entry: { id: timeoutId, audioTime: number, mode: string, label: string|null }
+let _modeTimers = [];
 let _labelAnim  = null; // in-progress label animation (KeyframeEffect)
 
 function clearModeTimers() {
-  _modeTimers.forEach(clearTimeout);
+  _modeTimers.forEach(t => clearTimeout(t.id));
   _modeTimers = [];
 }
 
 function scheduleMode(mode, delayMs, label = null) {
-  const id = setTimeout(() => setOnAirMode(mode, label), delayMs);
-  _modeTimers.push(id);
+  // audioTime is the AudioContext clock instant this mode should fire at.
+  // We store it so we can reschedule correctly after a pause/resume.
+  const audioTime = ctx ? ctx.currentTime + delayMs / 1000 : 0;
+  const entry = { id: null, audioTime, mode, label };
+  entry.id = setTimeout(() => {
+    _modeTimers = _modeTimers.filter(t => t !== entry);
+    setOnAirMode(mode, label);
+  }, delayMs);
+  _modeTimers.push(entry);
 }
 
 function setOnAirMode(mode, label = null) {
@@ -387,6 +400,8 @@ async function triggerTransition(reason) {
 
 // ── Start playback ────────────────────────────────────────────────────────────
 async function startPlayback() {
+  paused = false;
+  _autoTriggerRemaining = null;
   initAudio();
   await ctx.resume();
 
@@ -425,6 +440,8 @@ async function stopPlayback() {
   clearModeTimers();
   onAirMode = 'track';
   transitioning = false;
+  paused = false;
+  _autoTriggerRemaining = null;
   const t = ctx?.currentTime ?? 0;
   for (const s of Object.values(slots)) {
     if (!s) continue;
@@ -440,6 +457,59 @@ async function stopPlayback() {
     if (serverState) serverState = { ...serverState, is_playing: false };
   }
   renderAll();
+}
+
+// ── Pause playback ────────────────────────────────────────────────────────────
+async function pausePlayback() {
+  if (!ctx || paused) return;
+  paused = true;
+
+  // Freeze the AudioContext — all scheduled audio and gain ramps freeze too.
+  await ctx.suspend();
+
+  // Cancel the auto-trigger timer; on resume we reschedule it from el.currentTime.
+  if (autoTriggerTimer !== null) {
+    clearAutoTrigger();
+    _autoTriggerRemaining = true;
+  }
+
+  // Suspend mode timers: cancel each setTimeout, keep the audioTime targets.
+  _modeTimers.forEach(t => clearTimeout(t.id));
+  // Leave _modeTimers in place with their audioTime values intact — resume will reschedule.
+
+  renderPlayer();
+}
+
+// ── Resume playback ───────────────────────────────────────────────────────────
+async function resumePlayback() {
+  if (!ctx || !paused) return;
+  paused = false;
+
+  await ctx.resume();
+
+  // Reschedule mode timers based on how far the AudioContext is now vs. their targets.
+  const nowAudio = ctx.currentTime;
+  _modeTimers = _modeTimers.map(t => {
+    const remainingSec = t.audioTime - nowAudio;
+    const delayMs = Math.max(0, remainingSec * 1000);
+    const entry = { ...t, id: null };
+    entry.id = setTimeout(() => {
+      _modeTimers = _modeTimers.filter(x => x !== entry);
+      setOnAirMode(entry.mode, entry.label);
+    }, delayMs);
+    return entry;
+  });
+
+  // Reschedule the auto-trigger timer.
+  if (_autoTriggerRemaining) {
+    _autoTriggerRemaining = null;
+    const cur = curSlot();
+    if (cur?.el?.duration) {
+      scheduleAutoTrigger(cur.el.duration);
+    }
+  }
+
+  renderPlayer();
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -464,14 +534,23 @@ function renderPlayer() {
   document.getElementById('nowPlayingFile').textContent = filename;
 
   const isPlaying = !!serverState?.is_playing;
-  document.getElementById('nowPlayingCard').classList.toggle('active', isPlaying);
+  document.getElementById('nowPlayingCard').classList.toggle('active', isPlaying && !paused);
 
   const flags = document.getElementById('playerFlags');
-  if (isPlaying) {
+  if (isPlaying && paused) {
+    flags.textContent = 'Paused';
+  } else if (isPlaying) {
     const statusText = transitioning ? 'Transitioning…' : 'On air';
     flags.innerHTML = `<span class="live-dot"></span>${statusText}`;
   } else {
     flags.textContent = 'Stopped';
+  }
+
+  const playBtn = document.getElementById('playBtn');
+  if (isPlaying && !paused) {
+    playBtn.textContent = 'Pause';
+  } else {
+    playBtn.textContent = 'Play';
   }
 }
 
@@ -614,7 +693,13 @@ document.getElementById('playBtn').addEventListener('click', async () => {
   const status = document.getElementById('scanStatus');
   status.textContent = '';
   try {
-    await startPlayback();
+    if (serverState?.is_playing && !paused) {
+      await pausePlayback();
+    } else if (serverState?.is_playing && paused) {
+      await resumePlayback();
+    } else {
+      await startPlayback();
+    }
   } catch (err) {
     status.textContent = `Play failed: ${err.message}`;
   }
@@ -625,6 +710,9 @@ document.getElementById('nextBtn').addEventListener('click', () => {
   const btn = document.getElementById('nextBtn');
   btn.disabled = true;
   btn.textContent = 'Loading…';
+  // Clear pause state — triggerTransition calls ctx.resume() and rebuilds timers.
+  paused = false;
+  _autoTriggerRemaining = null;
   triggerTransition('user').finally(() => {
     btn.disabled = false;
     btn.textContent = 'Next';
