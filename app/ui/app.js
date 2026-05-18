@@ -783,6 +783,125 @@ async function renderQueue() {
 
 function renderAll() { renderPlayer(); renderQueue(); }
 
+// ── DJ Schedule grid ──────────────────────────────────────────────────────────
+const DAYS_FULL = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+const DAYS_SHORT = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+// Tuned palette — distinct hues that sit well on the dark theme.
+const PERSONA_COLORS = [
+  '#e879a0',  // pink (matches site accent)
+  '#fb923c',  // orange
+  '#60a5fa',  // blue
+  '#a78bfa',  // purple
+  '#34d399',  // teal
+  '#fbbf24',  // amber
+  '#f87171',  // coral
+  '#22d3ee',  // cyan
+];
+
+function _personaColor(index) {
+  return PERSONA_COLORS[index % PERSONA_COLORS.length];
+}
+
+// JS getDay(): 0=Sunday..6=Saturday. We want 0=Monday..6=Sunday for our grid.
+function _jsDayToGridIndex(jsDay) { return (jsDay + 6) % 7; }
+
+function _appendCell(grid, content, className, col, row) {
+  const el = document.createElement('div');
+  el.className = className;
+  el.style.gridColumn = String(col);
+  el.style.gridRow = String(row);
+  if (content) el.textContent = content;
+  grid.appendChild(el);
+  return el;
+}
+
+function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusive) {
+  const block = document.createElement('div');
+  block.className = 'grid-persona-block';
+  block.style.gridColumn = String(col);
+  block.style.gridRow = `${rowStart} / ${rowEndExclusive}`;
+  block.style.backgroundColor = color;
+  block.title = `${persona.name} — ${persona.style}`;
+  // Show the name only in the first block of a stack; for very short shifts,
+  // a 1-letter monogram avoids overflow.
+  const span = (rowEndExclusive - rowStart) >= 2 ? persona.name : persona.name.slice(0, 1);
+  block.textContent = span;
+  grid.appendChild(block);
+}
+
+async function renderSchedule() {
+  const grid = document.getElementById('scheduleGrid');
+  const legend = document.getElementById('scheduleLegend');
+  if (!grid) return;
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const station = config.station || {};
+  const roster = station.dj_roster || [];
+
+  // ── Legend
+  legend.innerHTML = '';
+  const baseChip = document.createElement('span');
+  baseChip.className = 'legend-item';
+  baseChip.innerHTML = `<span class="legend-swatch" style="background:#334155; border:1px dashed #64748b;"></span>` +
+                       `${station.dj_name || 'Base DJ'} (default)`;
+  legend.appendChild(baseChip);
+  roster.forEach((persona, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'legend-item';
+    chip.innerHTML = `<span class="legend-swatch" style="background:${_personaColor(i)};"></span>${persona.name}`;
+    legend.appendChild(chip);
+  });
+
+  // ── Grid scaffold
+  grid.innerHTML = '';
+  // Empty top-left corner cell
+  _appendCell(grid, '', 'grid-corner', 1, 1);
+  // Day headers (row 1, cols 2-8)
+  DAYS_SHORT.forEach((d, i) => _appendCell(grid, d, 'grid-day-header', i + 2, 1));
+  // Hour labels (col 1, rows 2-25). Show every 3rd hour to reduce visual noise.
+  for (let h = 0; h < 24; h++) {
+    _appendCell(grid, h % 3 === 0 ? String(h).padStart(2, '0') : '', 'grid-hour-label', 1, h + 2);
+  }
+
+  // ── Persona blocks (iterate in roster order so we can show overlap warnings later)
+  roster.forEach((persona, i) => {
+    const color = _personaColor(i);
+    const shifts = persona.shifts || [];
+    for (const shift of shifts) {
+      const dayIdx = DAYS_FULL.indexOf(shift.day);
+      if (dayIdx === -1) continue;
+      const col = dayIdx + 2;
+      const start = Number(shift.start_hour);
+      const end = Number(shift.end_hour);
+      if (start <= end) {
+        _appendPersonaBlock(grid, persona, color, col, start + 2, end + 3);
+      } else {
+        // Wraps past midnight: render two blocks (today + tomorrow)
+        _appendPersonaBlock(grid, persona, color, col, start + 2, 26); // start → end of day
+        const tomorrowCol = ((dayIdx + 1) % 7) + 2;
+        _appendPersonaBlock(grid, persona, color, tomorrowCol, 2, end + 3); // 00 → end
+      }
+    }
+  });
+
+  // ── NOW indicator: glowing outline on the current hour cell
+  const now = new Date();
+  const nowCol = _jsDayToGridIndex(now.getDay()) + 2;
+  const nowRow = now.getHours() + 2;
+  _appendCell(grid, '', 'grid-now-indicator', nowCol, nowRow);
+}
+
+// Refresh the NOW indicator + roster view periodically. 60s is the natural
+// cadence since the indicator only moves by the hour, but we re-fetch the
+// roster too so live config edits are reflected without a page reload.
+function _scheduleAutoRefresh() {
+  setInterval(() => {
+    const details = document.querySelector('.schedule-card');
+    if (details && details.open) renderSchedule();
+  }, 60_000);
+}
+
 // ── Server state refresh ──────────────────────────────────────────────────────
 let refreshInFlight = null;
 async function refreshServerState() {
@@ -930,6 +1049,15 @@ async function init() {
   // Light polling — client drives playback now, so we don't need frequent syncs.
   setInterval(refreshServerState, 10_000);
   refreshLibraryStatus();
+
+  // Schedule grid: render on open (lazy) and re-render every minute while open.
+  const scheduleCard = document.querySelector('.schedule-card');
+  if (scheduleCard) {
+    scheduleCard.addEventListener('toggle', () => {
+      if (scheduleCard.open) renderSchedule();
+    });
+  }
+  _scheduleAutoRefresh();
 }
 
 init();

@@ -362,3 +362,104 @@ ul {
   gap: 2px;
   margin-bottom: 14px;
 }
+
+/* ── DJ Schedule grid ── */
+.schedule-card summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.schedule-card summary::-webkit-details-marker { display: none; }
+.schedule-card summary::before {
+  content: '▸';
+  display: inline-block;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.schedule-card[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.schedule-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 10px 0 14px;
+  font-size: 0.75rem;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.schedule-grid {
+  display: grid;
+  grid-template-columns: 38px repeat(7, 1fr);
+  grid-template-rows: 24px repeat(24, 22px);
+  gap: 2px;
+  background: #0f172a;
+  border-radius: 6px;
+  padding: 6px;
+  font-size: 0.7rem;
+  position: relative;
+}
+.grid-day-header {
+  text-align: center;
+  font-weight: 600;
+  color: var(--muted);
+  padding-top: 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+.grid-hour-label {
+  text-align: right;
+  color: #475569;
+  padding-right: 5px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.66rem;
+  align-self: center;
+}
+.grid-cell {
+  background: rgba(255,255,255,0.025);
+  border-radius: 2px;
+}
+.grid-persona-block {
+  border-radius: 3px;
+  padding: 2px 5px;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.66rem;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  line-height: 1.05;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease, filter 0.1s ease;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+.grid-persona-block:hover {
+  transform: scale(1.04);
+  filter: brightness(1.15);
+  box-shadow: 0 0 10px rgba(255,255,255,0.35);
+  z-index: 4;
+}
+.grid-now-indicator {
+  border: 2px solid #fff;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 6;
+  animation: nowPulse 1.6s ease-in-out infinite;
+}
+@keyframes nowPulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(255,255,255,0.55); }
+  50%      { box-shadow: 0 0 14px rgba(255,255,255,0.95); }
+}
