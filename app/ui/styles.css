@@ -463,3 +463,238 @@ ul {
   0%, 100% { box-shadow: 0 0 4px rgba(255,255,255,0.55); }
   50%      { box-shadow: 0 0 14px rgba(255,255,255,0.95); }
 }
+
+/* ── Sidebar mode switching ── */
+.wrap {
+  transition: grid-template-columns 0.25s ease;
+}
+.wrap[data-mode="scheduler"] {
+  grid-template-columns: 780px 1fr;
+}
+.sidebar-view { display: none; }
+.wrap[data-mode="default"]   .sidebar-default   { display: block; }
+.wrap[data-mode="scheduler"] .sidebar-scheduler { display: flex; flex-direction: column; }
+
+/* ── Schedule trigger button in default sidebar ── */
+.sidebar-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  margin-bottom: 16px;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.sidebar-action:hover {
+  background: #1e293b;
+  border-color: var(--pink);
+}
+.sidebar-action:active { transform: scale(0.99); }
+.sidebar-action .emoji { font-size: 1.1rem; }
+
+/* ── Scheduler header (in expanded sidebar) ── */
+.scheduler-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+}
+.scheduler-title {
+  font-family: 'Inter', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+.icon-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.icon-button:hover {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--pink);
+}
+.icon-button[id="backToGridBtn"] {
+  width: auto;
+  padding: 0 12px;
+  font-size: 0.78rem;
+}
+
+/* ── Scheduler sub-views (grid vs edit form) ── */
+.scheduler-grid-view, .scheduler-edit-view { display: none; }
+.sidebar-scheduler[data-sub-view="grid"] .scheduler-grid-view { display: block; }
+.sidebar-scheduler[data-sub-view="edit"] .scheduler-edit-view { display: block; }
+
+/* ── Persona form ── */
+.persona-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.persona-form label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.persona-form input[type="text"],
+.persona-form textarea,
+.persona-form select {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+.persona-form textarea {
+  min-height: 70px;
+  resize: vertical;
+  line-height: 1.4;
+}
+.persona-form .voice-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.persona-form .voice-row select { flex: 1; }
+.persona-form .voice-row .preview-btn {
+  background: var(--pink);
+  border: none;
+  border-radius: 6px;
+  padding: 0 14px;
+  color: #1a1a2e;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.1s;
+}
+.persona-form .voice-row .preview-btn:hover { filter: brightness(1.1); }
+.persona-form .voice-row .preview-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* ── Shifts editor ── */
+.shifts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.shift-row {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px 32px;
+  gap: 6px;
+  align-items: center;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.shift-row select,
+.shift-row input[type="number"] {
+  margin: 0;
+  font-size: 0.8rem;
+  padding: 5px 6px;
+}
+.shift-row .remove-shift {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  font-size: 1rem;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.shift-row .remove-shift:hover {
+  color: #f87171;
+  border-color: #f87171;
+}
+.add-shift-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 7px;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 500;
+  margin-top: 4px;
+}
+.add-shift-btn:hover {
+  border-style: solid;
+  border-color: var(--pink);
+  color: var(--text);
+}
+
+/* ── Form actions ── */
+.persona-form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.persona-form-actions .left-group { display: flex; gap: 8px; }
+.persona-form-actions button[type="submit"] {
+  background: var(--pink);
+  border: none;
+  color: #1a1a2e;
+  font-weight: 700;
+}
+.persona-form-actions .delete-btn {
+  background: transparent;
+  border: 1px solid #7f1d1d;
+  color: #f87171;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.persona-form-actions .delete-btn:hover {
+  background: #7f1d1d;
+  color: #fff;
+}
+
+/* ── Inline preview audio player ── */
+.preview-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 4px;
+  min-height: 1.2em;
+}

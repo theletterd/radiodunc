@@ -897,10 +897,258 @@ async function renderSchedule() {
 // roster too so live config edits are reflected without a page reload.
 function _scheduleAutoRefresh() {
   setInterval(() => {
-    const details = document.querySelector('.schedule-card');
-    if (details && details.open) renderSchedule();
+    if (document.getElementById('wrap')?.dataset.mode === 'scheduler') renderSchedule();
   }, 60_000);
 }
+
+// ── Scheduler mode (sidebar takeover) ───────────────────────────────────────
+const OPENAI_VOICES = ['alloy','ash','ballad','coral','echo','fable','onyx','nova','sage','shimmer','verse'];
+
+function _setSchedulerMode(on) {
+  const wrap = document.getElementById('wrap');
+  if (!wrap) return;
+  wrap.dataset.mode = on ? 'scheduler' : 'default';
+  if (on) {
+    _setSchedulerSubView('grid');
+    renderSchedule().then(_attachBlockClickHandlers);
+  }
+}
+
+function _setSchedulerSubView(name) {
+  const panel = document.querySelector('.sidebar-scheduler');
+  if (panel) panel.dataset.subView = name;
+}
+
+// After renderSchedule() repaints the grid, wire up block clicks to open the
+// edit form for that persona. We do this in a separate pass so renderSchedule
+// stays purely a "draw" function.
+async function _attachBlockClickHandlers() {
+  const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const roster = config.station?.dj_roster || [];
+
+  blocks.forEach(block => {
+    const name = block.title.split(' — ')[0];
+    const idx = roster.findIndex(p => p.name === name);
+    if (idx === -1) return;
+    block.style.cursor = 'pointer';
+    block.addEventListener('click', () => _openPersonaEditor(idx));
+  });
+}
+
+// ── Persona editor form ─────────────────────────────────────────────────────
+// schedulerEditing: null = no form open; -1 = new persona; >=0 = index in roster
+let schedulerEditing = null;
+let schedulerWorkingPersona = null;  // mutable form state, written through on Save
+
+async function _openPersonaEditor(personaIdx) {
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const roster = config.station?.dj_roster || [];
+
+  if (personaIdx === -1) {
+    schedulerWorkingPersona = {
+      name: '',
+      style: '',
+      voice: null,
+      voice_instructions: null,
+      shifts: [],
+    };
+  } else {
+    // Deep clone so cancel returns the original untouched.
+    schedulerWorkingPersona = JSON.parse(JSON.stringify(roster[personaIdx]));
+    // Old-shape configs that haven't been resaved may not have shifts yet.
+    schedulerWorkingPersona.shifts = schedulerWorkingPersona.shifts || [];
+  }
+  schedulerEditing = personaIdx;
+  _renderPersonaForm();
+  _setSchedulerSubView('edit');
+}
+
+function _renderPersonaForm() {
+  const form = document.getElementById('personaForm');
+  if (!form || !schedulerWorkingPersona) return;
+
+  const p = schedulerWorkingPersona;
+  const isNew = schedulerEditing === -1;
+  const previewSample = p.name
+    ? `Hi, you're listening to ${p.name} on RadioDunc.`
+    : `Hi, you're listening to RadioDunc.`;
+
+  form.innerHTML = `
+    <div>
+      <label for="pf-name">Name</label>
+      <input type="text" id="pf-name" value="${_escapeAttr(p.name)}" required />
+    </div>
+    <div>
+      <label for="pf-style">Personality / Style</label>
+      <textarea id="pf-style" required>${_escapeText(p.style)}</textarea>
+    </div>
+    <div>
+      <label for="pf-voice">Voice</label>
+      <div class="voice-row">
+        <select id="pf-voice">
+          <option value="">(use station default)</option>
+          ${OPENAI_VOICES.map(v => `<option value="${v}"${p.voice === v ? ' selected' : ''}>${v}</option>`).join('')}
+        </select>
+        <button type="button" class="preview-btn" id="pf-preview-btn">▶ Preview</button>
+      </div>
+    </div>
+    <div>
+      <label for="pf-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
+      <textarea id="pf-voice-instructions">${_escapeText(p.voice_instructions || '')}</textarea>
+    </div>
+    <div>
+      <label>Shifts</label>
+      <div id="pf-shifts" class="shifts-list"></div>
+      <button type="button" id="pf-add-shift" class="add-shift-btn">+ Add shift</button>
+    </div>
+    <div class="preview-status" id="pf-preview-status"></div>
+    <div class="persona-form-actions">
+      <div class="left-group">
+        <button type="submit" class="primary">${isNew ? 'Create persona' : 'Save changes'}</button>
+        <button type="button" id="pf-cancel">Cancel</button>
+      </div>
+      ${isNew ? '' : '<button type="button" class="delete-btn" id="pf-delete">Delete</button>'}
+    </div>
+  `;
+
+  _renderShifts();
+
+  form.querySelector('#pf-cancel').addEventListener('click', () => _setSchedulerSubView('grid'));
+  form.querySelector('#pf-add-shift').addEventListener('click', () => {
+    p.shifts.push({ day: 'monday', start_hour: 9, end_hour: 17 });
+    _renderShifts();
+  });
+  form.querySelector('#pf-preview-btn').addEventListener('click', () => _previewVoice(previewSample));
+  if (!isNew) {
+    form.querySelector('#pf-delete').addEventListener('click', _deletePersona);
+  }
+  form.addEventListener('submit', _savePersona);
+}
+
+function _renderShifts() {
+  const container = document.getElementById('pf-shifts');
+  if (!container) return;
+  container.innerHTML = '';
+
+  schedulerWorkingPersona.shifts.forEach((shift, i) => {
+    const row = document.createElement('div');
+    row.className = 'shift-row';
+    row.innerHTML = `
+      <select data-shift-i="${i}" data-field="day">
+        ${DAYS_FULL.map(d => `<option value="${d}"${shift.day === d ? ' selected' : ''}>${d.charAt(0).toUpperCase() + d.slice(1)}</option>`).join('')}
+      </select>
+      <input type="number" data-shift-i="${i}" data-field="start_hour" min="0" max="23" value="${shift.start_hour}" />
+      <input type="number" data-shift-i="${i}" data-field="end_hour" min="0" max="23" value="${shift.end_hour}" />
+      <button type="button" class="remove-shift" data-shift-i="${i}">✕</button>
+    `;
+    container.appendChild(row);
+  });
+
+  // Wire up change handlers
+  container.querySelectorAll('[data-shift-i]').forEach(el => {
+    if (el.classList.contains('remove-shift')) {
+      el.addEventListener('click', () => {
+        schedulerWorkingPersona.shifts.splice(Number(el.dataset.shiftI), 1);
+        _renderShifts();
+      });
+    } else {
+      el.addEventListener('change', () => {
+        const i = Number(el.dataset.shiftI);
+        const field = el.dataset.field;
+        const value = field === 'day' ? el.value : Number(el.value);
+        schedulerWorkingPersona.shifts[i][field] = value;
+      });
+    }
+  });
+}
+
+function _readFormIntoWorkingPersona() {
+  const p = schedulerWorkingPersona;
+  p.name = document.getElementById('pf-name').value.trim();
+  p.style = document.getElementById('pf-style').value.trim();
+  const v = document.getElementById('pf-voice').value;
+  p.voice = v || null;
+  const vi = document.getElementById('pf-voice-instructions').value.trim();
+  p.voice_instructions = vi || null;
+}
+
+async function _previewVoice(sampleText) {
+  _readFormIntoWorkingPersona();
+  const btn = document.getElementById('pf-preview-btn');
+  const status = document.getElementById('pf-preview-status');
+  btn.disabled = true;
+  status.textContent = 'Synthesizing preview…';
+  try {
+    const resp = await api('/tts/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        text: sampleText,
+        voice: schedulerWorkingPersona.voice,
+        voice_instructions: schedulerWorkingPersona.voice_instructions,
+      }),
+    });
+    const audio = new Audio(resp.clip_url);
+    status.textContent = 'Playing…';
+    audio.onended = () => { status.textContent = ''; };
+    audio.onerror = () => { status.textContent = 'Playback failed.'; };
+    await audio.play();
+  } catch (err) {
+    status.textContent = `Preview failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function _savePersona(event) {
+  event.preventDefault();
+  _readFormIntoWorkingPersona();
+  const status = document.getElementById('pf-preview-status');
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  config.station = config.station || {};
+  config.station.dj_roster = config.station.dj_roster || [];
+
+  if (schedulerEditing === -1) {
+    config.station.dj_roster.push(schedulerWorkingPersona);
+  } else {
+    config.station.dj_roster[schedulerEditing] = schedulerWorkingPersona;
+  }
+
+  status.textContent = 'Saving…';
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    status.textContent = '';
+    _setSchedulerSubView('grid');
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  } catch (err) {
+    status.textContent = `Save failed: ${err.message}`;
+  }
+}
+
+async function _deletePersona() {
+  if (schedulerEditing === -1) return;
+  if (!confirm(`Delete persona "${schedulerWorkingPersona.name}"? This cannot be undone.`)) return;
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  config.station.dj_roster.splice(schedulerEditing, 1);
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    _setSchedulerSubView('grid');
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
+function _escapeAttr(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function _escapeText(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 // ── Server state refresh ──────────────────────────────────────────────────────
 let refreshInFlight = null;
@@ -1050,13 +1298,23 @@ async function init() {
   setInterval(refreshServerState, 10_000);
   refreshLibraryStatus();
 
-  // Schedule grid: render on open (lazy) and re-render every minute while open.
-  const scheduleCard = document.querySelector('.schedule-card');
-  if (scheduleCard) {
-    scheduleCard.addEventListener('toggle', () => {
-      if (scheduleCard.open) renderSchedule();
-    });
-  }
+  // Scheduler sidebar takeover: open/close + view-switching wiring.
+  document.getElementById('openSchedulerBtn')?.addEventListener('click', () => _setSchedulerMode(true));
+  document.getElementById('closeSchedulerBtn')?.addEventListener('click', () => _setSchedulerMode(false));
+  document.getElementById('backToGridBtn')?.addEventListener('click', () => _setSchedulerSubView('grid'));
+  document.getElementById('addPersonaBtn')?.addEventListener('click', () => _openPersonaEditor(-1));
+
+  // Esc closes the scheduler back to the default sidebar view.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (document.getElementById('wrap')?.dataset.mode !== 'scheduler') return;
+    if (document.querySelector('.sidebar-scheduler')?.dataset.subView === 'edit') {
+      _setSchedulerSubView('grid');
+    } else {
+      _setSchedulerMode(false);
+    }
+  });
+
   _scheduleAutoRefresh();
 }
 
