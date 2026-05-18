@@ -22,22 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 def _persona_matches(persona: DJPersona, now: datetime) -> bool:
-    if persona.days:
-        weekday_name = WEEKDAYS[now.weekday()]
-        if weekday_name not in persona.days:
-            return False
-    if persona.start_hour is not None or persona.end_hour is not None:
-        start = persona.start_hour if persona.start_hour is not None else 0
-        end = persona.end_hour if persona.end_hour is not None else 23
-        hour = now.hour
-        if start <= end:
-            if not (start <= hour <= end):
-                return False
+    """True if any of the persona's shifts covers `now`. Empty shifts → always on."""
+    if not persona.shifts:
+        return True
+    weekday_name = WEEKDAYS[now.weekday()]
+    hour = now.hour
+    for shift in persona.shifts:
+        if shift.day != weekday_name:
+            continue
+        if shift.start_hour <= shift.end_hour:
+            if shift.start_hour <= hour <= shift.end_hour:
+                return True
         else:
             # Wrapping window, e.g. 22..3 covers 22, 23, 0, 1, 2, 3
-            if not (hour >= start or hour <= end):
-                return False
-    return True
+            if hour >= shift.start_hour or hour <= shift.end_hour:
+                return True
+    return False
 
 
 def pick_active_persona(station: StationConfig, now: datetime) -> DJPersona | None:

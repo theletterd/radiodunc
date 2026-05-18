@@ -34,6 +34,8 @@ from .schemas import (
     PlayerNextRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
+    TTSPreviewRequest,
+    TTSPreviewResponse,
     StationOut,
     TrackOut,
     PlayerNextResponse,
@@ -995,6 +997,36 @@ def player_stinger_url(db: Session = Depends(get_db)):
     if clip is None:
         return {"clip_url": None}
     return {"clip_url": f"/media/dj-clip/{clip.script_hash}"}
+
+
+@app.post("/tts/preview", response_model=TTSPreviewResponse)
+def tts_preview(payload: TTSPreviewRequest, db: Session = Depends(get_db)):
+    """Synthesise an arbitrary sample line for previewing a voice + instructions.
+
+    Reuses the same get_or_create_dj_clip cache, so identical (text, voice,
+    instructions) triples produce one clip and replay instantly thereafter.
+    Stored under generated_audio/previews/ to keep them separate from the
+    on-air pools.
+    """
+    config = load_config()
+    try:
+        provider = build_tts_provider(config)
+    except ValueError:
+        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
+    try:
+        clip, _, _ = get_or_create_dj_clip(
+            db,
+            script_text=payload.text,
+            voice=payload.voice,
+            voice_instructions=payload.voice_instructions,
+            provider=provider,
+            clip_type="previews",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"TTS provider failed: {exc}") from exc
+    if clip is None:
+        raise HTTPException(status_code=500, detail="Failed to synthesize preview clip")
+    return TTSPreviewResponse(clip_url=f"/media/dj-clip/{clip.script_hash}")
 
 
 @app.post("/player/stop", response_model=PlayerActionResponse)
