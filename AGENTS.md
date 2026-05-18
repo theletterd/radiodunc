@@ -25,22 +25,38 @@ There is exactly one station, defined in `radio_config.json`. The old multi-stat
 `PlayerState` (a single-row SQLite table) holds the current queue, now-playing info, and break counters. It's serialised as JSON columns. Load it with `db.query(PlayerState).first()`.
 
 ### DJ clip cache
-`DJClip` rows store `(script_text, voice, voice_instructions)` → WAV file path. The cache key is `sha256(voice + "\n" + instructions + "\n" + script_text)`. Clips are never regenerated if the hash matches. Ad clips have `is_ad=True` and are pooled: once `pool_size` ad clips are cached, new ad breaks pick randomly from the existing pool instead of generating fresh ones.
+`DJClip` rows store `(script_text, voice, voice_instructions)` → MP3 file path. The cache key is `sha256(voice + "\n" + instructions + "\n" + script_text)`. Clips are never regenerated if the hash matches. Ad clips have `is_ad=True` and are pooled: once `pool_size` ad clips are cached, new ad breaks pick randomly from the existing pool instead of generating fresh ones.
 
 ### TTS flow
-`get_or_create_dj_clip()` in `tts.py` is the single entry point. It checks the DB, generates if missing, writes a WAV to `generated_audio/`, commits a `DJClip` row, and returns `(clip, path, was_cached)`.
+`get_or_create_dj_clip()` in `tts.py` is the single entry point. It checks the DB, generates if missing, writes an MP3 to `generated_audio/<subdir>/`, commits a `DJClip` row, and returns `(clip, path, was_cached)`. `clip_type` arg routes to the right subdir: `transitions/`, `ads/`, `news/`, or `station_ids/`. Default is `transitions`. OpenAI TTS is asked for `response_format="mp3"` — smaller than WAV with no audible difference for speech. The `ToneTTSProvider` (dev fallback) still writes WAV.
 
 ### Network drive reliability
 Track files live on a network mount. `GET /media/{track_id}` reads the whole file into memory with `Path.read_bytes()` before returning a `Response` — this avoids mid-stream failures from the mount dropping. The frontend also retries failed audio loads up to 3× via `loadWithRetry()`.
 
-### Pre-generation of DJ clips
-After each transition, the backend pre-generates the *next* DJ clip in a background thread so TTS latency doesn't stall playback. This happens at the end of `player_next`.
+### Pre-generation of DJ clips (late-generate pattern)
+The client triggers prefetch ~20 seconds before each track ends by calling `POST /player/prefetch`. The endpoint reads current queue state and spawns `_prefetch_dj_clip` in a background thread. The result is stored in the in-memory `_prefetch_cache` keyed by `target_idx`. On the next `/player/next`, `_take_prefetched(target_idx)` pops it and uses it without re-generating. Skips bypass the cache (`reason=="skip"` invalidates because the prompt context differs).
+
+Late-generate (not generate-on-transition) is deliberate: it means a quick skip in the first 80% of a track *doesn't* burn an OpenAI call on a clip we'd throw away. The 20 s lead is enough for a typical 2–3 s round trip.
+
+### News clip caching (background TTL refresh)
+News is expensive (~5 s LLM + TTS combined), so `get_news_clip()` in `main.py` keeps a single in-memory cache slot. State machine: fresh (< 20 min) returns cached; aging (20–30 min) returns cached AND spawns a background refresh; expired (> 30 min) regenerates inline. An `_news_refresh_in_flight` flag prevents concurrent background refreshes. **Important**: the thread spawn is deliberately *outside* the cache lock — `_refresh_news_background` re-acquires the same lock in its `finally` clause, so spawning inside would deadlock if the thread ever ran synchronously (which it does in tests with a fake `Thread`).
+
+### Segment attachment helpers
+`player_next` delegates each optional segment to a helper: `_attach_news`, `_attach_ad`, `_attach_station_id`. Each returns `(url, script)` (or just `url` for station_id) and owns its own logging, error handling, and cache interaction. Cadence checks stay in `player_next`.
+
+### Station ID stingers
+Short "This is RadioDunc 107.2 FM" throws played right after every ad break (when ads fire). Phrases are LLM-generated once per station name and cached on disk in `generated_station_ids.json`. Generation runs **5 parallel LLM calls** in `ThreadPoolExecutor`, one per "vibe" (classic / hyped / warm / cheeky / confident) — this gives real tonal variety, which a single big-list prompt does poorly because LLMs anchor on the last item. Default `phrase_count` is 40 (8 per vibe × 5 vibes). TTS clips are cached forever via the standard hash.
+
+### Anti-anchoring: Python picks from a list, LLM gets one focused brief
+Same pattern shows up in two places: station-ID vibes (5 batches) and ad categories (16 in `AD_CATEGORIES`). Whenever the LLM has to pick from an embedded list, it over-indexes on the last item (the dating-app issue, before the fix). Move the variance to Python and inject a single category/vibe per call. This is the right reach whenever output feels samey.
+
+`risque_chance` on `AdBreakPreferences` follows the same principle for a different axis: Python rolls a die per call (default 0.1) to decide whether to inject the risqué tone hint, rather than asking the LLM to "occasionally" do it.
 
 ### Ad break follows flag
 When an ad break is about to play, `ad_break_follows=True` is passed to DJ script generation. The prompt tells the DJ to tease the break ("coming up after the break, [song]"). The ad clip itself uses a random voice from `config.alerts.ads.voices`.
 
 ### News segment
-Mirrors the ads architecture. When `alerts.news.enabled` is true and the break is on cadence, `player_next` calls `generate_news_script()` (fetches top N headlines from the RSS feed, asks LLM to write a sober bulletin) and synthesises a clip with one of the configured `news.voices`. The clip URL is returned as `news_clip_url` in the response; the frontend plays it after the DJ clip and before any ad clip. **News clips are not cached** (they go stale within hours) — every break that fires generates fresh audio. The DJ teases the bulletin via `news_break_follows=True` in the DJ script request (same pattern as `ad_break_follows`). On the frontend, news shows a blue `📰 News` badge.
+When `alerts.news.enabled` is true and the break is on cadence, `_attach_news` consults the news cache (see "News clip caching" above) and returns the URL + script. Bulletins are generated via `generate_news_script()` (fetches top N headlines from the RSS feed, asks LLM to write an intro/body/outro structured bulletin in the voice of a specific newsreader by name). The DJ teases the bulletin via `news_break_follows=True` in the DJ script request (same pattern as `ad_break_follows`). On the frontend, news shows a blue `📰 News` badge.
 
 ### Audience request flag
 Queue items injected via `POST /player/queue/inject` carry `"requested": True`. `player_next` detects this and passes `reason="request"` to `generate_dj_script`, which adds a "someone called in for this" flavour to the prompt.
@@ -77,8 +93,13 @@ The example config is `example-radio_config.json`. The local config is `radio_co
 - `app.js` — all logic; no build step, plain ES modules not used, single file
 - `api(url, opts)` — thin fetch wrapper; skips `.json()` on 204 / empty body
 - `loadWithRetry(el, url)` — retries `<audio>` src load up to 3× with 2 s gaps
-- `triggerTransition()` — called after each track ends; fetches `/player/next`, then `Promise.allSettled([fetchDjClip, loadTrack])` in parallel before playing
-- `adBadgeTimer` — tracked globally so stale `setTimeout` from previous transitions can be cancelled
+- `triggerTransition()` — called when a track ends or user hits Next; fetches `/player/next`, then `Promise.allSettled([fetchDjClip, loadTrack, fetchNewsClip, fetchAdClip, fetchStationIDClip])` in parallel before playing
+- `scheduleSegment(buf, startAt, label)` — places any clip on the AudioContext timeline; segment order is DJ → News → Ad → Station ID → Track
+- `_modeTimers` — array of `{id, audioTime, mode, label}` entries; each clip schedules a badge transition. `audioTime` is the AudioContext clock target so timers can be **rescheduled correctly across pause/resume** (real wall-clock delay doesn't match AudioContext time after suspend)
+- `setOnAirMode(mode)` — switches the `nowPlaying` element's mode and animates the label change with `el.animate()` (slide-up out, slide-up in). `renderPlayer()` only writes to `nowPlaying` when `onAirMode === 'track'` so background polls can't stomp a live badge
+- **Pause/resume**: `AudioContext.suspend()` freezes everything; resume reschedules each `_modeTimer` based on `audioTime - ctx.currentTime`
+- **Resume after page refresh**: server still says `is_playing=true` but client has no `ctx`. Play button detects this and calls `resumeAfterRefresh()` which reuses `_playCurrentTrackFromServer()` instead of rebuilding the queue via `/player/play`. Current track restarts from position 0 (no in-track persistence)
+- **Prefetch timer**: client schedules `POST /player/prefetch` at `(duration - 20 s)` per track. Cancelled at the start of every transition and on stop, same lifecycle as `autoTriggerTimer`
 - Queue drag-and-drop uses HTML5 native events; reorder hits `POST /player/queue/reorder`
 - Volume is persisted to `localStorage`
 
@@ -89,6 +110,8 @@ Done inline in `_migrate_drop_legacy_schema()` at startup in `main.py` using raw
 ## Logging
 
 `ContextFormatter` in `main.py` appends `key=value` extras from `logger.info(..., extra={...})` calls. Always pass structured context via `extra=` rather than f-strings where it makes sense. Timing is captured with `time.perf_counter()` and logged as `elapsed_s`.
+
+**Levels**: lifecycle events (play start/stop, library scans, news cache refreshes, weather lookups) stay at INFO. **Per-event noise goes to DEBUG**: every `/player/next`, every queue mutation, every prefetch, every TTS call, every clip cache hit. The middleware request.start/end pair is also DEBUG (10 s status polls would spam INFO otherwise). The `_log_event(event, level=logging.DEBUG, **fields)` helper takes a level kwarg; module-level `logger.debug` / `logger.info` for direct calls. Default log level is INFO via `LOG_LEVEL` env var.
 
 ## What not to touch
 

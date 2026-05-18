@@ -19,8 +19,6 @@ from app.main import (
     queue_inject,
     update_config,
     update_player_state,
-    generate_dj_script_endpoint,
-    synthesize_dj_clip,
     player_play,
     player_next,
     player_prefetch,
@@ -32,7 +30,6 @@ from app.main import (
 )
 from app.models import DJClip, PlayerState, Track
 from app.schemas import (
-    DJClipSynthesizeRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
     LibraryScanRequest,
@@ -158,41 +155,6 @@ def test_player_state_defaults_and_updates(monkeypatch):
     assert updated.is_playing is True
     assert updated.volume == 65
     assert updated.station.name == "Solo FM"
-
-
-def test_dj_script_endpoint_happy_path(monkeypatch):
-    db = _make_db_session()
-    monkeypatch.setattr(
-        "app.main.load_config",
-        lambda: AppConfig(station=StationConfig(name="Night Drive", tagline="Smooth roads.", dj_name="DJ Nova", dj_style="laid-back")),
-    )
-    track1 = Track(file_path="/m/a.mp3", title="A Song", artist="A Artist")
-    track2 = Track(file_path="/m/b.mp3", title="B Song", artist="B Artist")
-    db.add_all([track1, track2])
-    db.commit()
-    db.refresh(track1)
-    db.refresh(track2)
-
-    result = generate_dj_script_endpoint(
-        DJScriptGenerateRequest(previous_track_id=track1.id, next_track_id=track2.id, include_weather=True, max_sentences=3),
-        db,
-    )
-    assert len(result.sentences) == 3
-    assert "Night Drive" in result.script_text
-
-
-def test_synthesize_dj_clip_creates_and_caches(monkeypatch):
-    db = _make_db_session()
-    monkeypatch.setattr("app.main.load_config", lambda: AppConfig(station=StationConfig(name="Clip FM")))
-
-    payload = DJClipSynthesizeRequest(script_text="Hello from Clip FM", voice="default")
-    first = synthesize_dj_clip(payload, db)
-    second = synthesize_dj_clip(payload, db)
-
-    assert first.cached is False
-    assert second.cached is True
-    assert first.audio_path == second.audio_path
-    assert db.query(DJClip).count() == 1
 
 
 def _fake_dj_next(db, station_name, dj_name, tmp_path, monkeypatch):

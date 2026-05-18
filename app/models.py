@@ -1,9 +1,13 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 class Track(Base):
@@ -18,7 +22,7 @@ class Track(Base):
     genre: Mapped[str | None] = mapped_column(String, nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     bitrate: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 
 
 class DJClip(Base):
@@ -30,7 +34,7 @@ class DJClip(Base):
     voice: Mapped[str | None] = mapped_column(String, nullable=True)
     script_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
     is_ad: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, nullable=False)
 
 
 class PlayerState(Base):
@@ -43,4 +47,4 @@ class PlayerState(Base):
     queue_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     queue_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
