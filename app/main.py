@@ -923,9 +923,11 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks):
         ad_clip_url, ad_script_text = _attach_ad(db, station, config, provider)
 
-    # Station ID stinger throws back to music after an ad break.
+    # Station ID stinger throws back to music after any non-music segment
+    # (news or ad). Without one after news, the bulletin runs straight into
+    # the next track which feels jarring; the stinger acts as a soft handoff.
     station_id_clip_url: str | None = None
-    if ad_clip_url:
+    if ad_clip_url or news_clip_url:
         station_id_clip_url = _attach_station_id(db, station, voice, config, provider)
 
     state.queue_index = next_idx

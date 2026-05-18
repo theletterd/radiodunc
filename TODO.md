@@ -1,5 +1,25 @@
 # RadioDunc — Backlog
 
+## ☐ Always-async news generation — never block player_next on news
+
+Today `get_news_clip` is mostly async (20-min TTL with background refresh between
+20–30 min), but past 30 min OR on a cold cache it still generates **inline**,
+adding ~5 s of dead-air to that transition. Warmup helps but doesn't cover every
+edge (long pause between play sessions, server restart, etc.).
+
+Option leaning: serve whatever's cached when news is requested, even if expired.
+On every news-cadence hit, also kick off a background refresh if the cache is
+older than X minutes — so we proactively warm. If the cache is completely empty
+(very first news call after a fresh boot with no warmup), skip the news segment
+this round AND spawn the background refresh, so it's ready by the next cadence.
+
+End state: `_attach_news` is non-blocking by construction.
+
+Pick up when picked up:
+- Drop the 'inline regenerate on expiry' branch in `get_news_clip`
+- Treat cache absence as "skip this segment, queue a refresh"
+- Maybe add a debug log so we can see how often news was skipped due to cache miss
+
 ## ☐ Persona definition refactor — split personality from voice
 
 Today a persona is `dj_style` (free-text) + `voice` + `voice_instructions`.
