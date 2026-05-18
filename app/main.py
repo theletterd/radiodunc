@@ -652,16 +652,103 @@ def get_news_clip(config: AppConfig) -> dict | None:
         return cached
 
     # Aging — spawn background refresh (if one isn't already running) and return stale.
+    # The spawn happens OUTSIDE the lock so the background thread can acquire it
+    # without contending with us (and so the test's synchronous fake-Thread can't
+    # deadlock in _refresh_news_background's lock acquisitions).
     if age > NEWS_STALE_AFTER_S:
+        should_spawn = False
         with _news_cache_lock:
             if not _news_refresh_in_flight:
                 _news_refresh_in_flight = True
-                threading.Thread(
-                    target=_refresh_news_background, args=(config,), daemon=True,
-                ).start()
-                _log_event("news.cache.refresh_scheduled", age_s=round(age))
+                should_spawn = True
+        if should_spawn:
+            threading.Thread(
+                target=_refresh_news_background, args=(config,), daemon=True,
+            ).start()
+            _log_event("news.cache.refresh_scheduled", age_s=round(age))
 
     return cached
+
+
+# ── Segment attachment helpers ────────────────────────────────────────────────
+# Each returns the data needed by PlayerNextResponse for one optional segment.
+# They keep player_next focused on orchestration: cadence checks and assembly.
+
+
+def _attach_news(config: AppConfig) -> tuple[str | None, str | None]:
+    """Return (clip_url, script_text) for the news segment, or (None, None)."""
+    entry = get_news_clip(config)
+    if not entry:
+        return None, None
+    age_s = round(time.time() - entry["generated_at"])
+    _log_event("player.next.news_attached", source=config.alerts.news.rss_url, age_s=age_s)
+    return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"]
+
+
+def _attach_ad(
+    db: Session, station: StationConfig, config: AppConfig, provider,
+) -> tuple[str | None, str | None]:
+    """Return (clip_url, script_text). script_text may be set even if clip is None."""
+    ads_cfg = config.alerts.ads
+    ad_clip: DJClip | None = None
+    ad_script_text: str | None = None
+    ad_cached = False
+
+    pool_count = db.query(DJClip).filter(DJClip.is_ad == True).count()  # noqa: E712
+    if pool_count >= ads_cfg.pool_size:
+        ad_clip = random.choice(db.query(DJClip).filter(DJClip.is_ad == True).all())  # noqa: E712
+        ad_script_text = ad_clip.script_text
+        ad_cached = True
+        _log_event("player.next.ad_pool_hit", pool_count=pool_count)
+    else:
+        ad_script_text = generate_ad_script(station, config)
+        if ad_script_text:
+            ad_voice_cfg = random.choice(ads_cfg.voices) if ads_cfg.voices else None
+            ad_voice = ad_voice_cfg.voice if ad_voice_cfg else None
+            ad_instructions = ad_voice_cfg.voice_instructions if ad_voice_cfg else None
+            try:
+                ad_clip, _, ad_cached = get_or_create_dj_clip(
+                    db, script_text=ad_script_text, voice=ad_voice,
+                    voice_instructions=ad_instructions, provider=provider,
+                    is_ad=True, clip_type="ads",
+                )
+            except RuntimeError:
+                logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", ad_voice)
+                ad_clip, _, ad_cached = get_or_create_dj_clip(
+                    db, script_text=ad_script_text, voice=None, provider=provider,
+                    is_ad=True, clip_type="ads",
+                )
+
+    if ad_clip is None:
+        return None, ad_script_text
+
+    _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
+    return f"/media/dj-clip/{ad_clip.script_hash}", ad_script_text
+
+
+def _attach_station_id(
+    db: Session, station: StationConfig, voice: str | None, config: AppConfig, provider,
+) -> str | None:
+    """Return clip URL for a station-ID stinger, or None if disabled / failed."""
+    if not config.alerts.station_id.enabled:
+        return None
+    phrases = get_station_id_phrases(config)
+    if not phrases:
+        return None
+    sid_text = random.choice(phrases)
+    try:
+        sid_clip, _, sid_cached = get_or_create_dj_clip(
+            db, script_text=sid_text, voice=voice,
+            voice_instructions=station.voice_instructions,
+            provider=provider, clip_type="station_ids",
+        )
+    except RuntimeError:
+        logger.warning("Station ID synthesis failed with voice=%r; skipping", voice)
+        return None
+    if sid_clip is None:
+        return None
+    _log_event("player.next.station_id_attached", phrase=sid_text[:60], cached=sid_cached)
+    return f"/media/dj-clip/{sid_clip.script_hash}"
 
 
 @app.post("/player/next", response_model=PlayerNextResponse)
@@ -762,85 +849,22 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
-    # Optional news clip — served from a cache that refreshes itself in the
-    # background. The first call after server startup blocks; subsequent calls
-    # return immediately and trigger an async refresh once the cache ages.
+    # Optional segments. Each helper is responsible for its own logging, cache
+    # interaction, and error handling; cadence checks stay here.
     news_clip_url: str | None = None
     news_script_text: str | None = None
     if config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks):
-        entry = get_news_clip(config)
-        if entry:
-            news_clip_url = f"/media/dj-clip/{entry['clip_hash']}"
-            news_script_text = entry["script_text"]
-            age_s = round(time.time() - entry["generated_at"])
-            _log_event("player.next.news_attached", source=config.alerts.news.rss_url, age_s=age_s)
+        news_clip_url, news_script_text = _attach_news(config)
 
-    # Optional ad clip: serve from pool or generate a new one.
     ad_clip_url: str | None = None
     ad_script_text: str | None = None
     if config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks):
-        ads_cfg = config.alerts.ads
-        ad_clip: DJClip | None = None
-        ad_cached = False
+        ad_clip_url, ad_script_text = _attach_ad(db, station, config, provider)
 
-        pool_count = db.query(DJClip).filter(DJClip.is_ad == True).count()  # noqa: E712
-        if pool_count >= ads_cfg.pool_size:
-            # Pool is full — pick a random existing ad clip.
-            all_ad_clips = db.query(DJClip).filter(DJClip.is_ad == True).all()  # noqa: E712
-            ad_clip = random.choice(all_ad_clips)
-            ad_script_text = ad_clip.script_text
-            ad_cached = True
-            _log_event("player.next.ad_pool_hit", pool_count=pool_count)
-        else:
-            # Generate a new ad clip and add it to the pool.
-            ad_script_text = generate_ad_script(station, config)
-            if ad_script_text:
-                ad_voice_cfg = random.choice(ads_cfg.voices) if ads_cfg.voices else None
-                ad_voice = ad_voice_cfg.voice if ad_voice_cfg else None
-                ad_instructions = ad_voice_cfg.voice_instructions if ad_voice_cfg else None
-                try:
-                    ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
-                        db,
-                        script_text=ad_script_text,
-                        voice=ad_voice,
-                        voice_instructions=ad_instructions,
-                        provider=provider,
-                        is_ad=True,
-                        clip_type="ads",
-                    )
-                except RuntimeError:
-                    logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", ad_voice)
-                    ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
-                        db, script_text=ad_script_text, voice=None, provider=provider, is_ad=True,
-                        clip_type="ads",
-                    )
-
-        if ad_clip is not None:
-            ad_clip_url = f"/media/dj-clip/{ad_clip.script_hash}"
-            _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
-
-    # Station ID stinger — plays right after the ad break in the active DJ voice.
-    # Phrases are LLM-generated once per station name and cached on disk;
-    # the TTS clip itself is then cached forever via the script+voice hash.
+    # Station ID stinger throws back to music after an ad break.
     station_id_clip_url: str | None = None
-    if ad_clip_url and config.alerts.station_id.enabled:
-        phrases = get_station_id_phrases(config)
-        sid_text = random.choice(phrases) if phrases else None
-        if sid_text:
-            try:
-                sid_clip, _, sid_cached = get_or_create_dj_clip(
-                    db,
-                    script_text=sid_text,
-                    voice=voice,
-                    voice_instructions=station.voice_instructions,
-                    provider=provider,
-                    clip_type="station_ids",
-                )
-                if sid_clip is not None:
-                    station_id_clip_url = f"/media/dj-clip/{sid_clip.script_hash}"
-                    _log_event("player.next.station_id_attached", phrase=sid_text[:60], cached=sid_cached)
-            except RuntimeError:
-                logger.warning("Station ID synthesis failed with voice=%r; skipping", voice)
+    if ad_clip_url:
+        station_id_clip_url = _attach_station_id(db, station, voice, config, provider)
 
     state.queue_index = next_idx
     state.current_track_id = next_track.id
