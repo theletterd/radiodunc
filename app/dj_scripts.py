@@ -264,7 +264,7 @@ def _call_openai_text(prompt: str, config: AppConfig) -> str | None:
         with urllib.request.urlopen(req, timeout=40) as response:  # noqa: S310
             data = json.loads(response.read().decode("utf-8"))
         elapsed = time.perf_counter() - t0
-        logger.info("OpenAI text generation completed", extra={"elapsed_s": round(elapsed, 2), "model": config.openai_text_model})
+        logger.debug("OpenAI text generation completed", extra={"elapsed_s": round(elapsed, 2), "model": config.openai_text_model})
     except urllib.error.HTTPError as exc:
         elapsed = time.perf_counter() - t0
         logger.warning("OpenAI text request failed status=%s elapsed_s=%s", exc.code, round(elapsed, 2))
@@ -313,9 +313,9 @@ def _generate_openai_script(
     next_track: Track | None,
     config: AppConfig,
 ) -> str | None:
-    logger.info("Generating DJ transition script via OpenAI model=%s", config.openai_text_model)
+    logger.debug("Generating DJ transition script via OpenAI model=%s", config.openai_text_model)
     prompt = _build_prompt(station, payload, previous_track, next_track, config)
-    logger.info(prompt)
+    logger.debug("DJ prompt: %s", prompt)
     text = _call_openai_text(prompt, config)
     if text is None:
         logger.warning("OpenAI DJ script failed; will fall back to sentence pool")
@@ -351,7 +351,7 @@ def generate_news_script(config: AppConfig, newsreader_name: str | None = None) 
     except KeyError as exc:
         logger.warning("news.prompt_template has unknown placeholder %s; using default", exc)
         prompt = DEFAULT_NEWS_PROMPT_TEMPLATE.format_map(fields)
-    logger.info(
+    logger.debug(
         "Generating news bulletin via OpenAI",
         extra={"headline_count": len(feed["items"]), "source": feed["source"], "newsreader": newsreader_name or "anonymous"},
     )
@@ -453,7 +453,7 @@ def _generate_station_id_batch(
     )
     response = _call_openai_text(prompt, config)
     phrases = _parse_phrase_lines(response)
-    logger.info(
+    logger.debug(
         "Station ID batch generated",
         extra={"vibe": vibe_name, "requested": count, "got": len(phrases)},
     )
@@ -543,7 +543,7 @@ def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
     except KeyError as exc:
         logger.warning("ads.prompt_template has unknown placeholder %s; using default", exc)
         prompt = DEFAULT_AD_PROMPT_TEMPLATE.format_map(fields)
-    logger.info(
+    logger.debug(
         "Generating ad-break script via OpenAI",
         extra={"ad_category": fields["ad_category"][:60], "risque": is_risque},
     )

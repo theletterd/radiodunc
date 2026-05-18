@@ -34,8 +34,6 @@ from .schemas import (
     PlayerNextRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
-    DJClipSynthesizeRequest,
-    DJClipResponse,
     StationOut,
     TrackOut,
     PlayerNextResponse,
@@ -124,9 +122,9 @@ def _configure_logging() -> None:
         handler.setFormatter(formatter)
 
 
-def _log_event(event: str, **fields: object) -> None:
+def _log_event(event: str, *, level: int = logging.INFO, **fields: object) -> None:
     details = " ".join(f"{key}={value}" for key, value in fields.items())
-    logger.info("%s %s", event, details)
+    logger.log(level, "%s %s", event, details)
 
 
 _configure_logging()
@@ -138,7 +136,7 @@ app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
 @app.middleware("http")
 async def log_requests(request, call_next):
     started = time.perf_counter()
-    _log_event("request.start", method=request.method, path=request.url.path, client=request.client.host if request.client else "unknown")
+    _log_event("request.start", level=logging.DEBUG, method=request.method, path=request.url.path, client=request.client.host if request.client else "unknown")
     try:
         response = await call_next(request)
     except Exception:
@@ -146,7 +144,7 @@ async def log_requests(request, call_next):
         logger.exception("request.error method=%s path=%s elapsed_ms=%s", request.method, request.url.path, elapsed_ms)
         raise
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-    _log_event("request.end", method=request.method, path=request.url.path, status=response.status_code, elapsed_ms=elapsed_ms)
+    _log_event("request.end", level=logging.DEBUG, method=request.method, path=request.url.path, status=response.status_code, elapsed_ms=elapsed_ms)
     return response
 
 
@@ -267,7 +265,7 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
     with _prefetch_lock:
         _prefetch_cache.clear()
 
-    _log_event("queue.inject", track_id=track.id, position=insert_at, queue_depth=len(queue))
+    _log_event("queue.inject", level=logging.DEBUG, track_id=track.id, position=insert_at, queue_depth=len(queue))
     return QueueInjectResponse(position=insert_at, label=label, queue_depth=len(queue))
 
 
@@ -366,7 +364,7 @@ def reorder_queue_item(payload: QueueReorderRequest, db: Session = Depends(get_d
     db.commit()
     with _prefetch_lock:
         _prefetch_cache.clear()
-    _log_event("queue.reorder", from_position=payload.from_position, to_position=payload.to_position)
+    _log_event("queue.reorder", level=logging.DEBUG, from_position=payload.from_position, to_position=payload.to_position)
 
 
 @app.post("/player/queue/extend", response_model=QueueExtendResponse)
@@ -392,7 +390,7 @@ def queue_extend(payload: QueueExtendRequest, db: Session = Depends(get_db)):
     state.queue_json = json.dumps(queue)
     db.commit()
 
-    _log_event("queue.extend", added=len(new_items), queue_depth=len(queue))
+    _log_event("queue.extend", level=logging.DEBUG, added=len(new_items), queue_depth=len(queue))
     return QueueExtendResponse(added=len(new_items), queue_depth=len(queue))
 
 
@@ -535,7 +533,7 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
                     clip_type="transitions",
                 )
             elapsed = time.perf_counter() - t0
-            logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
+            logger.debug("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
             if clip is None:
                 return
 
@@ -544,7 +542,7 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
                     "script_text": script_response.script_text,
                     "clip_hash": clip.script_hash,
                 }
-            _log_event("player.next.prefetched", target_idx=target_idx)
+            _log_event("player.next.prefetched", level=logging.DEBUG, target_idx=target_idx)
         finally:
             db.close()
     except Exception:  # noqa: BLE001
@@ -681,7 +679,7 @@ def _attach_news(config: AppConfig) -> tuple[str | None, str | None]:
     if not entry:
         return None, None
     age_s = round(time.time() - entry["generated_at"])
-    _log_event("player.next.news_attached", source=config.alerts.news.rss_url, age_s=age_s)
+    _log_event("player.next.news_attached", level=logging.DEBUG, source=config.alerts.news.rss_url, age_s=age_s)
     return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"]
 
 
@@ -699,7 +697,7 @@ def _attach_ad(
         ad_clip = random.choice(db.query(DJClip).filter(DJClip.is_ad == True).all())  # noqa: E712
         ad_script_text = ad_clip.script_text
         ad_cached = True
-        _log_event("player.next.ad_pool_hit", pool_count=pool_count)
+        _log_event("player.next.ad_pool_hit", level=logging.DEBUG, pool_count=pool_count)
     else:
         ad_script_text = generate_ad_script(station, config)
         if ad_script_text:
@@ -722,7 +720,7 @@ def _attach_ad(
     if ad_clip is None:
         return None, ad_script_text
 
-    _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
+    _log_event("player.next.ad_attached", level=logging.DEBUG, ad_cached=ad_cached, pool_count=pool_count)
     return f"/media/dj-clip/{ad_clip.script_hash}", ad_script_text
 
 
@@ -747,7 +745,7 @@ def _attach_station_id(
         return None
     if sid_clip is None:
         return None
-    _log_event("player.next.station_id_attached", phrase=sid_text[:60], cached=sid_cached)
+    _log_event("player.next.station_id_attached", level=logging.DEBUG, phrase=sid_text[:60], cached=sid_cached)
     return f"/media/dj-clip/{sid_clip.script_hash}"
 
 
@@ -755,7 +753,7 @@ def _attach_station_id(
 def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     reason = payload.reason if payload else None
-    _log_event("player.next.requested", current_index=state.queue_index, reason=reason)
+    _log_event("player.next.requested", level=logging.DEBUG, current_index=state.queue_index, reason=reason)
 
     if not state.queue_json:
         raise HTTPException(status_code=400, detail="No queue available")
@@ -807,7 +805,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         if clip:
             script_text = cached_prefetch["script_text"]
             dj_cached = True
-            _log_event("player.next.prefetch_hit", target_idx=next_idx)
+            _log_event("player.next.prefetch_hit", level=logging.DEBUG, target_idx=next_idx)
 
     if clip is None:
         include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
@@ -845,7 +843,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
                 db, script_text=script_text, voice=None, provider=provider, clip_type="transitions",
             )
         elapsed = time.perf_counter() - t0
-        logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
+        logger.debug("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
     if clip is None:
         raise HTTPException(status_code=500, detail="Failed to synthesize DJ clip")
 
@@ -879,6 +877,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
 
     _log_event(
         "player.next.completed",
+        level=logging.DEBUG,
         new_index=next_idx,
         track_id=next_track.id,
         dj_cached=dj_cached,
@@ -917,7 +916,7 @@ def player_prefetch(db: Session = Depends(get_db)):
         args=(prefetch_target, list(queue), current_idx),
         daemon=True,
     ).start()
-    _log_event("player.prefetch.requested", target_idx=prefetch_target)
+    _log_event("player.prefetch.requested", level=logging.DEBUG, target_idx=prefetch_target)
     return {"status": "scheduled"}
 
 
@@ -949,34 +948,3 @@ def update_player_state(payload: PlayerStateUpdateRequest, db: Session = Depends
     return _build_player_state_response(db, state)
 
 
-@app.post("/dj-script", response_model=DJScriptResponse)
-def generate_dj_script_endpoint(payload: DJScriptGenerateRequest, db: Session = Depends(get_db)):
-    config = load_config()
-
-    previous_track = None
-    if payload.previous_track_id is not None:
-        previous_track = db.query(Track).filter(Track.id == payload.previous_track_id).first()
-        if not previous_track:
-            raise HTTPException(status_code=404, detail=f"Track {payload.previous_track_id} not found")
-
-    next_track = None
-    if payload.next_track_id is not None:
-        next_track = db.query(Track).filter(Track.id == payload.next_track_id).first()
-        if not next_track:
-            raise HTTPException(status_code=404, detail=f"Track {payload.next_track_id} not found")
-
-    return generate_dj_script(active_station(config.station, config), payload, previous_track, next_track, config=config)
-
-
-@app.post("/dj-clip", response_model=DJClipResponse)
-def synthesize_dj_clip(payload: DJClipSynthesizeRequest, db: Session = Depends(get_db)):
-    config = load_config()
-    try:
-        provider = build_tts_provider(config)
-    except ValueError as exc:
-        logger.warning("Invalid OpenAI TTS config during clip synthesis; falling back to tone", extra={"error": str(exc)})
-        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-    clip, audio_path, cached = get_or_create_dj_clip(db, payload.script_text, payload.voice, provider=provider)
-    if clip is None:
-        raise HTTPException(status_code=500, detail="Failed to persist DJ clip")
-    return DJClipResponse(clip_id=clip.id, audio_path=audio_path, voice=clip.voice, cached=cached)

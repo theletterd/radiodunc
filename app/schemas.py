@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LibraryScanRequest(BaseModel):
@@ -16,8 +16,7 @@ class TrackOut(BaseModel):
     duration_seconds: float | None = None
     bitrate: int | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class StationOut(BaseModel):
@@ -91,18 +90,6 @@ class DJScriptResponse(BaseModel):
     dj_name: str
     sentences: list[str]
     script_text: str
-
-
-class DJClipSynthesizeRequest(BaseModel):
-    script_text: str = Field(min_length=1)
-    voice: str | None = None
-
-
-class DJClipResponse(BaseModel):
-    clip_id: int
-    audio_path: str
-    voice: str | None = None
-    cached: bool
 
 
 class PlayerNextResponse(BaseModel):
