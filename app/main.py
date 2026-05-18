@@ -433,6 +433,63 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
     return FileResponse(str(media_path), media_type=media_type, filename=media_path.name)
 
 
+def _warm_caches_background(config: AppConfig) -> None:
+    """Pre-generate the things the first transition would otherwise have to wait for.
+
+    Spawned from player_play in a daemon thread. By the time the user gets to
+    their first DJ break / news segment / ad / skip, these are ready:
+      1. Station-ID phrases (idempotent — only does work on a fresh station name)
+      2. News bulletin (caches for 20–30 min via get_news_clip's own TTL)
+      3. At least one station-ID stinger clip in the DB pool (needed by
+         /player/stinger-url for the skip-stinger to have something to play)
+    """
+    try:
+        if config.alerts.station_id.enabled:
+            phrases = get_station_id_phrases(config)
+        else:
+            phrases = []
+
+        if config.alerts.news.enabled:
+            get_news_clip(config)
+
+        # Ensure the skip-stinger pool has at least one clip. Without this the
+        # user's first hit on Next has no stinger to cover the dead air.
+        if config.alerts.station_id.enabled and phrases:
+            db = SessionLocal()
+            try:
+                has_stinger = (
+                    db.query(DJClip)
+                    .filter(DJClip.audio_path.like("%/station_ids/%"))
+                    .first()
+                )
+                if has_stinger is None:
+                    station = active_station(config.station, config)
+                    voice = station.voice or None
+                    try:
+                        provider = build_tts_provider(config)
+                    except ValueError:
+                        provider = build_tts_provider(
+                            config.model_copy(update={"tts_provider": "tone"})
+                        )
+                    sid_text = random.choice(phrases)
+                    try:
+                        get_or_create_dj_clip(
+                            db,
+                            script_text=sid_text,
+                            voice=voice,
+                            voice_instructions=station.voice_instructions,
+                            provider=provider,
+                            clip_type="station_ids",
+                        )
+                        _log_event("warmup.stinger_seeded", phrase=sid_text[:60])
+                    except RuntimeError:
+                        logger.warning("Stinger warmup TTS failed; pool will fill on first ad break instead")
+            finally:
+                db.close()
+    except Exception:  # noqa: BLE001
+        logger.exception("Cache warmup failed")
+
+
 @app.post("/player/play", response_model=PlayerActionResponse)
 def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
@@ -457,6 +514,11 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(state)
     _log_event("player.play.started", queue_items=len(sequence))
+
+    # Fire-and-forget cache warmup so the first transition (DJ/news/ad/stinger)
+    # doesn't pay LLM+TTS latency. Won't block playback if it fails.
+    threading.Thread(target=_warm_caches_background, args=(config,), daemon=True).start()
+
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
 
