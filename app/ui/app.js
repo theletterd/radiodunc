@@ -28,6 +28,7 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 // ── Transition guard ─────────────────────────────────────────────────────────
 let transitioning    = false;
 let autoTriggerTimer = null;
+let _prefetchTimer   = null;
 
 // ── Pause state ───────────────────────────────────────────────────────────────
 let paused = false;
@@ -159,6 +160,27 @@ function scheduleAutoTrigger(trackDurationSec) {
   autoTriggerTimer = setTimeout(() => triggerTransition('auto'), delaySec * 1000);
 }
 
+// ── Prefetch scheduling ───────────────────────────────────────────────────────
+// Fires a lightweight POST /player/prefetch ~20 s before the track ends so the
+// server has time to generate the next DJ clip before the transition arrives.
+const PREFETCH_LEAD_S = 20;
+
+function clearPrefetchTimer() {
+  clearTimeout(_prefetchTimer);
+  _prefetchTimer = null;
+}
+
+function schedulePrefetch(trackDurationSec) {
+  clearPrefetchTimer();
+  if (!trackDurationSec || !Number.isFinite(trackDurationSec)) return;
+  const elapsed  = curSlot().el.currentTime || 0;
+  const delaySec = Math.max(0, trackDurationSec - elapsed - PREFETCH_LEAD_S);
+  _prefetchTimer = setTimeout(() => {
+    _prefetchTimer = null;
+    fetch('/player/prefetch', { method: 'POST' }).catch(() => {});
+  }, delaySec * 1000);
+}
+
 // Fire cb as soon as the element has duration info. Works whether metadata
 // has already loaded (calls immediately) or hasn't yet (waits for the event).
 function whenDuration(el, cb) {
@@ -219,6 +241,7 @@ async function triggerTransition(reason) {
   }
   transitioning = true;
   clearAutoTrigger();
+  clearPrefetchTimer();
   clearModeTimers();
   console.log('[audio] transition start:', reason);
 
@@ -385,7 +408,10 @@ async function triggerTransition(reason) {
     //    handles both cases — fires immediately or waits for loadedmetadata.
     const triggerSetupMs = Math.max(0, (trackGainStart + 0.3 - ctx.currentTime) * 1000);
     setTimeout(() => {
-      whenDuration(curSlot().el, () => scheduleAutoTrigger(curSlot().el.duration));
+      whenDuration(curSlot().el, () => {
+        scheduleAutoTrigger(curSlot().el.duration);
+        schedulePrefetch(curSlot().el.duration);
+      });
     }, triggerSetupMs);
 
     // 8. Refresh display after the new track has settled.
@@ -430,6 +456,7 @@ async function startPlayback() {
   cur.gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
 
   scheduleAutoTrigger(cur.el.duration); // metadata already loaded by loadWithRetry
+  schedulePrefetch(cur.el.duration);
 
   renderAll();
 }
@@ -437,6 +464,7 @@ async function startPlayback() {
 // ── Stop playback ─────────────────────────────────────────────────────────────
 async function stopPlayback() {
   clearAutoTrigger();
+  clearPrefetchTimer();
   clearModeTimers();
   onAirMode = 'track';
   transitioning = false;
