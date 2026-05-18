@@ -29,6 +29,10 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 let transitioning    = false;
 let autoTriggerTimer = null;
 let _prefetchTimer   = null;
+let _stingerTimer    = null;
+// AudioContext time when the in-flight skip-stinger ends; 0 if none. Used to
+// defer the DJ clip's start so they don't overlap.
+let stingerEndTime   = 0;
 
 // ── Pause state ───────────────────────────────────────────────────────────────
 let paused = false;
@@ -145,6 +149,23 @@ async function fetchAndDecode(url) {
   return ctx.decodeAudioData(await resp.arrayBuffer());
 }
 
+// Place an arbitrary buffer on the AudioContext timeline with a small in/out fade.
+// Returns the end time so callers can chain segments back-to-back.
+function scheduleSegment(buf, startAt, label) {
+  const src  = ctx.createBufferSource();
+  src.buffer = buf;
+  const g    = ctx.createGain();
+  src.connect(g);
+  g.connect(masterGain);
+  g.gain.setValueAtTime(0, startAt);
+  g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + DJ_EDGE_S);
+  g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - DJ_EDGE_S);
+  g.gain.linearRampToValueAtTime(0, startAt + buf.duration);
+  src.start(startAt);
+  console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)}`);
+  return startAt + buf.duration;
+}
+
 // ── Auto-trigger scheduling ──────────────────────────────────────────────────
 function clearAutoTrigger() {
   clearTimeout(autoTriggerTimer);
@@ -179,6 +200,37 @@ function schedulePrefetch(trackDurationSec) {
     _prefetchTimer = null;
     fetch('/player/prefetch', { method: 'POST' }).catch(() => {});
   }, delaySec * 1000);
+}
+
+// ── Skip-stinger ──────────────────────────────────────────────────────────────
+// On user-initiated Next, the DJ clip can take 5–10 s to generate + decode.
+// To cover the dead-air gap we play a short cached station-ID clip ~3 s in.
+// If the DJ clip arrives before the timer fires, it's cancelled. If the stinger
+// is mid-playback when the DJ clip is ready, djStart is shifted to stingerEnd.
+const SKIP_STINGER_DELAY_MS = 3000;
+
+function clearStingerTimer() {
+  if (_stingerTimer) clearTimeout(_stingerTimer);
+  _stingerTimer = null;
+}
+
+async function _playSkipStinger() {
+  _stingerTimer = null;
+  if (!ctx) return;
+  try {
+    const resp = await fetch('/player/stinger-url');
+    if (!resp.ok) return;
+    const { clip_url: clipUrl } = await resp.json();
+    if (!clipUrl || !ctx) return;
+    const buf = await fetchAndDecode(clipUrl);
+    if (!ctx) return;
+    const start = ctx.currentTime + 0.05;
+    scheduleSegment(buf, start, 'Skip stinger');
+    stingerEndTime = start + buf.duration;
+    setOnAirMode('dj');  // brief pink "On air" badge
+  } catch (err) {
+    console.warn('[stinger] failed:', err);
+  }
 }
 
 // Fire cb as soon as the element has duration info. Works whether metadata
@@ -242,8 +294,17 @@ async function triggerTransition(reason) {
   transitioning = true;
   clearAutoTrigger();
   clearPrefetchTimer();
+  clearStingerTimer();
+  stingerEndTime = 0;
   clearModeTimers();
   console.log('[audio] transition start:', reason);
+
+  // On user skip, kick off a stinger after 3 s if the DJ clip isn't ready yet.
+  // _playSkipStinger checks ctx and bails if the transition has already started
+  // playing the DJ clip (stingerEndTime is reset to 0 once we schedule DJ).
+  if (reason === 'user') {
+    _stingerTimer = setTimeout(_playSkipStinger, SKIP_STINGER_DELAY_MS);
+  }
 
   try {
     await ctx.resume();
@@ -328,26 +389,16 @@ async function triggerTransition(reason) {
     }
     if (segmentFetches.length) await Promise.allSettled(segmentFetches);
 
-    // Helper: place an arbitrary buffer on the timeline with a small in/out fade.
-    function scheduleSegment(buf, startAt, label) {
-      const src  = ctx.createBufferSource();
-      src.buffer = buf;
-      const g    = ctx.createGain();
-      src.connect(g);
-      g.connect(masterGain);
-      g.gain.setValueAtTime(0, startAt);
-      g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + DJ_EDGE_S);
-      g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - DJ_EDGE_S);
-      g.gain.linearRampToValueAtTime(0, startAt + buf.duration);
-      src.start(startAt);
-      console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)}`);
-      return startAt + buf.duration;
-    }
+    // Cancel any pending skip-stinger now that the DJ clip is ready. If the
+    // stinger has already started, stingerEndTime is set and we'll defer
+    // djStart so they don't overlap; if it hasn't fired yet, the timer is
+    // killed and we proceed normally.
+    clearStingerTimer();
 
     // 4. Place clips on the AudioContext timeline. djStart may already be in
     //    the past (we awaited above); AudioContext handles that gracefully.
-    //    Order: DJ → News → Ad → Station ID → Track.
-    const djStart = ctx.currentTime + 0.05;
+    //    Order: [Skip stinger ➜] DJ → News → Ad → Station ID → Track.
+    const djStart = Math.max(ctx.currentTime + 0.05, stingerEndTime + 0.1);
     let cursor  = djStart;
     let djEnd   = djStart;
     let newsStart = null;
@@ -495,6 +546,8 @@ async function resumeAfterRefresh() {
 async function stopPlayback() {
   clearAutoTrigger();
   clearPrefetchTimer();
+  clearStingerTimer();
+  stingerEndTime = 0;
   clearModeTimers();
   onAirMode = 'track';
   transitioning = false;

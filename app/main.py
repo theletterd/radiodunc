@@ -920,6 +920,21 @@ def player_prefetch(db: Session = Depends(get_db)):
     return {"status": "scheduled"}
 
 
+@app.get("/player/stinger-url")
+def player_stinger_url(db: Session = Depends(get_db)):
+    """Return a random cached station-ID clip URL for the client to play during the
+    dead-air gap after a user-initiated skip. No LLM/TTS work — just a DB pick."""
+    clip = (
+        db.query(DJClip)
+        .filter(DJClip.audio_path.like("%/station_ids/%"))
+        .order_by(func.random())
+        .first()
+    )
+    if clip is None:
+        return {"clip_url": None}
+    return {"clip_url": f"/media/dj-clip/{clip.script_hash}"}
+
+
 @app.post("/player/stop", response_model=PlayerActionResponse)
 def player_stop(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)

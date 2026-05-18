@@ -22,6 +22,7 @@ from app.main import (
     player_play,
     player_next,
     player_prefetch,
+    player_stinger_url,
     player_stop,
     player_queue,
     delete_queue_item,
@@ -1306,3 +1307,57 @@ def test_build_news_clip_retries_with_default_voice_on_runtime_error(monkeypatch
     assert len(calls) == 2
     assert calls[1] is None
 
+
+
+# ── Skip-stinger endpoint ─────────────────────────────────────────────────────
+
+def _seed_station_id_clip(db, *, script_hash: str, audio_path: str) -> DJClip:
+    clip = DJClip(
+        script_text="This is RadioDunc.",
+        audio_path=audio_path,
+        voice="verse",
+        script_hash=script_hash,
+        is_ad=False,
+    )
+    db.add(clip)
+    db.commit()
+    db.refresh(clip)
+    return clip
+
+
+def test_player_stinger_url_returns_null_when_pool_empty():
+    db = _make_db_session()
+    result = player_stinger_url(db)
+    assert result == {"clip_url": None}
+
+
+def test_player_stinger_url_returns_station_id_clip_url():
+    db = _make_db_session()
+    _seed_station_id_clip(db, script_hash="stingerhash1", audio_path="generated_audio/station_ids/stingerhash1.mp3")
+    result = player_stinger_url(db)
+    assert result == {"clip_url": "/media/dj-clip/stingerhash1"}
+
+
+def test_player_stinger_url_ignores_clips_outside_station_ids_subdir():
+    db = _make_db_session()
+    # A regular transition clip — should NOT be picked.
+    _seed_station_id_clip(db, script_hash="djhash1", audio_path="generated_audio/transitions/djhash1.mp3")
+    # An ad clip — should NOT be picked either.
+    _seed_station_id_clip(db, script_hash="adhash1", audio_path="generated_audio/ads/adhash1.mp3")
+    result = player_stinger_url(db)
+    assert result == {"clip_url": None}
+
+
+def test_player_stinger_url_picks_from_multiple_station_id_clips():
+    """With multiple available, the endpoint returns one of them (random)."""
+    db = _make_db_session()
+    hashes = ["sid1", "sid2", "sid3"]
+    for h in hashes:
+        _seed_station_id_clip(db, script_hash=h, audio_path=f"generated_audio/station_ids/{h}.mp3")
+    seen = set()
+    for _ in range(20):
+        url = player_stinger_url(db)["clip_url"]
+        assert url is not None
+        seen.add(url)
+    # In 20 picks across 3 clips, we should see at least 2 different hashes.
+    assert len(seen) >= 2, f"expected variety across 3 clips, only got: {seen}"
