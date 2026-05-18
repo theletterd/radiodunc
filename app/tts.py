@@ -57,7 +57,7 @@ class OpenAITTSProvider:
         requested_voice = (voice or "").strip()
         resolved_voice = self.voice if not requested_voice or requested_voice == "default" else requested_voice
         logger.info("Synthesizing OpenAI TTS clip", extra={"voice": resolved_voice, "output_path": str(output_path), "text_len": len(text), "model": self.model})
-        payload = {"model": self.model, "voice": resolved_voice, "input": text, "response_format": "wav"}
+        payload = {"model": self.model, "voice": resolved_voice, "input": text, "response_format": "mp3"}
         if instructions:
             payload["instructions"] = instructions
         request = urllib.request.Request(
@@ -102,6 +102,13 @@ def _clip_hash(script_text: str, voice: str, instructions: str | None = None) ->
     return hashlib.sha256(key).hexdigest()
 
 
+_CLIP_TYPE_SUBDIRS = {
+    "transitions": "transitions",
+    "ads": "ads",
+    "news": "news",
+}
+
+
 def get_or_create_dj_clip(
     db: Session,
     script_text: str,
@@ -109,19 +116,21 @@ def get_or_create_dj_clip(
     provider=None,
     voice_instructions: str | None = None,
     is_ad: bool = False,
+    clip_type: str = "transitions",
 ) -> tuple[DJClip | None, str, bool]:
     normalized_voice = (voice or "default").strip() or "default"
     digest = _clip_hash(script_text, normalized_voice, voice_instructions)
-    clips_dir = Path("generated_audio")
+    subdir = _CLIP_TYPE_SUBDIRS.get(clip_type, "transitions")
+    clips_dir = Path("generated_audio") / subdir
     local_provider = provider or ToneTTSProvider()
 
     existing = db.query(DJClip).filter(DJClip.script_hash == digest).first()
     if existing:
-        logger.info("Reusing cached DJ clip", extra={"clip_id": existing.id, "voice": normalized_voice})
+        logger.info("Reusing cached DJ clip", extra={"clip_id": existing.id, "voice": normalized_voice, "clip_type": clip_type})
         return existing, existing.audio_path, True
 
-    output_path = clips_dir / f"{digest}.wav"
-    logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path)})
+    output_path = clips_dir / f"{digest}.mp3"
+    logger.info("Generating cached DJ clip", extra={"voice": normalized_voice, "output_path": str(output_path), "clip_type": clip_type})
     local_provider.synthesize(script_text, normalized_voice, output_path, instructions=voice_instructions)
 
     clip = DJClip(script_text=script_text, script_hash=digest, audio_path=str(output_path), voice=normalized_voice, is_ad=is_ad)
