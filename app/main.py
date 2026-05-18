@@ -15,7 +15,13 @@ from sqlalchemy import func, text
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
 from .models import DJClip, PlayerState, Track
-from .dj_scripts import active_station, generate_ad_script, generate_dj_script, generate_news_script
+from .dj_scripts import (
+    active_station,
+    generate_ad_script,
+    generate_dj_script,
+    generate_news_script,
+    get_station_id_phrases,
+)
 from .scanner import scan_library
 from .schemas import (
     LibraryScanRequest,
@@ -723,15 +729,12 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
             _log_event("player.next.ad_attached", ad_cached=ad_cached, pool_count=pool_count)
 
     # Station ID stinger — plays right after the ad break in the active DJ voice.
-    # Each phrase is cached forever via the existing TTS hash (script + voice).
+    # Phrases are LLM-generated once per station name and cached on disk;
+    # the TTS clip itself is then cached forever via the script+voice hash.
     station_id_clip_url: str | None = None
-    sid_cfg = config.alerts.station_id
-    if ad_clip_url and sid_cfg.enabled and sid_cfg.phrases:
-        phrase_template = random.choice(sid_cfg.phrases)
-        sid_text = phrase_template.format(
-            station_name=station.name,
-            tagline=station.tagline or "",
-        ).strip()
+    if ad_clip_url and config.alerts.station_id.enabled:
+        phrases = get_station_id_phrases(config)
+        sid_text = random.choice(phrases) if phrases else None
         if sid_text:
             try:
                 sid_clip, _, sid_cached = get_or_create_dj_clip(

@@ -323,6 +323,80 @@ def generate_news_script(config: AppConfig, newsreader_name: str | None = None) 
     return _call_openai_text(prompt, config)
 
 
+STATION_ID_CACHE_FILE = Path("generated_station_ids.json")
+
+DEFAULT_STATION_ID_PROMPT = """\
+Write {count} short station-ID stingers for a radio station called "{station_name}".
+Tagline: "{tagline}".
+
+Each stinger should be:
+- ONE sentence, 4–10 words. Short and snappy.
+- Upbeat, easy to say out loud, with a clear sense of personality.
+- Vary the vibe across the {count}: some classic ("This is X"), some punchy and
+  hyped, some warm and welcoming, some confident and cool, some cheeky.
+- Reference the station name naturally. Use the full name sometimes; just the
+  call letters or numbers other times.
+- Plain text only. No quotation marks, no numbering, no markdown, no emojis,
+  no extra commentary.
+
+Return them as a plain list, one per line."""
+
+
+def _load_station_id_cache() -> dict[str, list[str]]:
+    if not STATION_ID_CACHE_FILE.exists():
+        return {}
+    try:
+        data = json.loads(STATION_ID_CACHE_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Could not parse %s; treating as empty", STATION_ID_CACHE_FILE)
+        return {}
+
+
+def _save_station_id_cache(cache: dict[str, list[str]]) -> None:
+    try:
+        STATION_ID_CACHE_FILE.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
+    except OSError as exc:
+        logger.warning("Could not write %s: %s", STATION_ID_CACHE_FILE, exc)
+
+
+def get_station_id_phrases(config: AppConfig) -> list[str]:
+    """Return the cached stinger phrases for the current station name.
+
+    Generated once via the LLM on first call and persisted to disk. If the station
+    name changes, a fresh set is generated (and the old set stays cached, in case
+    you switch back). Falls back to a single hard-coded line if the LLM is
+    unavailable or returns nothing usable.
+    """
+    station_name = config.station.name
+    cache = _load_station_id_cache()
+    if cached := cache.get(station_name):
+        return cached
+
+    prompt = DEFAULT_STATION_ID_PROMPT.format(
+        count=config.alerts.station_id.phrase_count,
+        station_name=station_name,
+        tagline=config.station.tagline or "",
+    )
+    logger.info("Generating station ID phrases via OpenAI", extra={"station_name": station_name})
+    response = _call_openai_text(prompt, config)
+
+    phrases: list[str] = []
+    if response:
+        for line in response.splitlines():
+            cleaned = line.strip().strip('"').strip("'").lstrip("-•*0123456789. )").strip()
+            if 3 < len(cleaned) < 200:
+                phrases.append(cleaned)
+
+    if not phrases:
+        logger.warning("Station ID generation returned no usable phrases; using fallback")
+        phrases = [f"This is {station_name}."]
+
+    cache[station_name] = phrases
+    _save_station_id_cache(cache)
+    return phrases
+
+
 def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
     """Generate a fake-ad script via OpenAI. Returns None on failure (caller should skip the ad)."""
     template = config.alerts.ads.prompt_template or DEFAULT_AD_PROMPT_TEMPLATE
