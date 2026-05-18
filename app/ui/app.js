@@ -149,20 +149,30 @@ async function fetchAndDecode(url) {
   return ctx.decodeAudioData(await resp.arrayBuffer());
 }
 
+// Click-prevention only — keeps short stingers from losing their first consonant.
+// Longer DJ/news/ad clips use DJ_EDGE_S (0.2s) where the soft ramp is fine.
+const STINGER_FADE_S = 0.02;
+
 // Place an arbitrary buffer on the AudioContext timeline with a small in/out fade.
+// fadeIn/fadeOut override DJ_EDGE_S per segment (use a tiny value for short clips
+// whose first/last consonant would otherwise be eaten by the default fade).
 // Returns the end time so callers can chain segments back-to-back.
-function scheduleSegment(buf, startAt, label) {
+function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ_EDGE_S } = {}) {
+  // Clamp so fade-in and fade-out can never overlap on a very short clip.
+  const inS  = Math.min(fadeIn,  buf.duration / 2);
+  const outS = Math.min(fadeOut, buf.duration / 2);
+
   const src  = ctx.createBufferSource();
   src.buffer = buf;
   const g    = ctx.createGain();
   src.connect(g);
   g.connect(masterGain);
   g.gain.setValueAtTime(0, startAt);
-  g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + DJ_EDGE_S);
-  g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - DJ_EDGE_S);
+  g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + inS);
+  g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - outS);
   g.gain.linearRampToValueAtTime(0, startAt + buf.duration);
   src.start(startAt);
-  console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)}`);
+  console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)} in=${inS.toFixed(2)}`);
   return startAt + buf.duration;
 }
 
@@ -225,7 +235,7 @@ async function _playSkipStinger() {
     const buf = await fetchAndDecode(clipUrl);
     if (!ctx) return;
     const start = ctx.currentTime + 0.05;
-    scheduleSegment(buf, start, 'Skip stinger');
+    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S });
     stingerEndTime = start + buf.duration;
     setOnAirMode('dj');  // brief pink "On air" badge
   } catch (err) {
@@ -408,7 +418,7 @@ async function triggerTransition(reason) {
     if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip');     cursor = djEnd; }
     if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip'); }
     if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip'); }
-    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID'); }
+    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S }); }
     djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
     // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
