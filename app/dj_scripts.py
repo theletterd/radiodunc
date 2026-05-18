@@ -127,7 +127,8 @@ DEFAULT_NEWS_PROMPT_TEMPLATE = """\
 Write a short radio news bulletin, delivered by {newsreader_name} from the {rss_source} news desk.
 Total length: about 30–40 seconds when spoken aloud.
 
-Structure the bulletin in three parts:
+The bulletin MUST have three parts, in this order: INTRO, BODY, OUTRO.
+The OUTRO is not optional. Do not finish the bulletin without it.
 
 1. INTRO — one short sentence that opens the bulletin and establishes the newsreader. Examples:
    - "Good evening — I'm {newsreader_name} with the latest from {rss_source}."
@@ -139,14 +140,19 @@ Structure the bulletin in three parts:
 {headlines_block}
    For each story, write one clean sentence that adds slight context beyond the bare headline.
 
-3. OUTRO — one short sign-off sentence that names the newsreader again. Examples:
+3. OUTRO — REQUIRED. A clean, deliberate sign-off sentence that ends the bulletin.
+   It must:
+   - Name the newsreader ({newsreader_name})
+   - Feel distinct from the last news sentence — pause-worthy, like a closing line
+   - Be exactly one short sentence
+   Examples (pick one or write a similar one — vary across bulletins):
    - "I'm {newsreader_name} — more headlines later."
    - "That's the latest from {rss_source}. {newsreader_name} reporting."
    - "Back soon with more from the {rss_source} news desk. I'm {newsreader_name}."
-   Pick one of these or write something similar in feel. Vary it across bulletins.
+   - "{newsreader_name} reporting for {rss_source}. Until next time."
 
 Sober, neutral, professional newsreader tone throughout. No editorial, no jokes, no station mentions, no music banter.
-Do NOT sign off with phrases like 'back to the music' or 'now back to your DJ' — that's the DJ's job.
+Do NOT sign off with phrases like 'back to the music' or 'now back to your DJ' — a station ID plays after you finish; let it do that work.
 Return plain text only — no headings, no markdown, no quotation marks, no section labels."""
 
 
