@@ -205,6 +205,19 @@ def test_generate_ad_script_returns_text_from_openai_call():
     assert "radio sponsor spot" in sent_prompt
 
 
+def test_generate_ad_script_injects_random_category_from_pool(monkeypatch):
+    """Each call picks one category from AD_CATEGORIES so the LLM stays focused
+    rather than anchoring on whatever's last in an embedded list."""
+    from app.dj_scripts import AD_CATEGORIES
+    cfg = AppConfig(station=StationConfig(name="Cat FM", format="Eclectic"))
+    # Force the random pick to a known value so the assertion is deterministic.
+    monkeypatch.setattr("random.choice", lambda seq: seq[2])
+    with patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
+        generate_ad_script(cfg.station, cfg)
+    sent_prompt = call.call_args[0][0]
+    assert AD_CATEGORIES[2] in sent_prompt
+
+
 def test_generate_ad_script_uses_custom_template():
     cfg = AppConfig(
         station=StationConfig(name="Custom FM", format="Eclectic"),

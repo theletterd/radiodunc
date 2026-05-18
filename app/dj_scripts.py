@@ -81,12 +81,40 @@ Return plain text only — no headings, no markdown.
 When mentioning the station name, you MUST say it in full, e.g 'KVW 98 point 6 FM'"""
 
 
+# Curated category list. One is picked at random per call and injected into the
+# prompt as {ad_category}. Doing the selection in Python (rather than handing
+# the LLM a list and asking it to "vary") removes anchoring bias — LLMs lean
+# heavily on the last item in any embedded list, which is why the previous
+# prompt produced wall-to-wall dating-app spots.
+AD_CATEGORIES: list[str] = [
+    "a local service: plumber, electrician, mechanic, dog groomer, locksmith, mover, roofer, handyman, or gardener — pick one and run with it",
+    "a food or drink spot: pizza joint, coffee shop, brewery, food truck, bakery, taco stand, donut shop, deli, or ice-cream parlour — pick one",
+    "a quirky retail store: bookshop, record store, thrift store, bike shop, board-game café, comic shop, or vinyl emporium — pick one",
+    "an oddly specific kitchen, cleaning, or household gadget that solves a problem nobody knew they had",
+    "a community class or recurring event: yoga, pottery, salsa dancing, axe throwing, escape rooms, life drawing, or cooking class — pick one",
+    "a car-related service: tire shop, car wash, detailer, used dealership, or 24-hour towing — pick one",
+    "a health or wellness service: dentist, chiropractor, massage clinic, optometrist, urgent care, or physical therapist — pick one",
+    "an entertainment venue: mini-golf, bowling alley, drive-in theatre, vintage arcade, trampoline park, or roller-disco — pick one",
+    "a slightly weird small business: psychic, taxidermist, pet boutique, vintage typewriter repair, fortune teller, or antique mall — pick one",
+    "a home improvement product or service: paint store, hardware store, custom blinds, garden centre, pool company, or fencing contractor — pick one",
+    "a travel or leisure product: B&B, RV rental, hiking gear, road-trip accessories, or scenic train tour — pick one",
+    "a hyper-specific niche product or absurd subscription box that should not exist but somehow does",
+    "a financial or professional service: insurance broker, tax prep, lawyer, real estate agent, or mortgage advisor — pick one",
+    "an app, website, or piece of software: a dating app, a niche social network, a productivity gimmick, a delivery service, a hyper-local marketplace, or something for tracking something extremely mundane — pick one",
+    "a personal-care or beauty business: hair salon, barbershop, nail studio, day spa, or tanning salon — pick one",
+    "a pet-related service or product: dog daycare, cat boutique, exotic-pet supplies, mobile groomer, or pet psychic — pick one",
+]
+
+
 DEFAULT_AD_PROMPT_TEMPLATE = """\
-Write a 2-sentence late-night radio sponsor spot. Invent a fake (sometimes wacky, sometimes plausible)
-brand and product (For example: a local service (e.g., window cleaners, mechanic, restaurant), food, gadget or dating app) — be creative and varied.
-Occasionally be a little risque or suggestive.
-Vintage radio-ad voice: punchy, slightly cheesy, with a memorable tagline.
-Make it clearly sound like an ad break, not DJ banter.
+Write a 2-sentence late-night radio sponsor spot for {ad_category}.
+
+Invent a fake brand and product. Punchy, slightly cheesy, with a memorable tagline.
+Sometimes plausible, sometimes wacky — surprise me.
+Independent of the category, you may occasionally lean a little risqué or suggestive if it genuinely fits the product.
+
+Vintage radio-ad voice. Clearly an ad break, not DJ banter.
+
 Return plain text only — no headings, no markdown, no quotation marks."""
 
 
@@ -493,22 +521,22 @@ def get_station_id_phrases(config: AppConfig) -> list[str]:
 
 def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
     """Generate a fake-ad script via OpenAI. Returns None on failure (caller should skip the ad)."""
+    import random as _random  # local import keeps the module-level random call testable via monkeypatch
+
     template = config.alerts.ads.prompt_template or DEFAULT_AD_PROMPT_TEMPLATE
     fields = {
         "station_name": station.name,
         "station_format": station.format,
         "dj_name": station.dj_name,
+        "ad_category": _random.choice(AD_CATEGORIES),
     }
     try:
         prompt = template.format_map(fields)
     except KeyError as exc:
         logger.warning("ads.prompt_template has unknown placeholder %s; using default", exc)
         prompt = DEFAULT_AD_PROMPT_TEMPLATE.format_map(fields)
-    logger.info("Generating ad-break script via OpenAI")
+    logger.info("Generating ad-break script via OpenAI", extra={"ad_category": fields["ad_category"][:60]})
     return _call_openai_text(prompt, config)
-
-    logger.warning("OpenAI DJ script response missing usable output_text; falling back to sentence pool")
-    return None
 
 
 def generate_dj_script(
