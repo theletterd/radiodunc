@@ -1361,3 +1361,79 @@ def test_player_stinger_url_picks_from_multiple_station_id_clips():
         seen.add(url)
     # In 20 picks across 3 clips, we should see at least 2 different hashes.
     assert len(seen) >= 2, f"expected variety across 3 clips, only got: {seen}"
+
+
+# ── Cache warmup ──────────────────────────────────────────────────────────────
+
+def test_warm_caches_runs_phrases_and_news_and_seeds_stinger(monkeypatch):
+    from app.main import _warm_caches_background, SessionLocal
+
+    calls = {"phrases": 0, "news": 0, "clip": 0}
+    seeded_clip = None
+
+    monkeypatch.setattr("app.main.get_station_id_phrases", lambda cfg: calls.__setitem__("phrases", calls["phrases"] + 1) or ["This is Test FM."])
+    monkeypatch.setattr("app.main.get_news_clip", lambda cfg: calls.__setitem__("news", calls["news"] + 1) or {"clip_hash": "n1", "script_text": "Bulletin.", "generated_at": 0})
+    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
+
+    db = _make_db_session()
+    monkeypatch.setattr("app.main.SessionLocal", lambda: db)
+
+    def fake_get_or_create(*args, **kwargs):
+        nonlocal seeded_clip
+        seeded_clip = DJClip(
+            script_text=kwargs.get("script_text", "x"),
+            audio_path="generated_audio/station_ids/warmedhash.mp3",
+            voice="verse",
+            script_hash="warmedhash",
+        )
+        db.add(seeded_clip)
+        db.commit()
+        db.refresh(seeded_clip)
+        calls["clip"] += 1
+        return seeded_clip, seeded_clip.audio_path, False
+
+    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_get_or_create)
+
+    cfg = AppConfig(station=StationConfig(name="Test FM"))
+    _warm_caches_background(cfg)
+
+    assert calls["phrases"] == 1
+    assert calls["news"] == 1
+    assert calls["clip"] == 1  # stinger was seeded because pool was empty
+    assert seeded_clip is not None
+
+
+def test_warm_caches_skips_stinger_when_pool_already_has_one(monkeypatch):
+    from app.main import _warm_caches_background
+
+    db = _make_db_session()
+    # Pre-seed the pool — warmup should NOT generate another clip.
+    db.add(DJClip(
+        script_text="existing", audio_path="generated_audio/station_ids/x.mp3",
+        voice="verse", script_hash="existinghash",
+    ))
+    db.commit()
+
+    monkeypatch.setattr("app.main.SessionLocal", lambda: db)
+    monkeypatch.setattr("app.main.get_station_id_phrases", lambda cfg: ["Phrase."])
+    monkeypatch.setattr("app.main.get_news_clip", lambda cfg: None)
+    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
+
+    create_count = 0
+    def fake_get_or_create(*args, **kwargs):
+        nonlocal create_count
+        create_count += 1
+        return None, "", False
+    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_get_or_create)
+
+    _warm_caches_background(AppConfig(station=StationConfig(name="Test FM")))
+    assert create_count == 0  # existing stinger satisfies the pool check
+
+
+def test_warm_caches_swallows_exceptions(monkeypatch):
+    """Warmup must never propagate — playback shouldn't fail because the warmup did."""
+    from app.main import _warm_caches_background
+    monkeypatch.setattr("app.main.get_station_id_phrases", lambda cfg: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr("app.main.get_news_clip", lambda cfg: None)
+    # No exception should escape.
+    _warm_caches_background(AppConfig(station=StationConfig(name="Test FM")))
