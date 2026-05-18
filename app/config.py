@@ -94,11 +94,22 @@ class AdBreakPreferences(BaseModel):
         description="Once this many unique ad clips are cached, reuse them instead of generating new ones.",
     )
     every_n_breaks: int = Field(default=6, ge=0)
+    risque_chance: float = Field(
+        default=0.1,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Probability (0.0–1.0) that the LLM is told to lean a little risqué/"
+            "suggestive on this ad. Default 0.1 = roughly 1 in 10. Set to 0 to "
+            "switch off entirely, 1.0 to always lean in."
+        ),
+    )
     prompt_template: str | None = Field(
         default=None,
         description=(
             "Optional override for the ad-break prompt. Placeholders: {station_name}, "
-            "{station_format}, {dj_name}. Leave null for the built-in default."
+            "{station_format}, {dj_name}, {ad_category}, {ad_tone}. Leave null for "
+            "the built-in default."
         ),
     )
 

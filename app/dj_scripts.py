@@ -106,13 +106,18 @@ AD_CATEGORIES: list[str] = [
 ]
 
 
+RISQUE_TONE_HINT = (
+    "Tone for this one: lean a little risqué or suggestive — it's a late-night slot, "
+    "the adults are listening. Don't be crass; the wink is the point."
+)
+
+
 DEFAULT_AD_PROMPT_TEMPLATE = """\
 Write a 2-sentence late-night radio sponsor spot for {ad_category}.
 
 Invent a fake brand and product. Punchy, slightly cheesy, with a memorable tagline.
 Sometimes plausible, sometimes wacky — surprise me.
-Independent of the category, you may occasionally lean a little risqué or suggestive if it genuinely fits the product.
-
+{ad_tone}
 Vintage radio-ad voice. Clearly an ad break, not DJ banter.
 
 Return plain text only — no headings, no markdown, no quotation marks."""
@@ -524,18 +529,24 @@ def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
     import random as _random  # local import keeps the module-level random call testable via monkeypatch
 
     template = config.alerts.ads.prompt_template or DEFAULT_AD_PROMPT_TEMPLATE
+    risque_chance = config.alerts.ads.risque_chance
+    is_risque = _random.random() < risque_chance
     fields = {
         "station_name": station.name,
         "station_format": station.format,
         "dj_name": station.dj_name,
         "ad_category": _random.choice(AD_CATEGORIES),
+        "ad_tone": RISQUE_TONE_HINT if is_risque else "",
     }
     try:
         prompt = template.format_map(fields)
     except KeyError as exc:
         logger.warning("ads.prompt_template has unknown placeholder %s; using default", exc)
         prompt = DEFAULT_AD_PROMPT_TEMPLATE.format_map(fields)
-    logger.info("Generating ad-break script via OpenAI", extra={"ad_category": fields["ad_category"][:60]})
+    logger.info(
+        "Generating ad-break script via OpenAI",
+        extra={"ad_category": fields["ad_category"][:60], "risque": is_risque},
+    )
     return _call_openai_text(prompt, config)
 
 

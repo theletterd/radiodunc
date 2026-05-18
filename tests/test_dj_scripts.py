@@ -205,6 +205,30 @@ def test_generate_ad_script_returns_text_from_openai_call():
     assert "radio sponsor spot" in sent_prompt
 
 
+def test_generate_ad_script_includes_risque_hint_when_roll_passes(monkeypatch):
+    from app.dj_scripts import RISQUE_TONE_HINT
+    cfg = AppConfig(
+        station=StationConfig(name="Risque FM"),
+        alerts={"ads": AdBreakPreferences(risque_chance=1.0)},
+    )
+    monkeypatch.setattr("random.random", lambda: 0.5)  # 0.5 < 1.0 → risqué
+    with patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
+        generate_ad_script(cfg.station, cfg)
+    assert RISQUE_TONE_HINT in call.call_args[0][0]
+
+
+def test_generate_ad_script_omits_risque_hint_when_roll_fails(monkeypatch):
+    from app.dj_scripts import RISQUE_TONE_HINT
+    cfg = AppConfig(
+        station=StationConfig(name="Tame FM"),
+        alerts={"ads": AdBreakPreferences(risque_chance=0.0)},
+    )
+    monkeypatch.setattr("random.random", lambda: 0.5)  # 0.5 < 0.0 is false → tame
+    with patch("app.dj_scripts._call_openai_text", return_value="anything") as call:
+        generate_ad_script(cfg.station, cfg)
+    assert RISQUE_TONE_HINT not in call.call_args[0][0]
+
+
 def test_generate_ad_script_injects_random_category_from_pool(monkeypatch):
     """Each call picks one category from AD_CATEGORIES so the LLM stays focused
     rather than anchoring on whatever's last in an embedded list."""
