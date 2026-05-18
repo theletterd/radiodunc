@@ -492,3 +492,78 @@ def test_get_station_id_phrases_distributes_phrase_count_per_vibe(monkeypatch, t
 
     # ceil(15/5) == 3, every vibe asked for 3
     assert seen_counts == [3, 3, 3, 3, 3]
+
+
+# ── DJ shifts (new per-day-hours model) ──────────────────────────────────────
+
+def test_legacy_persona_shape_migrates_to_shifts():
+    """Old-shape {days:[...], start_hour, end_hour} auto-migrates on load."""
+    from app.config import DJShift
+    p = DJPersona(name="Legacy Lou", style="loose", days=["friday", "saturday"], start_hour=20, end_hour=23)
+    assert len(p.shifts) == 2
+    assert p.shifts[0] == DJShift(day="friday", start_hour=20, end_hour=23)
+    assert p.shifts[1] == DJShift(day="saturday", start_hour=20, end_hour=23)
+
+
+def test_legacy_days_only_migrates_to_full_day_shifts():
+    p = DJPersona(name="All-day", style="constant", days=["sunday"])
+    assert p.shifts == [DJShift_for("sunday", 0, 23)]
+
+
+def test_legacy_hours_only_migrates_to_every_day_shifts():
+    p = DJPersona(name="Late everyday", style="moody", start_hour=22, end_hour=2)
+    # Should produce 7 shifts, one per weekday, with the same hours.
+    assert len(p.shifts) == 7
+    assert {s.day for s in p.shifts} == set(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"])
+    assert all(s.start_hour == 22 and s.end_hour == 2 for s in p.shifts)
+
+
+def test_persona_with_no_schedule_keeps_empty_shifts():
+    p = DJPersona(name="Always on", style="floating")
+    assert p.shifts == []
+
+
+def test_persona_with_per_day_hour_shifts():
+    """The new shape lets a single persona have different hours on different days."""
+    from app.config import DJShift
+    p = DJPersona(
+        name="Variable Vince", style="flexible",
+        shifts=[
+            DJShift(day="friday", start_hour=20, end_hour=23),
+            DJShift(day="saturday", start_hour=19, end_hour=1),  # wraps past midnight
+        ],
+    )
+    fri_2200 = datetime(2026, 5, 22, 22, 0)  # Friday
+    sat_2300 = datetime(2026, 5, 23, 23, 0)  # Saturday
+    sat_0030 = datetime(2026, 5, 23, 0, 30)  # Saturday (early morning)
+    sat_0200 = datetime(2026, 5, 23, 2, 0)   # Saturday — outside Sat shift
+    from app.dj_scripts import _persona_matches
+    assert _persona_matches(p, fri_2200) is True
+    assert _persona_matches(p, sat_2300) is True
+    assert _persona_matches(p, sat_0030) is True  # wrap-around
+    assert _persona_matches(p, sat_0200) is False
+
+
+def DJShift_for(day, start, end):
+    """Tiny helper to keep the legacy migration tests readable."""
+    from app.config import DJShift
+    return DJShift(day=day, start_hour=start, end_hour=end)
+
+
+def test_shift_rejects_invalid_day():
+    import pytest as _pytest
+    from app.config import DJShift
+    with _pytest.raises(Exception):
+        DJShift(day="funday", start_hour=10, end_hour=12)
+
+
+def test_legacy_and_new_shape_in_same_persona_prefers_new():
+    """If both 'shifts' and 'days/start/end' are provided, shifts wins; legacy keys
+    are dropped silently (extra='forbid' would have raised otherwise)."""
+    from app.config import DJShift
+    p = DJPersona(
+        name="Mixed", style="confused",
+        shifts=[DJShift(day="monday", start_hour=10, end_hour=11)],
+        days=["sunday"], start_hour=22, end_hour=23,
+    )
+    assert p.shifts == [DJShift(day="monday", start_hour=10, end_hour=11)]

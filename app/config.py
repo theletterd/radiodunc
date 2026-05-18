@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class WeatherPreferences(BaseModel):
@@ -166,8 +166,32 @@ class AlertConfig(BaseModel):
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 
 
+class DJShift(BaseModel):
+    """One on-air slot for a persona — a single day with start/end hours.
+
+    A persona may have many shifts (different days, different hours). The hour
+    range is inclusive on both ends and may wrap past midnight (start > end).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    day: str = Field(description="Weekday name, lowercase: monday..sunday")
+    start_hour: int = Field(ge=0, le=23, description="Inclusive (24h)")
+    end_hour: int = Field(ge=0, le=23, description="Inclusive (24h); may wrap past midnight")
+
+    @field_validator("day", mode="before")
+    @classmethod
+    def normalize_day(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("day must be a string")
+        d = value.strip().lower()
+        if d not in WEEKDAYS:
+            raise ValueError(f"unknown weekday {value!r}; expected one of {WEEKDAYS}")
+        return d
+
+
 class DJPersona(BaseModel):
-    """A DJ persona that can take over the station on certain days/hours."""
+    """A DJ persona that can take over the station on certain shifts."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -176,12 +200,43 @@ class DJPersona(BaseModel):
     voice: str | None = None
     prompt_template: str | None = None
     voice_instructions: str | None = None
-    days: list[str] = Field(
+    shifts: list[DJShift] = Field(
         default_factory=list,
-        description="Weekday names (lowercase: monday..sunday). Empty means any day.",
+        description="On-air shifts. Empty means the persona is always eligible.",
     )
-    start_hour: int | None = Field(default=None, ge=0, le=23, description="Inclusive (24h). None = any.")
-    end_hour: int | None = Field(default=None, ge=0, le=23, description="Inclusive (24h). None = any.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_schedule(cls, data):
+        """Convert the old days+start_hour+end_hour fields into shifts on load.
+
+        Old shape:  {days: ["fri","sat"], start_hour: 20, end_hour: 23}
+        New shape:  {shifts: [{day:"fri",start_hour:20,end_hour:23},
+                              {day:"sat",start_hour:20,end_hour:23}]}
+
+        Lets existing radio_config.json files keep working without manual edits.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "shifts" in data and data["shifts"]:
+            # New shape already present — drop any legacy keys that snuck in.
+            for key in ("days", "start_hour", "end_hour"):
+                data.pop(key, None)
+            return data
+
+        days = data.pop("days", None) or []
+        start = data.pop("start_hour", None)
+        end = data.pop("end_hour", None)
+
+        # If neither schedule field is set, leave shifts empty (always-on).
+        if not days and start is None and end is None:
+            return data
+
+        s = start if start is not None else 0
+        e = end if end is not None else 23
+        target_days = days if days else list(WEEKDAYS)
+        data["shifts"] = [{"day": d, "start_hour": s, "end_hour": e} for d in target_days]
+        return data
 
     @field_validator("name", "style", mode="before")
     @classmethod
@@ -202,21 +257,6 @@ class DJPersona(BaseModel):
             raise ValueError("must be a string")
         stripped = value.strip()
         return stripped or None
-
-    @field_validator("days", mode="before")
-    @classmethod
-    def normalize_days(cls, value: list[str]) -> list[str]:
-        if not isinstance(value, list):
-            raise ValueError("must be a list")
-        normalized = []
-        for day in value:
-            if not isinstance(day, str):
-                raise ValueError("each day must be a string")
-            d = day.strip().lower()
-            if d not in WEEKDAYS:
-                raise ValueError(f"unknown weekday {day!r}; expected one of {WEEKDAYS}")
-            normalized.append(d)
-        return normalized
 
 
 class StationConfig(BaseModel):

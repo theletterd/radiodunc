@@ -85,6 +85,19 @@ class DJScriptGenerateRequest(BaseModel):
     reason: str | None = None  # "skip" = user skipped; "request" = audience request; "auto"/None = natural end
 
 
+class TTSPreviewRequest(BaseModel):
+    """Audition a voice+instructions combo with arbitrary text. Used by the UI's
+    config editor to let users hear voice changes immediately rather than waiting
+    for the next on-air transition."""
+    text: str = Field(min_length=1, max_length=300)
+    voice: str | None = None
+    voice_instructions: str | None = None
+
+
+class TTSPreviewResponse(BaseModel):
+    clip_url: str
+
+
 class DJScriptResponse(BaseModel):
     station_name: str
     dj_name: str

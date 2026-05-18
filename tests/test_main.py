@@ -1437,3 +1437,58 @@ def test_warm_caches_swallows_exceptions(monkeypatch):
     monkeypatch.setattr("app.main.get_news_clip", lambda cfg: None)
     # No exception should escape.
     _warm_caches_background(AppConfig(station=StationConfig(name="Test FM")))
+
+
+# ── TTS preview endpoint ─────────────────────────────────────────────────────
+
+def test_tts_preview_returns_clip_url_on_success(monkeypatch):
+    from app.main import tts_preview
+    from app.schemas import TTSPreviewRequest
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
+    fake_clip = DJClip(
+        script_text="Hello", audio_path="generated_audio/previews/abc.mp3",
+        voice="verse", script_hash="abc",
+    )
+    monkeypatch.setattr("app.main.get_or_create_dj_clip",
+                        lambda *a, **kw: (fake_clip, fake_clip.audio_path, False))
+
+    db = _make_db_session()
+    result = tts_preview(TTSPreviewRequest(text="Hello world", voice="verse"), db)
+    assert result.clip_url == "/media/dj-clip/abc"
+
+
+def test_tts_preview_passes_clip_type_previews(monkeypatch):
+    from app.main import tts_preview
+    from app.schemas import TTSPreviewRequest
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
+    captured = {}
+    def fake_create(*a, **kw):
+        captured.update(kw)
+        clip = DJClip(script_text="x", audio_path="p", voice="v", script_hash="h")
+        return clip, "p", False
+    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_create)
+
+    tts_preview(TTSPreviewRequest(text="Sample", voice="sage", voice_instructions="warm"), _make_db_session())
+    assert captured["clip_type"] == "previews"
+    assert captured["voice"] == "sage"
+    assert captured["voice_instructions"] == "warm"
+    assert captured["script_text"] == "Sample"
+
+
+def test_tts_preview_raises_502_when_provider_fails(monkeypatch):
+    from app.main import tts_preview
+    from app.schemas import TTSPreviewRequest
+
+    monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
+    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
+    def fake_create(*a, **kw):
+        raise RuntimeError("openai down")
+    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_create)
+
+    with pytest.raises(HTTPException) as exc:
+        tts_preview(TTSPreviewRequest(text="x"), _make_db_session())
+    assert exc.value.status_code == 502
