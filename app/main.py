@@ -425,7 +425,8 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="DJ clip not found")
     config = load_config()
     media_path = _safe_media_path(clip.audio_path, config)
-    return FileResponse(str(media_path), media_type="audio/wav", filename=media_path.name)
+    media_type = _AUDIO_MEDIA_TYPES.get(media_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(str(media_path), media_type=media_type, filename=media_path.name)
 
 
 @app.post("/player/play", response_model=PlayerActionResponse)
@@ -520,11 +521,12 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
             try:
                 clip, _path, dj_cached = get_or_create_dj_clip(
                     db, script_text=script_response.script_text, voice=voice, provider=provider,
-                    voice_instructions=instructions,
+                    voice_instructions=instructions, clip_type="transitions",
                 )
             except RuntimeError:
                 clip, _path, dj_cached = get_or_create_dj_clip(
                     db, script_text=script_response.script_text, voice=None, provider=provider,
+                    clip_type="transitions",
                 )
             elapsed = time.perf_counter() - t0
             logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
@@ -634,12 +636,12 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         try:
             clip, _audio_path, dj_cached = get_or_create_dj_clip(
                 db, script_text=script_text, voice=voice, provider=provider,
-                voice_instructions=instructions,
+                voice_instructions=instructions, clip_type="transitions",
             )
         except RuntimeError:
             logger.warning("DJ clip synthesis failed with voice=%r; retrying with default voice", voice)
             clip, _audio_path, dj_cached = get_or_create_dj_clip(
-                db, script_text=script_text, voice=None, provider=provider,
+                db, script_text=script_text, voice=None, provider=provider, clip_type="transitions",
             )
         elapsed = time.perf_counter() - t0
         logger.info("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
@@ -665,6 +667,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
                     voice=news_voice,
                     voice_instructions=news_instructions,
                     provider=provider,
+                    clip_type="news",
                 )
                 news_clip_url = f"/media/dj-clip/{news_clip.script_hash}"
                 _log_event(
@@ -706,11 +709,13 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
                         voice_instructions=ad_instructions,
                         provider=provider,
                         is_ad=True,
+                        clip_type="ads",
                     )
                 except RuntimeError:
                     logger.warning("Ad clip synthesis failed with voice=%r; retrying with default", ad_voice)
                     ad_clip, _ad_path, ad_cached = get_or_create_dj_clip(
                         db, script_text=ad_script_text, voice=None, provider=provider, is_ad=True,
+                        clip_type="ads",
                     )
 
         if ad_clip is not None:

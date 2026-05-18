@@ -82,6 +82,7 @@ When mentioning the station name, you MUST say it in full, e.g 'KVW 98 point 6 F
 DEFAULT_AD_PROMPT_TEMPLATE = """\
 Write a 2-sentence late-night radio sponsor spot. Invent a fake (sometimes wacky, sometimes plausible)
 brand and product (For example: a local service (e.g., window cleaners, mechanic, restaurant), food, gadget or dating app) — be creative and varied.
+Occasionally be a little risque or suggestive.
 Vintage radio-ad voice: punchy, slightly cheesy, with a memorable tagline.
 Make it clearly sound like an ad break, not DJ banter.
 Return plain text only — no headings, no markdown, no quotation marks."""
