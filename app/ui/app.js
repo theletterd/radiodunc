@@ -815,7 +815,7 @@ function _appendCell(grid, content, className, col, row) {
   return el;
 }
 
-function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusive) {
+function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusive, meta = {}) {
   const block = document.createElement('div');
   block.className = 'grid-persona-block';
   block.style.gridColumn = String(col);
@@ -826,6 +826,21 @@ function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusiv
   // a 1-letter monogram avoids overflow.
   const span = (rowEndExclusive - rowStart) >= 2 ? persona.name : persona.name.slice(0, 1);
   block.textContent = span;
+  // Tag with indices so drag/click handlers can find their backing data.
+  if (meta.personaIdx != null) block.dataset.personaIdx = String(meta.personaIdx);
+  if (meta.shiftIdx   != null) block.dataset.shiftIdx   = String(meta.shiftIdx);
+  if (meta.isWrap)              block.dataset.isWrap     = '1';
+  if (meta.wrapHalf)            block.dataset.wrapHalf   = meta.wrapHalf;  // 'today' | 'tomorrow'
+  // Add resize handles on non-wrap shifts. Wrap shifts (start > end render as
+  // two blocks across midnight) are still editable via the form for v1.
+  if (!meta.isWrap) {
+    const top = document.createElement('div');    top.className    = 'resize-handle top';
+    const bottom = document.createElement('div'); bottom.className = 'resize-handle bottom';
+    top.dataset.edge = 'top';
+    bottom.dataset.edge = 'bottom';
+    block.appendChild(top);
+    block.appendChild(bottom);
+  }
   grid.appendChild(block);
 }
 
@@ -865,24 +880,26 @@ async function renderSchedule() {
   }
 
   // ── Persona blocks (iterate in roster order so we can show overlap warnings later)
-  roster.forEach((persona, i) => {
-    const color = _personaColor(i);
+  roster.forEach((persona, personaIdx) => {
+    const color = _personaColor(personaIdx);
     const shifts = persona.shifts || [];
-    for (const shift of shifts) {
+    shifts.forEach((shift, shiftIdx) => {
       const dayIdx = DAYS_FULL.indexOf(shift.day);
-      if (dayIdx === -1) continue;
+      if (dayIdx === -1) return;
       const col = dayIdx + 2;
       const start = Number(shift.start_hour);
       const end = Number(shift.end_hour);
       if (start <= end) {
-        _appendPersonaBlock(grid, persona, color, col, start + 2, end + 3);
+        _appendPersonaBlock(grid, persona, color, col, start + 2, end + 3, { personaIdx, shiftIdx });
       } else {
         // Wraps past midnight: render two blocks (today + tomorrow)
-        _appendPersonaBlock(grid, persona, color, col, start + 2, 26); // start → end of day
+        _appendPersonaBlock(grid, persona, color, col, start + 2, 26,
+                            { personaIdx, shiftIdx, isWrap: true, wrapHalf: 'today' });
         const tomorrowCol = ((dayIdx + 1) % 7) + 2;
-        _appendPersonaBlock(grid, persona, color, tomorrowCol, 2, end + 3); // 00 → end
+        _appendPersonaBlock(grid, persona, color, tomorrowCol, 2, end + 3,
+                            { personaIdx, shiftIdx, isWrap: true, wrapHalf: 'tomorrow' });
       }
-    }
+    });
   });
 
   // ── NOW indicator: glowing outline on the current hour cell
@@ -919,22 +936,140 @@ function _setSchedulerSubView(name) {
   if (panel) panel.dataset.subView = name;
 }
 
-// After renderSchedule() repaints the grid, wire up block clicks to open the
-// edit form for that persona. We do this in a separate pass so renderSchedule
-// stays purely a "draw" function.
+// After renderSchedule() repaints the grid, wire up block interactions:
+// - Click body → open the editor for that persona
+// - Drag top/bottom handle → snap-to-hour resize, persists via PUT /config
+//
+// We do this in a separate pass so renderSchedule stays purely a draw function.
 async function _attachBlockClickHandlers() {
   const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
+  blocks.forEach(block => {
+    block.style.cursor = 'pointer';
+    block.addEventListener('click', (e) => {
+      // Ignore clicks that originated on a resize handle.
+      if (e.target.classList.contains('resize-handle')) return;
+      const idx = Number(block.dataset.personaIdx);
+      if (!Number.isNaN(idx)) _openPersonaEditor(idx);
+    });
+  });
+
+  document.querySelectorAll('#scheduleGrid .resize-handle').forEach(handle => {
+    handle.addEventListener('mousedown', _startResizeDrag);
+  });
+}
+
+// ── Drag-to-resize for shift blocks ─────────────────────────────────────────
+// Snap-to-hour. We compute the row-height from a hour-label cell, then convert
+// pointer deltas to hour deltas. The block is repositioned on-grid via inline
+// grid-row updates during drag; PUT /config fires once on release.
+function _gridRowHeightPx() {
+  const cell = document.querySelector('#scheduleGrid .grid-hour-label');
+  // .grid-hour-label is single-row, so its height is the row height. The 2px
+  // grid gap is accounted for by getBoundingClientRect (excludes gap).
+  // Fall back to 22px (the CSS default) if not measurable.
+  return cell ? cell.getBoundingClientRect().height + 2 /* gap */ : 24;
+}
+
+let _dragState = null;  // active drag, or null
+
+async function _startResizeDrag(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const handle = e.currentTarget;
+  const block = handle.closest('.grid-persona-block');
+  if (!block) return;
+
   let config;
   try { config = await api('/config'); } catch (_) { return; }
-  const roster = config.station?.dj_roster || [];
+  const personaIdx = Number(block.dataset.personaIdx);
+  const shiftIdx = Number(block.dataset.shiftIdx);
+  const persona = config.station?.dj_roster?.[personaIdx];
+  const shift = persona?.shifts?.[shiftIdx];
+  if (!shift) return;
 
-  blocks.forEach(block => {
-    const name = block.title.split(' — ')[0];
-    const idx = roster.findIndex(p => p.name === name);
-    if (idx === -1) return;
-    block.style.cursor = 'pointer';
-    block.addEventListener('click', () => _openPersonaEditor(idx));
-  });
+  _dragState = {
+    config,
+    persona,
+    shift,
+    block,
+    edge: handle.dataset.edge,
+    startY: e.clientY,
+    rowHeight: _gridRowHeightPx(),
+    originalStartHour: Number(shift.start_hour),
+    originalEndHour: Number(shift.end_hour),
+    newStartHour: Number(shift.start_hour),
+    newEndHour: Number(shift.end_hour),
+  };
+  block.classList.add('dragging');
+
+  // Floating readout follows the cursor with the current hour range.
+  const readout = document.createElement('div');
+  readout.className = 'drag-readout';
+  document.body.appendChild(readout);
+  _dragState.readout = readout;
+  _updateDragReadout(e.clientX, e.clientY);
+
+  document.addEventListener('mousemove', _onDragMove);
+  document.addEventListener('mouseup',   _onDragEnd, { once: true });
+}
+
+function _onDragMove(e) {
+  if (!_dragState) return;
+  const deltaPx = e.clientY - _dragState.startY;
+  const deltaHours = Math.round(deltaPx / _dragState.rowHeight);
+
+  if (_dragState.edge === 'bottom') {
+    // Resize end_hour. Min: 1h shift (end >= start). Max: 23.
+    const newEnd = Math.max(_dragState.originalStartHour,
+                            Math.min(23, _dragState.originalEndHour + deltaHours));
+    _dragState.newEndHour = newEnd;
+  } else {
+    // Resize start_hour. Min: 0. Max: end_hour (shift stays >= 1h).
+    const newStart = Math.min(_dragState.originalEndHour,
+                              Math.max(0, _dragState.originalStartHour + deltaHours));
+    _dragState.newStartHour = newStart;
+  }
+
+  // Live grid-row update for visual feedback.
+  _dragState.block.style.gridRow = `${_dragState.newStartHour + 2} / ${_dragState.newEndHour + 3}`;
+  _updateDragReadout(e.clientX, e.clientY);
+}
+
+function _updateDragReadout(x, y) {
+  if (!_dragState?.readout) return;
+  const fmt = (h) => String(h).padStart(2, '0') + ':00';
+  _dragState.readout.textContent = `${fmt(_dragState.newStartHour)} – ${fmt(_dragState.newEndHour)}`;
+  _dragState.readout.style.left = `${x + 14}px`;
+  _dragState.readout.style.top  = `${y + 4}px`;
+}
+
+async function _onDragEnd() {
+  if (!_dragState) return;
+  document.removeEventListener('mousemove', _onDragMove);
+  _dragState.block.classList.remove('dragging');
+  _dragState.readout?.remove();
+
+  const changed = _dragState.newStartHour !== _dragState.originalStartHour
+                || _dragState.newEndHour   !== _dragState.originalEndHour;
+  if (!changed) {
+    _dragState = null;
+    return;
+  }
+
+  _dragState.shift.start_hour = _dragState.newStartHour;
+  _dragState.shift.end_hour   = _dragState.newEndHour;
+  const configToSave = _dragState.config;
+  _dragState = null;
+
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(configToSave) });
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  } catch (err) {
+    console.warn('[schedule] save after resize failed:', err);
+    await renderSchedule();
+    _attachBlockClickHandlers();
+  }
 }
 
 // ── Persona editor form ─────────────────────────────────────────────────────
