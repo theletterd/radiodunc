@@ -1,15 +1,27 @@
 from datetime import datetime
 from unittest.mock import patch
 
-from app.config import AppConfig, AdBreakPreferences, DJPersona, NewsPreferences, StationConfig
+import json
+
+from app.config import (
+    AppConfig,
+    AdBreakPreferences,
+    DJPersona,
+    NewsPreferences,
+    StationConfig,
+    StationIDPreferences,
+)
 from app.dj_scripts import (
     DEFAULT_AD_PROMPT_TEMPLATE,
     DEFAULT_DJ_PROMPT_TEMPLATE,
     DEFAULT_NEWS_PROMPT_TEMPLATE,
+    STATION_ID_VIBES,
     _build_prompt,
+    _parse_phrase_lines,
     active_station,
     generate_ad_script,
     generate_news_script,
+    get_station_id_phrases,
     pick_active_persona,
 )
 from app.models import Track
@@ -279,3 +291,167 @@ def test_dj_prompt_includes_news_handoff_when_news_break_follows():
     assert "news bulletin follows" in prompt
     # Should NOT include the inline headline-weaving instruction.
     assert "work in this real headline" not in prompt
+
+
+# ── Station ID phrase generation ──────────────────────────────────────────────
+
+def _station_id_config(name: str = "Test FM", phrase_count: int = 10) -> AppConfig:
+    return AppConfig(
+        station=StationConfig(name=name, tagline="The Beat"),
+        alerts={"station_id": StationIDPreferences(phrase_count=phrase_count)},
+    )
+
+
+def test_parse_phrase_lines_strips_numbered_prefixes():
+    response = "1. Foo bar\n2. Baz qux\n10. Ten ten ten"
+    assert _parse_phrase_lines(response) == ["Foo bar", "Baz qux", "Ten ten ten"]
+
+
+def test_parse_phrase_lines_strips_bullet_prefixes():
+    response = "- Dash phrase\n• Bullet phrase\n* Star phrase"
+    assert _parse_phrase_lines(response) == ["Dash phrase", "Bullet phrase", "Star phrase"]
+
+
+def test_parse_phrase_lines_strips_surrounding_quotes():
+    response = '"Foo bar baz"\n\'Quoted phrase\''
+    assert _parse_phrase_lines(response) == ["Foo bar baz", "Quoted phrase"]
+
+
+def test_parse_phrase_lines_filters_by_length():
+    too_short = "ab"  # len 2 → out
+    just_long_enough = "abcd"  # len 4 → in (3 < len < 200)
+    too_long = "x" * 200  # len 200 → out
+    just_under_max = "y" * 199  # len 199 → in
+    response = "\n".join([too_short, just_long_enough, too_long, just_under_max])
+    out = _parse_phrase_lines(response)
+    assert just_long_enough in out
+    assert just_under_max in out
+    assert too_short not in out
+    assert too_long not in out
+
+
+def test_parse_phrase_lines_handles_none_and_empty():
+    assert _parse_phrase_lines(None) == []
+    assert _parse_phrase_lines("") == []
+    assert _parse_phrase_lines("   \n  \n") == []
+
+
+def test_get_station_id_phrases_generates_when_cache_empty(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    calls: list[str] = []
+
+    def fake_batch(vibe_name, vibe_instruction, count, station_name, tagline, config):
+        calls.append(vibe_name)
+        return [f"{vibe_name} phrase one", f"{vibe_name} phrase two"]
+
+    monkeypatch.setattr("app.dj_scripts._generate_station_id_batch", fake_batch)
+
+    cfg = _station_id_config(name="Cache FM", phrase_count=10)
+    result = get_station_id_phrases(cfg)
+
+    # One call per vibe
+    assert sorted(calls) == sorted(name for name, _ in STATION_ID_VIBES)
+    assert len(calls) == 5
+    # Two phrases per vibe, all unique → 10 entries
+    assert len(result) == 10
+    # Cache file written, keyed by station name
+    assert cache_file.exists()
+    saved = json.loads(cache_file.read_text())
+    assert "Cache FM" in saved
+    assert saved["Cache FM"] == result
+
+
+def test_get_station_id_phrases_returns_cached_without_llm_call(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    cache_file.write_text(json.dumps({"Cached FM": ["already here", "second one"]}))
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("LLM should not be called when cache hit")
+
+    monkeypatch.setattr("app.dj_scripts._generate_station_id_batch", boom)
+
+    cfg = _station_id_config(name="Cached FM")
+    assert get_station_id_phrases(cfg) == ["already here", "second one"]
+
+
+def test_get_station_id_phrases_keeps_old_station_when_name_changes(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    cache_file.write_text(json.dumps({"Old FM": ["old one", "old two"]}))
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    def fake_batch(vibe_name, vibe_instruction, count, station_name, tagline, config):
+        return [f"new for {station_name}"]
+
+    monkeypatch.setattr("app.dj_scripts._generate_station_id_batch", fake_batch)
+
+    cfg = _station_id_config(name="New FM", phrase_count=5)
+    result = get_station_id_phrases(cfg)
+    assert all("New FM" in p for p in result)
+
+    saved = json.loads(cache_file.read_text())
+    assert "Old FM" in saved
+    assert "New FM" in saved
+    assert saved["Old FM"] == ["old one", "old two"]
+
+
+def test_get_station_id_phrases_dedupes_case_insensitively(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    # Each vibe returns the same effective phrase modulo casing/punctuation.
+    variants = iter([
+        ["This is X"],
+        ["this is x."],
+        ["THIS IS X!"],
+        ["  this is x ,"],
+        ["This is X?"],
+    ])
+
+    def fake_batch(vibe_name, vibe_instruction, count, station_name, tagline, config):
+        return next(variants)
+
+    monkeypatch.setattr("app.dj_scripts._generate_station_id_batch", fake_batch)
+
+    cfg = _station_id_config(name="Dedupe FM", phrase_count=5)
+    result = get_station_id_phrases(cfg)
+    assert len(result) == 1
+    # First-seen casing/form is preserved
+    assert result[0] == "This is X"
+
+
+def test_get_station_id_phrases_falls_back_when_all_batches_empty(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    monkeypatch.setattr(
+        "app.dj_scripts._generate_station_id_batch",
+        lambda *args, **kwargs: [],
+    )
+
+    cfg = _station_id_config(name="Empty FM", phrase_count=5)
+    result = get_station_id_phrases(cfg)
+    assert result == ["This is Empty FM."]
+    saved = json.loads(cache_file.read_text())
+    assert saved["Empty FM"] == ["This is Empty FM."]
+
+
+def test_get_station_id_phrases_distributes_phrase_count_per_vibe(monkeypatch, tmp_path):
+    cache_file = tmp_path / "phrases.json"
+    monkeypatch.setattr("app.dj_scripts.STATION_ID_CACHE_FILE", cache_file)
+
+    seen_counts: list[int] = []
+
+    def fake_batch(vibe_name, vibe_instruction, count, station_name, tagline, config):
+        seen_counts.append(count)
+        return [f"{vibe_name}-{i}" for i in range(count)]
+
+    monkeypatch.setattr("app.dj_scripts._generate_station_id_batch", fake_batch)
+
+    cfg = _station_id_config(name="Split FM", phrase_count=15)
+    get_station_id_phrases(cfg)
+
+    # ceil(15/5) == 3, every vibe asked for 3
+    assert seen_counts == [3, 3, 3, 3, 3]
