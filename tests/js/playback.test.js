@@ -123,6 +123,40 @@ describe('scheduleMode firing', () => {
   });
 });
 
+// ── initAudio: dynamics compressor in the chain ─────────────────────────────
+
+describe('initAudio', () => {
+  beforeEach(() => loadAppJs());
+
+  it('inserts a DynamicsCompressorNode between masterGain and destination', () => {
+    // Spy createDynamicsCompressor BEFORE initAudio runs so we capture every
+    // call. The setup.js stub returns a fake compressor with .connect mocked.
+    const compressors = [];
+    const realCreate = globalThis.AudioContext.prototype.createDynamicsCompressor;
+    globalThis.AudioContext.prototype.createDynamicsCompressor = function () {
+      const c = realCreate.call(this);
+      compressors.push(c);
+      return c;
+    };
+
+    try {
+      globalThis.initAudio();
+      expect(compressors).toHaveLength(1);
+      const compressor = compressors[0];
+      // Broadcast-style defaults.
+      expect(compressor.threshold.value).toBe(-18);
+      expect(compressor.ratio.value).toBe(4);
+      expect(compressor.attack.value).toBeCloseTo(0.005);
+      expect(compressor.release.value).toBeCloseTo(0.1);
+      // The compressor connects to destination — verifying we didn't accidentally
+      // leave masterGain bypassing it.
+      expect(compressor.connect).toHaveBeenCalled();
+    } finally {
+      globalThis.AudioContext.prototype.createDynamicsCompressor = realCreate;
+    }
+  });
+});
+
 // ── setOnAirMode badge text ──────────────────────────────────────────────────
 
 describe('setOnAirMode', () => {

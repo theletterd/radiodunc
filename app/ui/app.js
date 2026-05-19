@@ -196,7 +196,26 @@ function initAudio() {
   ctx        = new AudioContext();
   masterGain = ctx.createGain();
   masterGain.gain.value = musicVolume(); // pre-set from localStorage before first status poll
-  masterGain.connect(ctx.destination);
+
+  // Dynamics compressor sits at the end of the chain so every audio source
+  // — music tracks, DJ banter, news, ads, stingers, previews — passes through
+  // it on the way to the speakers. Broadcast-style settings: attenuate loud
+  // peaks above -18 dBFS at a 4:1 ratio with a soft 12 dB knee, fast attack
+  // (5 ms) so it catches transients, slowish release (100 ms) so it doesn't
+  // pump audibly between syllables. Auto-flattens the loud/quiet gap between
+  // voices (and between voices vs music) so the listener doesn't reach for
+  // the volume knob mid-show. The per-voice gain trim still applies upstream
+  // — for the typical voice it's effectively a no-op now, but it remains the
+  // right knob for extreme outlier voices the compressor can't keep up with.
+  const compressor = ctx.createDynamicsCompressor();
+  compressor.threshold.value = -18;  // dB — start squashing above this level
+  compressor.knee.value = 12;        // dB — soft transition into the threshold
+  compressor.ratio.value = 4;        // 4:1 — gentle, not crushing
+  compressor.attack.value = 0.005;   // 5 ms — fast enough to catch peaks
+  compressor.release.value = 0.1;    // 100 ms — releases between phrases, not syllables
+
+  masterGain.connect(compressor);
+  compressor.connect(ctx.destination);
 
   for (const key of ['A', 'B']) {
     const el       = new Audio();
