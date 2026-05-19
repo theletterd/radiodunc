@@ -295,4 +295,40 @@ describe('persona editor form', () => {
     expect(typeof previewBody.text).toBe('string');
     expect(previewBody.text.length).toBeGreaterThan(0);
   });
+
+  // Volume-trim slider plumbing
+  it('the volume slider populates from voice_gain_offset_db on open', async () => {
+    const roster = [{
+      name: 'Loud', personality: 'shouts',
+      voice: 'sage', voice_instructions: null, voice_gain_offset_db: -6, shifts: [],
+    }];
+    stubFetch({ 'GET /config': () => configWithRoster(roster) });
+    await openEditor(0);
+
+    // -6 dB → slider value 25 (50 + -6 * 50/12)
+    expect(document.getElementById('pf-volume-trim').value).toBe('25');
+    expect(document.getElementById('pf-volume-readout').textContent).toBe('Quieter');
+  });
+
+  it('submit persists the slider position back as voice_gain_offset_db', async () => {
+    let savedConfig = null;
+    stubFetch({
+      'GET /config': () => configWithRoster(morganRoster()),
+      'PUT /config': (body) => { savedConfig = body; return body; },
+    });
+    await openEditor(0);
+
+    // Drag the slider to "Much louder" → value 90, +9.6 dB
+    const slider = document.getElementById('pf-volume-trim');
+    slider.value = '90';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+
+    document.getElementById('personaForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(savedConfig).not.toBeNull();
+    const persona = savedConfig.station.dj_roster[0];
+    // 90 → (90-50) * 12/50 = 9.6
+    expect(persona.voice_gain_offset_db).toBeCloseTo(9.6, 3);
+  });
 });

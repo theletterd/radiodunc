@@ -28,6 +28,7 @@ const EXPORTED_NAMES = [
   '_gridRowHeightPx', '_gridColWidthPx',
   '_fmtHourBoundary', '_fmtShiftRange',
   '_dbToGainMultiplier',
+  '_volumeSliderToDb', '_dbToVolumeSlider', '_volumeSliderLabel',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',

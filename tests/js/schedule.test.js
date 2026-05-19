@@ -101,6 +101,29 @@ describe('pure helpers', () => {
     expect(globalThis._dbToGainMultiplier(null)).toBe(1);
   });
 
+  it('volume slider ⇄ dB round-trip preserves the value', () => {
+    // 50 → 0 dB; 0 → -12 dB; 100 → +12 dB. Symmetric, linear.
+    expect(globalThis._volumeSliderToDb(50)).toBe(0);
+    expect(globalThis._volumeSliderToDb(0)).toBe(-12);
+    expect(globalThis._volumeSliderToDb(100)).toBe(12);
+    expect(globalThis._volumeSliderToDb(25)).toBe(-6);
+    // Round-trip
+    expect(globalThis._dbToVolumeSlider(0)).toBe(50);
+    expect(globalThis._dbToVolumeSlider(-3)).toBe(38);  // 50 + -3*50/12 = 50-12.5 → 38
+    expect(globalThis._dbToVolumeSlider(-12)).toBe(0);
+    expect(globalThis._dbToVolumeSlider(12)).toBe(100);
+    // String input survives (form inputs return strings)
+    expect(globalThis._volumeSliderToDb('25')).toBe(-6);
+  });
+
+  it('_volumeSliderLabel describes the slider position', () => {
+    expect(globalThis._volumeSliderLabel(50)).toBe('Normal');
+    expect(globalThis._volumeSliderLabel(30)).toBe('Quieter');
+    expect(globalThis._volumeSliderLabel(10)).toBe('Much quieter');
+    expect(globalThis._volumeSliderLabel(70)).toBe('Louder');
+    expect(globalThis._volumeSliderLabel(90)).toBe('Much louder');
+  });
+
   it('_fmtShiftRange treats end as inclusive — 23 ends at midnight', () => {
     // The whole point of this helper: make "23 → 23" unambiguous to users.
     expect(globalThis._fmtShiftRange(23, 23)).toBe('11pm → midnight');

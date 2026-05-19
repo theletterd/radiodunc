@@ -26,6 +26,26 @@ function _dbToGainMultiplier(db) {
   return Math.pow(10, (db || 0) / 20);
 }
 
+// UI slider goes 0..100 with 50 = neutral, mapping linearly to ±12 dB.
+// We hide dB from the form because it's developer-speak; the slider feels
+// like a volume knob ("quieter ←→ louder") which is what the user wants.
+const VOLUME_TRIM_DB_RANGE = 12;  // max ± dB at slider extremes
+function _volumeSliderToDb(slider) {
+  const v = Number(slider);
+  return ((Number.isFinite(v) ? v : 50) - 50) * VOLUME_TRIM_DB_RANGE / 50;
+}
+function _dbToVolumeSlider(db) {
+  return Math.round(50 + (Number(db) || 0) * 50 / VOLUME_TRIM_DB_RANGE);
+}
+function _volumeSliderLabel(slider) {
+  const v = Number(slider);
+  if (v === 50)                    return 'Normal';
+  if (v > 75)                      return 'Much louder';
+  if (v > 50)                      return 'Louder';
+  if (v < 25)                      return 'Much quieter';
+  return 'Quieter';
+}
+
 // ── App state ────────────────────────────────────────────────────────────────
 let serverState = null;
 
@@ -1356,6 +1376,15 @@ function _renderPersonaForm() {
       </div>
     </div>
     <div>
+      <label for="pf-volume-trim">Volume trim <span class="muted" style="text-transform:none; font-weight:400;">— dial down loud voices (sage, nova) or boost quiet ones</span></label>
+      <div class="trim-row">
+        <span class="trim-end">Quieter</span>
+        <input type="range" id="pf-volume-trim" min="0" max="100" step="1" value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}" />
+        <span class="trim-end">Louder</span>
+        <span class="trim-readout" id="pf-volume-readout">${_volumeSliderLabel(_dbToVolumeSlider(p.voice_gain_offset_db ?? 0))}</span>
+      </div>
+    </div>
+    <div>
       <label for="pf-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
       <textarea id="pf-voice-instructions">${_escapeText(p.voice_instructions || '')}</textarea>
     </div>
@@ -1382,6 +1411,17 @@ function _renderPersonaForm() {
     _renderShifts();
   });
   form.querySelector('#pf-preview-btn').addEventListener('click', () => _previewVoice(previewSample));
+
+  // Live-update the volume-trim readout as the slider moves; persist into the
+  // working persona so Preview uses the latest value too.
+  const trimSlider = form.querySelector('#pf-volume-trim');
+  const trimReadout = form.querySelector('#pf-volume-readout');
+  trimSlider?.addEventListener('input', () => {
+    const sliderVal = Number(trimSlider.value);
+    trimReadout.textContent = _volumeSliderLabel(sliderVal);
+    schedulerWorkingPersona.voice_gain_offset_db = _volumeSliderToDb(sliderVal);
+  });
+
   if (!isNew) {
     form.querySelector('#pf-delete').addEventListener('click', _deletePersona);
   }
@@ -1467,6 +1507,8 @@ function _readFormIntoWorkingPersona() {
   p.voice = v || null;
   const vi = document.getElementById('pf-voice-instructions').value.trim();
   p.voice_instructions = vi || null;
+  const trim = document.getElementById('pf-volume-trim');
+  if (trim) p.voice_gain_offset_db = _volumeSliderToDb(trim.value);
 }
 
 async function _previewVoice(sampleText) {
@@ -1485,6 +1527,12 @@ async function _previewVoice(sampleText) {
       }),
     });
     const audio = new Audio(resp.clip_url);
+    // Apply the configured volume trim so the user can A/B settings audibly.
+    // HTMLAudioElement.volume is 0..1, so we can only attenuate from full —
+    // a boost above 0 dB caps at 1.0. The asymmetry matches the typical use
+    // case (dial DOWN hot voices like sage); for boosts the preview just
+    // reflects the loudest the preview can go.
+    audio.volume = Math.min(1, _dbToGainMultiplier(schedulerWorkingPersona.voice_gain_offset_db || 0));
     status.textContent = 'Playing…';
     audio.onended = () => { status.textContent = ''; };
     audio.onerror = () => { status.textContent = 'Playback failed.'; };

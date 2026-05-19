@@ -644,6 +644,32 @@ ul {
   cursor: wait;
 }
 
+/* ── Voice trim slider ── */
+.persona-form .trim-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+}
+.persona-form .trim-row .trim-end {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.persona-form .trim-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--pink);
+  margin: 0;
+}
+.persona-form .trim-row .trim-readout {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 80px;
+  text-align: right;
+}
+
 /* ── Shifts editor ── */
 .shifts-list {
   display: flex;
