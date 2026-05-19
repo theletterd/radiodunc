@@ -1357,8 +1357,11 @@ async function _openPersonaEditor(personaIdx) {
     schedulerWorkingPersona.shifts = schedulerWorkingPersona.shifts || [];
   }
   schedulerEditing = personaIdx;
-  _renderPersonaForm();
+  // Switch to the edit sub-view BEFORE rendering, so the form's container
+  // isn't display:none when _autoResizeTextarea reads scrollHeight (which
+  // returns 0 on hidden elements, defeating the resize).
   _setSchedulerSubView('edit');
+  _renderPersonaForm();
 }
 
 function _renderPersonaForm() {
@@ -1371,19 +1374,24 @@ function _renderPersonaForm() {
     ? `Hi, you're listening to ${p.name} on RadioDunc.`
     : `Hi, you're listening to RadioDunc.`;
 
+  // data-lpignore/data-1p-ignore stop LastPass and 1Password from popping
+  // their autofill UI on these fields. Sliders especially trigger LastPass'
+  // "save this?" prompt because it scans every input it can see.
   form.innerHTML = `
     <div>
       <label for="pf-name">Name</label>
-      <input type="text" id="pf-name" value="${_escapeAttr(p.name)}" required />
+      <input type="text" id="pf-name" value="${_escapeAttr(p.name)}" required
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
     </div>
     <div>
       <label for="pf-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY: attitude, slang, vibe</span></label>
-      <textarea id="pf-personality" required>${_escapeText(p.personality)}</textarea>
+      <textarea id="pf-personality" required autocomplete="off"
+                data-lpignore="true" data-1p-ignore="true">${_escapeText(p.personality)}</textarea>
     </div>
     <div>
       <label for="pf-voice">Voice</label>
       <div class="voice-row">
-        <select id="pf-voice">
+        <select id="pf-voice" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
           <option value="">(use station default)</option>
           ${OPENAI_VOICES.map(v => `<option value="${v}"${p.voice === v ? ' selected' : ''}>${v}</option>`).join('')}
         </select>
@@ -1394,14 +1402,17 @@ function _renderPersonaForm() {
       <label for="pf-volume-trim">Volume trim <span class="muted" style="text-transform:none; font-weight:400;">— dial down loud voices (sage, nova) or boost quiet ones</span></label>
       <div class="trim-row">
         <span class="trim-end">Quieter</span>
-        <input type="range" id="pf-volume-trim" min="0" max="100" step="1" value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}" />
+        <input type="range" id="pf-volume-trim" min="0" max="100" step="1"
+               value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}"
+               autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
         <span class="trim-end">Louder</span>
         <span class="trim-readout" id="pf-volume-readout">${_volumeSliderLabel(_dbToVolumeSlider(p.voice_gain_offset_db ?? 0))}</span>
       </div>
     </div>
     <div>
       <label for="pf-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
-      <textarea id="pf-voice-instructions">${_escapeText(p.voice_instructions || '')}</textarea>
+      <textarea id="pf-voice-instructions" autocomplete="off"
+                data-lpignore="true" data-1p-ignore="true">${_escapeText(p.voice_instructions || '')}</textarea>
     </div>
     <div>
       <label>Shifts</label>
@@ -1473,11 +1484,14 @@ function _renderShifts() {
     const row = document.createElement('div');
     row.className = 'shift-row';
     row.innerHTML = `
-      <select data-shift-i="${i}" data-field="day">
+      <select data-shift-i="${i}" data-field="day"
+              autocomplete="off" data-lpignore="true" data-1p-ignore="true">
         ${DAYS_FULL.map(d => `<option value="${d}"${shift.day === d ? ' selected' : ''}>${d.charAt(0).toUpperCase() + d.slice(1)}</option>`).join('')}
       </select>
-      <input type="number" data-shift-i="${i}" data-field="start_hour" min="0" max="23" value="${shift.start_hour}" />
-      <input type="number" data-shift-i="${i}" data-field="end_hour" min="0" max="23" value="${shift.end_hour}" />
+      <input type="number" data-shift-i="${i}" data-field="start_hour" min="0" max="23" value="${shift.start_hour}"
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
+      <input type="number" data-shift-i="${i}" data-field="end_hour" min="0" max="23" value="${shift.end_hour}"
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
       <button type="button" class="remove-shift" data-shift-i="${i}">✕</button>
       <span class="shift-readout" data-shift-i="${i}">${_fmtShiftRange(shift.start_hour, shift.end_hour)}</span>
     `;
@@ -1531,6 +1545,12 @@ function _readFormIntoWorkingPersona() {
   if (trim) p.voice_gain_offset_db = _volumeSliderToDb(trim.value);
 }
 
+// Lazy-init a dedicated AudioContext for the preview path. We don't reuse the
+// main `ctx` because it might be suspended (paused playback) and we don't want
+// a preview to side-effect playback state. The Preview button click counts as
+// a user gesture, so creating a context here doesn't trip autoplay policy.
+let _previewCtx = null;
+
 async function _previewVoice(sampleText) {
   _readFormIntoWorkingPersona();
   const btn = document.getElementById('pf-preview-btn');
@@ -1546,17 +1566,26 @@ async function _previewVoice(sampleText) {
         voice_instructions: schedulerWorkingPersona.voice_instructions,
       }),
     });
-    const audio = new Audio(resp.clip_url);
-    // Apply the configured volume trim so the user can A/B settings audibly.
-    // HTMLAudioElement.volume is 0..1, so we can only attenuate from full —
-    // a boost above 0 dB caps at 1.0. The asymmetry matches the typical use
-    // case (dial DOWN hot voices like sage); for boosts the preview just
-    // reflects the loudest the preview can go.
-    audio.volume = Math.min(1, _dbToGainMultiplier(schedulerWorkingPersona.voice_gain_offset_db || 0));
+    // Route preview through AudioContext + GainNode so the trim is audible
+    // BOTH below and above 0 dB. HTMLAudioElement.volume caps at 1.0, which
+    // made any boost (e.g. +6 dB to lift sage) inaudible in preview. WebAudio
+    // gain has no upper cap until clipping, so a +6 dB boost actually sounds
+    // 2× louder here, matching on-air behaviour.
+    if (!_previewCtx) _previewCtx = new AudioContext();
+    if (_previewCtx.state === 'suspended') await _previewCtx.resume();
+    const audioResp = await fetch(resp.clip_url);
+    const buf = await _previewCtx.decodeAudioData(await audioResp.arrayBuffer());
+
+    const src = _previewCtx.createBufferSource();
+    src.buffer = buf;
+    const gainNode = _previewCtx.createGain();
+    gainNode.gain.value = _dbToGainMultiplier(schedulerWorkingPersona.voice_gain_offset_db || 0);
+    src.connect(gainNode);
+    gainNode.connect(_previewCtx.destination);
+
     status.textContent = 'Playing…';
-    audio.onended = () => { status.textContent = ''; };
-    audio.onerror = () => { status.textContent = 'Playback failed.'; };
-    await audio.play();
+    src.onended = () => { status.textContent = ''; };
+    src.start();
   } catch (err) {
     status.textContent = `Preview failed: ${err.message}`;
   } finally {
