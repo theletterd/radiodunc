@@ -1,5 +1,39 @@
 # RadioDunc — Backlog
 
+## ☐ Separate DJ from show
+
+Right now a "persona" entry conflates two concepts: the DJ as a character
+(name, personality, voice, voice_instructions, gain trim) AND the show they
+host (which day/hour slots they own). You can't have one DJ host multiple
+distinct shows without duplicating the DJ definition.
+
+End state: a DJ is a reusable identity. A show binds a DJ to a slot:
+
+  djs:
+    - id: jessica_danger
+      name: "Ms. Jessica Danger"
+      personality: "sultry late-night intimacy"
+      voice: sage
+      voice_instructions: "..."
+      voice_gain_offset_db: -3
+
+  shows:
+    - dj: jessica_danger
+      shifts: [{day: friday, start_hour: 22, end_hour: 23}, ...]
+    - dj: jessica_danger        # same DJ, different show
+      shifts: [{day: monday, start_hour: 7, end_hour: 9}]
+    - dj: jessica_danger
+      shifts: [{day: saturday, start_hour: 10, end_hour: 12}]
+
+UI implication: the schedule editor's persona drawer splits into two
+tabs/panels — "DJ identity" (the character) and "Shows" (the slots that
+reference this DJ). The grid renders shows, click → edit the DJ behind it,
+"swap to different DJ" picker for power moves.
+
+Migration: the current dj_roster shape is one-to-one (each persona owns
+its own shifts). On load, expand each persona into one DJ + one show
+record. Old configs keep working without manual edits.
+
 ## ☐ Spurious unprompted playback after lid-close / wake
 
 Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started

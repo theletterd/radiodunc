@@ -1383,10 +1383,9 @@ function _renderPersonaForm() {
   // "save this?" prompt because it scans every input it can see.
   form.innerHTML = `
     <div>
-      <label for="pf-handle">Name</label>
-      <!-- id intentionally NOT 'pf-name' — LastPass keyword-matches on 'name'
-           and tries to autofill the user's actual name. The label still
-           reads "Name" but the field id avoids the trigger. -->
+      <label for="pf-handle">On-air handle <span class="muted" style="text-transform:none; font-weight:400;">— the name the DJ goes by</span></label>
+      <!-- LP keyword-matches on the visible label text. "Name" triggered
+           profile autofill; "On-air handle" doesn't. -->
       <input type="text" id="pf-handle" value="${_escapeAttr(p.name)}" required
              autocomplete="off" data-lpignore="true" data-1p-ignore="true"
              aria-autocomplete="none" />
@@ -1435,7 +1434,7 @@ function _renderPersonaForm() {
     <div class="preview-status" id="pf-preview-status"></div>
     <div class="persona-form-actions">
       <div class="left-group">
-        <button type="submit" class="primary">${isNew ? 'Create persona' : 'Save changes'}</button>
+        <button type="button" id="pf-save" class="primary">${isNew ? 'Create persona' : 'Save changes'}</button>
         <button type="button" id="pf-cancel">Cancel</button>
       </div>
       ${isNew ? '' : '<button type="button" class="delete-btn" id="pf-delete">Delete</button>'}
@@ -1469,7 +1468,8 @@ function _renderPersonaForm() {
   if (!isNew) {
     form.querySelector('#pf-delete').addEventListener('click', _deletePersona);
   }
-  form.addEventListener('submit', _savePersona);
+  // No <form>, no submit event. Wire the Save button directly.
+  form.querySelector('#pf-save').addEventListener('click', _savePersona);
 }
 
 // Format an hour boundary 0..24 as "midnight" / "noon" / "Nam" / "Npm".
@@ -1607,7 +1607,10 @@ async function _previewVoice(sampleText) {
 }
 
 async function _savePersona(event) {
-  event.preventDefault();
+  // Called as a button click handler now (not form submit), so there's no
+  // default to prevent — but keep the call so unit tests can pass a real
+  // Event if they want.
+  event?.preventDefault?.();
   _readFormIntoWorkingPersona();
   const status = document.getElementById('pf-preview-status');
 

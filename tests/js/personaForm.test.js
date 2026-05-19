@@ -87,7 +87,7 @@ describe('persona editor form', () => {
     expect(document.getElementById('pf-voice').value).toBe('');
     expect(document.getElementById('pf-voice-instructions').value).toBe('');
 
-    const submitBtn = document.querySelector('#personaForm button[type="submit"]');
+    const submitBtn = document.querySelector('#personaForm #pf-save');
     expect(submitBtn.textContent).toContain('Create persona');
 
     expect(document.getElementById('pf-delete')).toBeNull();
@@ -195,7 +195,7 @@ describe('persona editor form', () => {
     document.getElementById('pf-personality').value = 'energetic';
 
     const form = document.getElementById('personaForm');
-    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document.getElementById('pf-save').click();
     await flush();
 
     expect(savedConfig).not.toBeNull();
@@ -219,7 +219,7 @@ describe('persona editor form', () => {
     document.getElementById('pf-personality').value = 'cool and calm';
 
     const form = document.getElementById('personaForm');
-    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document.getElementById('pf-save').click();
     await flush();
 
     expect(savedConfig).not.toBeNull();
@@ -323,7 +323,7 @@ describe('persona editor form', () => {
     slider.value = '90';
     slider.dispatchEvent(new Event('input', { bubbles: true }));
 
-    document.getElementById('personaForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    document.getElementById('pf-save').click();
     await flush();
 
     expect(savedConfig).not.toBeNull();
