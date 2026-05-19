@@ -650,6 +650,15 @@ ul {
   flex-direction: column;
   gap: 8px;
 }
+.shift-readout {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  text-align: right;
+}
+
 .shift-row {
   display: grid;
   grid-template-columns: 1fr 70px 70px 32px;

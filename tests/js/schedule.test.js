@@ -81,6 +81,25 @@ describe('pure helpers', () => {
     expect(globalThis._jsDayToGridIndex(1)).toBe(0);  // Mon → col 0
     expect(globalThis._jsDayToGridIndex(6)).toBe(5);  // Sat → col 5
   });
+
+  it('_fmtHourBoundary names the obvious landmarks', () => {
+    expect(globalThis._fmtHourBoundary(0)).toBe('midnight');
+    expect(globalThis._fmtHourBoundary(12)).toBe('noon');
+    expect(globalThis._fmtHourBoundary(7)).toBe('7am');
+    expect(globalThis._fmtHourBoundary(13)).toBe('1pm');
+    expect(globalThis._fmtHourBoundary(23)).toBe('11pm');
+    expect(globalThis._fmtHourBoundary(24)).toBe('midnight');  // wraps cleanly
+  });
+
+  it('_fmtShiftRange treats end as inclusive — 23 ends at midnight', () => {
+    // The whole point of this helper: make "23 → 23" unambiguous to users.
+    expect(globalThis._fmtShiftRange(23, 23)).toBe('11pm → midnight');
+    expect(globalThis._fmtShiftRange(22, 23)).toBe('10pm → midnight');
+    expect(globalThis._fmtShiftRange(7, 9)).toBe('7am → 10am');
+    expect(globalThis._fmtShiftRange(11, 11)).toBe('11am → noon');
+    // Wrap shifts (start > end): the range string still wraps as expected.
+    expect(globalThis._fmtShiftRange(22, 2)).toBe('10pm → 3am');
+  });
 });
 
 // ── renderSchedule ──────────────────────────────────────────────────────────

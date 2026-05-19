@@ -4,7 +4,10 @@
 // Adjust these to taste; all audio scheduling uses AudioContext time (sample-accurate).
 const FADE_OUT_S     = 9.0;  // current track fades 1→0 over this many seconds
 const FADE_IN_S      = 1.2;  // next track fades 0→1 over this many seconds
-const DJ_GAIN        = 1.8;  // DJ clip peak gain (>1 boosts it above the fading music)
+// DJ peak gain. Speech RMS is naturally lower than full-mix music at the same
+// digital peak, so we boost spoken segments above unity. Don't push too far —
+// OpenAI TTS already comes near 0 dB peaks, so anything > ~2.2 risks clipping.
+const DJ_GAIN        = 2.1;
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
@@ -1346,6 +1349,22 @@ function _renderPersonaForm() {
   form.addEventListener('submit', _savePersona);
 }
 
+// Format an hour boundary 0..24 as "midnight" / "noon" / "Nam" / "Npm".
+// Used to translate the bare integer inputs into something a human can read.
+function _fmtHourBoundary(h) {
+  h = ((h % 24) + 24) % 24;
+  if (h === 0) return 'midnight';
+  if (h === 12) return 'noon';
+  if (h < 12) return `${h}am`;
+  return `${h - 12}pm`;
+}
+
+// Inclusive-hour shifts: end_hour=23 plays through to the start of the next
+// hour (midnight). So we render the boundary as (end_hour + 1).
+function _fmtShiftRange(start, end) {
+  return `${_fmtHourBoundary(start)} → ${_fmtHourBoundary(end + 1)}`;
+}
+
 function _renderShifts() {
   const container = document.getElementById('pf-shifts');
   if (!container) return;
@@ -1361,6 +1380,7 @@ function _renderShifts() {
       <input type="number" data-shift-i="${i}" data-field="start_hour" min="0" max="23" value="${shift.start_hour}" />
       <input type="number" data-shift-i="${i}" data-field="end_hour" min="0" max="23" value="${shift.end_hour}" />
       <button type="button" class="remove-shift" data-shift-i="${i}">✕</button>
+      <span class="shift-readout" data-shift-i="${i}">${_fmtShiftRange(shift.start_hour, shift.end_hour)}</span>
     `;
     container.appendChild(row);
   });
@@ -1372,12 +1392,29 @@ function _renderShifts() {
         schedulerWorkingPersona.shifts.splice(Number(el.dataset.shiftI), 1);
         _renderShifts();
       });
+    } else if (el.tagName === 'SPAN') {
+      // Readout — no listeners needed.
     } else {
+      const refreshReadout = () => {
+        const i = Number(el.dataset.shiftI);
+        const s = schedulerWorkingPersona.shifts[i];
+        const readout = container.querySelector(`span.shift-readout[data-shift-i="${i}"]`);
+        if (readout) readout.textContent = _fmtShiftRange(s.start_hour, s.end_hour);
+      };
       el.addEventListener('change', () => {
         const i = Number(el.dataset.shiftI);
         const field = el.dataset.field;
         const value = field === 'day' ? el.value : Number(el.value);
         schedulerWorkingPersona.shifts[i][field] = value;
+        refreshReadout();
+      });
+      // Live-update on every keystroke too, not just on blur.
+      if (el.tagName === 'INPUT') el.addEventListener('input', () => {
+        const i = Number(el.dataset.shiftI);
+        const field = el.dataset.field;
+        const v = Number(el.value);
+        if (!Number.isNaN(v)) schedulerWorkingPersona.shifts[i][field] = v;
+        refreshReadout();
       });
     }
   });
