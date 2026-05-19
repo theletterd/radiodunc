@@ -26,6 +26,21 @@ function _dbToGainMultiplier(db) {
   return Math.pow(10, (db || 0) / 20);
 }
 
+// Auto-grow a textarea to fit its content. Wired up after the persona form
+// renders so the personality / voice-instructions boxes expand as you type
+// (and start at the right size for pre-existing content). Sets height to
+// 'auto' first so the textarea can SHRINK on delete, then to scrollHeight
+// so it grows to fit. Min-height comes from CSS.
+function _autoResizeTextarea(el) {
+  if (!el) return;
+  const resize = () => {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  el.addEventListener('input', resize);
+  resize();
+}
+
 // UI slider goes 0..100 with 50 = neutral, mapping linearly to ±12 dB.
 // We hide dB from the form because it's developer-speak; the slider feels
 // like a volume knob ("quieter ←→ louder") which is what the user wants.
@@ -1404,6 +1419,11 @@ function _renderPersonaForm() {
   `;
 
   _renderShifts();
+
+  // Personality and voice_instructions grow as you type; existing content
+  // also opens at the right size instead of being trapped in a tiny scrollable box.
+  _autoResizeTextarea(form.querySelector('#pf-personality'));
+  _autoResizeTextarea(form.querySelector('#pf-voice-instructions'));
 
   form.querySelector('#pf-cancel').addEventListener('click', () => _setSchedulerSubView('grid'));
   form.querySelector('#pf-add-shift').addEventListener('click', () => {

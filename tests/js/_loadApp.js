@@ -29,6 +29,7 @@ const EXPORTED_NAMES = [
   '_fmtHourBoundary', '_fmtShiftRange',
   '_dbToGainMultiplier',
   '_volumeSliderToDb', '_dbToVolumeSlider', '_volumeSliderLabel',
+  '_autoResizeTextarea',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',
