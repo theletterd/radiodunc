@@ -30,16 +30,6 @@ class NewsVoice(BaseModel):
         default=None,
         description="Natural language delivery guidance passed to the TTS model.",
     )
-    gain_offset_db: float = Field(
-        default=0.0,
-        ge=-18.0,
-        le=18.0,
-        description=(
-            "Per-voice playback gain trim in dB. Some OpenAI voices (sage, nova) "
-            "come out hotter than others; dial them down with a negative offset "
-            "(e.g. -3 = roughly half perceived loudness)."
-        ),
-    )
 
 
 class NewsPreferences(BaseModel):
@@ -87,15 +77,6 @@ class AdVoice(BaseModel):
     voice_instructions: str | None = Field(
         default=None,
         description="Natural language delivery guidance passed to the TTS model.",
-    )
-    gain_offset_db: float = Field(
-        default=0.0,
-        ge=-18.0,
-        le=18.0,
-        description=(
-            "Per-voice playback gain trim in dB. Negative to dial down hot voices, "
-            "positive to lift quiet ones. ±18 dB max."
-        ),
     )
 
 
@@ -226,17 +207,6 @@ class DJPersona(BaseModel):
     voice: str | None = None
     prompt_template: str | None = None
     voice_instructions: str | None = None
-    voice_gain_offset_db: float = Field(
-        default=0.0,
-        ge=-18.0,
-        le=18.0,
-        description=(
-            "Per-persona playback gain trim in dB. Always applied when this persona "
-            "is active, regardless of whether persona.voice is set or inherits from "
-            "the station. This matches the intuitive UI behaviour: the slider on a "
-            "persona affects THAT persona's clips, full stop."
-        ),
-    )
     shifts: list[DJShift] = Field(
         default_factory=list,
         description="On-air shifts. Empty means the persona is always eligible.",
@@ -325,15 +295,6 @@ class StationConfig(BaseModel):
     )
     voice: str | None = None
     voice_instructions: str | None = None
-    voice_gain_offset_db: float = Field(
-        default=0.0,
-        ge=-18.0,
-        le=18.0,
-        description=(
-            "Default-DJ playback gain trim in dB. Negative to dial down hot TTS voices "
-            "(sage and nova are notably hot at unity), positive to lift quieter ones."
-        ),
-    )
     dj_prompt_template: str | None = Field(
         default=None,
         description=(

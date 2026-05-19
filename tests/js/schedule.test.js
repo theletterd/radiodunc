@@ -91,16 +91,6 @@ describe('pure helpers', () => {
     expect(globalThis._fmtHourBoundary(24)).toBe('midnight');  // wraps cleanly
   });
 
-  it('_dbToGainMultiplier converts dB to amplitude ratio', () => {
-    // 0 dB → 1.0; -6 dB → ~0.501 (half); +6 dB → ~2.0
-    expect(globalThis._dbToGainMultiplier(0)).toBeCloseTo(1.0, 4);
-    expect(globalThis._dbToGainMultiplier(-6)).toBeCloseTo(0.5012, 3);
-    expect(globalThis._dbToGainMultiplier(6)).toBeCloseTo(1.995, 3);
-    expect(globalThis._dbToGainMultiplier(-3)).toBeCloseTo(0.708, 2);  // roughly half loudness
-    expect(globalThis._dbToGainMultiplier(undefined)).toBe(1);  // missing → no trim
-    expect(globalThis._dbToGainMultiplier(null)).toBe(1);
-  });
-
   it('_autoResizeTextarea sets height to scrollHeight on input', () => {
     const ta = document.createElement('textarea');
     document.body.appendChild(ta);
@@ -119,29 +109,6 @@ describe('pure helpers', () => {
     mockScrollHeight = 70;  // user deletes content
     ta.dispatchEvent(new Event('input'));
     expect(ta.style.height).toBe('70px');  // shrinks back down
-  });
-
-  it('volume slider ⇄ dB round-trip preserves the value', () => {
-    // 50 → 0 dB; 0 → -18 dB; 100 → +18 dB. Symmetric, linear.
-    expect(globalThis._volumeSliderToDb(50)).toBe(0);
-    expect(globalThis._volumeSliderToDb(0)).toBe(-18);
-    expect(globalThis._volumeSliderToDb(100)).toBe(18);
-    expect(globalThis._volumeSliderToDb(25)).toBe(-9);
-    // Round-trip
-    expect(globalThis._dbToVolumeSlider(0)).toBe(50);
-    expect(globalThis._dbToVolumeSlider(-18)).toBe(0);
-    expect(globalThis._dbToVolumeSlider(18)).toBe(100);
-    expect(globalThis._dbToVolumeSlider(-9)).toBe(25);
-    // String input survives (form inputs return strings)
-    expect(globalThis._volumeSliderToDb('25')).toBe(-9);
-  });
-
-  it('_volumeSliderLabel describes the slider position', () => {
-    expect(globalThis._volumeSliderLabel(50)).toBe('Normal');
-    expect(globalThis._volumeSliderLabel(30)).toBe('Quieter');
-    expect(globalThis._volumeSliderLabel(10)).toBe('Much quieter');
-    expect(globalThis._volumeSliderLabel(70)).toBe('Louder');
-    expect(globalThis._volumeSliderLabel(90)).toBe('Much louder');
   });
 
   it('_fmtShiftRange treats end as inclusive — 23 ends at midnight', () => {
