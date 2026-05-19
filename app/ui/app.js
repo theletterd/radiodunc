@@ -850,7 +850,7 @@ function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusiv
   block.style.gridColumn = String(col);
   block.style.gridRow = `${rowStart} / ${rowEndExclusive}`;
   block.style.backgroundColor = color;
-  block.title = `${persona.name} — ${persona.style}`;
+  block.title = `${persona.name} — ${persona.personality}`;
   // Show the name only in the first block of a stack; for very short shifts,
   // a 1-letter monogram avoids overflow.
   const span = (rowEndExclusive - rowStart) >= 2 ? persona.name : persona.name.slice(0, 1);
@@ -1268,7 +1268,7 @@ async function _openPersonaEditor(personaIdx) {
   if (personaIdx === -1) {
     schedulerWorkingPersona = {
       name: '',
-      style: '',
+      personality: '',
       voice: null,
       voice_instructions: null,
       shifts: [],
@@ -1300,8 +1300,8 @@ function _renderPersonaForm() {
       <input type="text" id="pf-name" value="${_escapeAttr(p.name)}" required />
     </div>
     <div>
-      <label for="pf-style">Personality / Style</label>
-      <textarea id="pf-style" required>${_escapeText(p.style)}</textarea>
+      <label for="pf-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY: attitude, slang, vibe</span></label>
+      <textarea id="pf-personality" required>${_escapeText(p.personality)}</textarea>
     </div>
     <div>
       <label for="pf-voice">Voice</label>
@@ -1386,7 +1386,7 @@ function _renderShifts() {
 function _readFormIntoWorkingPersona() {
   const p = schedulerWorkingPersona;
   p.name = document.getElementById('pf-name').value.trim();
-  p.style = document.getElementById('pf-style').value.trim();
+  p.personality = document.getElementById('pf-personality').value.trim();
   const v = document.getElementById('pf-voice').value;
   p.voice = v || null;
   const vi = document.getElementById('pf-voice-instructions').value.trim();

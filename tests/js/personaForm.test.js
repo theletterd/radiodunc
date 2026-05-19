@@ -35,7 +35,7 @@ function morganRoster() {
   return [
     {
       name: 'Morgan',
-      style: 'warm and welcoming',
+      personality: 'warm and welcoming',
       voice: 'coral',
       voice_instructions: 'speak slowly',
       shifts: [{ day: 'tuesday', start_hour: 8, end_hour: 12 }],
@@ -67,7 +67,7 @@ describe('persona editor form', () => {
     await openEditor(0);
 
     expect(document.getElementById('pf-name').value).toBe('Morgan');
-    expect(document.getElementById('pf-style').value).toBe('warm and welcoming');
+    expect(document.getElementById('pf-personality').value).toBe('warm and welcoming');
     // happy-dom doesn't update select.value from innerHTML `selected` attributes,
     // so we check the selected option's value attribute directly.
     const voiceSelect = document.getElementById('pf-voice');
@@ -83,7 +83,7 @@ describe('persona editor form', () => {
     await openEditor(-1);
 
     expect(document.getElementById('pf-name').value).toBe('');
-    expect(document.getElementById('pf-style').value).toBe('');
+    expect(document.getElementById('pf-personality').value).toBe('');
     expect(document.getElementById('pf-voice').value).toBe('');
     expect(document.getElementById('pf-voice-instructions').value).toBe('');
 
@@ -96,7 +96,7 @@ describe('persona editor form', () => {
   // 3. Shifts list renders one row per shift
   it('renders one .shift-row per shift', async () => {
     const roster = [{
-      name: 'Triple', style: 'x', voice: null, voice_instructions: null,
+      name: 'Triple', personality: 'x', voice: null, voice_instructions: null,
       shifts: [
         { day: 'monday', start_hour: 6, end_hour: 8 },
         { day: 'wednesday', start_hour: 12, end_hour: 14 },
@@ -140,7 +140,7 @@ describe('persona editor form', () => {
   // 5. Remove-shift button removes that row
   it('remove-shift removes that row and preserves the remaining shift', async () => {
     const roster = [{
-      name: 'Two', style: 'x', voice: null, voice_instructions: null,
+      name: 'Two', personality: 'x', voice: null, voice_instructions: null,
       shifts: [
         { day: 'monday', start_hour: 6, end_hour: 8 },
         { day: 'friday', start_hour: 20, end_hour: 22 },
@@ -192,7 +192,7 @@ describe('persona editor form', () => {
     await openEditor(0);
 
     document.getElementById('pf-name').value = 'Morgan Updated';
-    document.getElementById('pf-style').value = 'energetic';
+    document.getElementById('pf-personality').value = 'energetic';
 
     const form = document.getElementById('personaForm');
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -200,7 +200,7 @@ describe('persona editor form', () => {
 
     expect(savedConfig).not.toBeNull();
     expect(savedConfig.station.dj_roster[0].name).toBe('Morgan Updated');
-    expect(savedConfig.station.dj_roster[0].style).toBe('energetic');
+    expect(savedConfig.station.dj_roster[0].personality).toBe('energetic');
     expect(savedConfig.station.dj_roster.length).toBe(1);
   });
 
@@ -216,7 +216,7 @@ describe('persona editor form', () => {
     await openEditor(-1);
 
     document.getElementById('pf-name').value = 'Alex';
-    document.getElementById('pf-style').value = 'cool and calm';
+    document.getElementById('pf-personality').value = 'cool and calm';
 
     const form = document.getElementById('personaForm');
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -226,14 +226,14 @@ describe('persona editor form', () => {
     expect(savedConfig.station.dj_roster.length).toBe(2);
     const newPersona = savedConfig.station.dj_roster[1];
     expect(newPersona.name).toBe('Alex');
-    expect(newPersona.style).toBe('cool and calm');
+    expect(newPersona.personality).toBe('cool and calm');
   });
 
   // 9. Delete: confirms then PUTs config without that persona
   it('delete with confirm=true fires PUT and removes the persona', async () => {
     const roster = [
       ...morganRoster(),
-      { name: 'Lou', style: 'chill', voice: null, voice_instructions: null, shifts: [] },
+      { name: 'Lou', personality: 'chill', voice: null, voice_instructions: null, shifts: [] },
     ];
     let savedConfig = null;
     stubFetch({

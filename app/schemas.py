@@ -27,7 +27,7 @@ class StationOut(BaseModel):
     era: str | None = None
     genre_focus: list[str] = Field(default_factory=list)
     dj_name: str
-    dj_style: str
+    personality: str
 
 
 class QueueResponse(BaseModel):

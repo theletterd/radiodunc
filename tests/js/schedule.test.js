@@ -91,8 +91,8 @@ describe('renderSchedule', () => {
   it('paints one block per simple shift in roster order', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
-        { name: 'Lou', style: 'low', shifts: [
+        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+        { name: 'Lou', personality: 'low', shifts: [
           { day: 'monday', start_hour: 22, end_hour: 23 },
           { day: 'tuesday', start_hour: 22, end_hour: 23 },
         ]},
@@ -114,7 +114,7 @@ describe('renderSchedule', () => {
   it('places blocks on the right grid-row/column for the shift', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Solo', style: 'x', shifts: [{ day: 'wednesday', start_hour: 14, end_hour: 17 }] },
+        { name: 'Solo', personality: 'x', shifts: [{ day: 'wednesday', start_hour: 14, end_hour: 17 }] },
       ]),
     });
 
@@ -130,7 +130,7 @@ describe('renderSchedule', () => {
   it('splits a wrap-around shift into two blocks across midnight', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Overnight', style: 'late', shifts: [{ day: 'friday', start_hour: 22, end_hour: 3 }] },
+        { name: 'Overnight', personality: 'late', shifts: [{ day: 'friday', start_hour: 22, end_hour: 3 }] },
       ]),
     });
 
@@ -152,7 +152,7 @@ describe('renderSchedule', () => {
   it('wrap-around blocks have no resize handles (form-only edit)', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Owl', style: 'mellow', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
+        { name: 'Owl', personality: 'mellow', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
       ]),
     });
 
@@ -167,7 +167,7 @@ describe('renderSchedule', () => {
   it('non-wrap blocks have top + bottom resize handles', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Day', style: 'bright', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
+        { name: 'Day', personality: 'bright', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
       ]),
     });
 
@@ -223,7 +223,7 @@ describe('drag-to-resize', () => {
 
   it('drags the bottom handle down 2 rows → end_hour increases by 2 and PUT fires', async () => {
     const initial = configWithRoster([
-      { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+      { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
     ]);
     let savedConfig = null;
     stubFetch({
@@ -251,7 +251,7 @@ describe('drag-to-resize', () => {
     let savedConfig = null;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
+        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -273,7 +273,7 @@ describe('drag-to-resize', () => {
     let savedConfig = null;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Late', style: 'x', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
+        { name: 'Late', personality: 'x', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -294,7 +294,7 @@ describe('drag-to-resize', () => {
     let savedConfig = null;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Early', style: 'x', shifts: [{ day: 'monday', start_hour: 3, end_hour: 6 }] },
+        { name: 'Early', personality: 'x', shifts: [{ day: 'monday', start_hour: 3, end_hour: 6 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -315,7 +315,7 @@ describe('drag-to-resize', () => {
     let putCalls = 0;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Static', style: 'x', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
+        { name: 'Static', personality: 'x', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
       ]),
       'PUT /config': (body) => { putCalls++; return body; },
     });

@@ -197,7 +197,7 @@ def _station_out(station: StationConfig) -> StationOut:
         era=station.era,
         genre_focus=list(station.genre_focus),
         dj_name=station.dj_name,
-        dj_style=station.dj_style,
+        personality=station.personality,
     )
 
 
