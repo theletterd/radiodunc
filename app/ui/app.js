@@ -96,7 +96,13 @@ function setOnAirMode(mode, label = null) {
   let text;
   if (mode === 'ad')        text = '📻 Ad break';
   else if (mode === 'news') text = '📰 News';
-  else if (mode === 'dj')   text = '🎙️ On air';
+  else if (mode === 'dj') {
+    // Show the active DJ's name when we have it (server keeps station.dj_name
+    // persona-aware via active_station). Falls back to plain 'On air' if state
+    // hasn't loaded yet or DJ name is missing.
+    const dj = serverState?.station?.dj_name;
+    text = dj ? `🎙️ On air with ${dj}` : '🎙️ On air';
+  }
   else text = label || serverState?.now_playing_label || el.textContent || '-';
   animateLabel(el, text);
 }
