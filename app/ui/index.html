@@ -56,13 +56,14 @@
         <!-- Edit sub-view -->
         <div class="scheduler-edit-view">
           <button id="backToGridBtn" class="icon-button" style="margin-bottom:12px;">← Back</button>
-          <!-- data-lpignore / data-1p-ignore / data-form-type: tell password
-               managers this isn't a credential form. role="presentation"
-               stops Safari + 1Password from treating it as a sign-in form. -->
-          <form id="personaForm" class="persona-form" autocomplete="off"
-                role="presentation"
-                data-lpignore="true" data-1p-ignore="true"
-                data-form-type="other"></form>
+          <!-- Deliberately NOT a <form>. Password managers (LastPass in
+               particular) scan <form> elements for autofillable fields and
+               will attach their UI to inputs inside, even with every documented
+               opt-out attribute set. A plain <div> with a button-driven save
+               (wired up in JS via click, not submit) sidesteps the heuristic
+               entirely. -->
+          <div id="personaForm" class="persona-form" role="group"
+               aria-label="Edit persona"></div>
         </div>
       </div>
     </aside>
