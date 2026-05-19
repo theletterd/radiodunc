@@ -1,5 +1,50 @@
 # RadioDunc — Backlog
 
+## ☐ Front-end audio compression — stop the per-voice tuning treadmill
+
+Hand-tuning every voice via gain offset is fiddly and never quite right:
+voices vary track-to-track, your music varies song-to-song, and the
+listener ends up reaching for the system volume mid-listen. The right
+tool is dynamics compression in the audio chain — it automatically
+attenuates loud peaks and lifts quiet stretches so everything sits at
+a consistent perceived level.
+
+Web Audio API ships with this baked in:
+
+**DynamicsCompressorNode** — built into every browser, no library
+needed. Settings:
+- `threshold` (dB, default -24): start compressing above this level
+- `knee` (dB, default 30): soft transition into the threshold
+- `ratio` (default 12): how aggressively to squash above the threshold
+- `attack` (s, default 0.003): how fast to react to a peak
+- `release` (s, default 0.25): how fast to let go
+
+Add it once in `initAudio()` between `masterGain` and `ctx.destination`,
+and every clip benefits automatically. Typical broadcast settings:
+threshold ≈ -18 dB, ratio ≈ 4, attack ≈ 5 ms, release ≈ 100 ms. Gentle
+enough not to crush dynamics, strong enough to flatten the sage-vs-fable
+gap without manual trim.
+
+Optional follow-ons:
+- A **brick-wall limiter** at -1 dB threshold, ratio 20, fast attack
+  to prevent any clipping (the safety net).
+- Frequency-aware compression via multiple bands (more complex; only
+  needed if a single-band compressor sounds pumpy).
+- **AnalyserNode + custom JS** to measure incoming levels and
+  surface them in the UI ("DJ peak: -3 dB / music: -6 dB") — useful
+  for tuning even if we don't auto-correct.
+
+Implementation when picked up:
+1. Add `compressorNode = ctx.createDynamicsCompressor()` in `initAudio()`
+   with broadcast-style defaults.
+2. Rewire: `masterGain → compressorNode → ctx.destination` (currently
+   `masterGain → ctx.destination`).
+3. Expose threshold/ratio in config so power users can tune.
+4. Once it sounds right, **revisit the per-voice trim**: most users
+   should be able to leave it at 0 and let the compressor handle it.
+   Trim remains useful for "this voice is just plain too quiet to
+   compensate from" extreme cases.
+
 ## ☐ Separate DJ from show
 
 Right now a "persona" entry conflates two concepts: the DJ as a character
