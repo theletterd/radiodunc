@@ -34,6 +34,7 @@ from .schemas import (
     PlayerNextRequest,
     DJScriptGenerateRequest,
     DJScriptResponse,
+    StingerUrlResponse,
     TTSPreviewRequest,
     TTSPreviewResponse,
     StationOut,
@@ -642,6 +643,7 @@ def _build_news_clip(config: AppConfig) -> dict | None:
     voice = news_voice_cfg.voice if news_voice_cfg else None
     instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
     name = news_voice_cfg.name if news_voice_cfg else None
+    gain_offset_db = news_voice_cfg.gain_offset_db if news_voice_cfg else 0.0
 
     script = generate_news_script(config, newsreader_name=name)
     if not script:
@@ -671,6 +673,7 @@ def _build_news_clip(config: AppConfig) -> dict | None:
             "generated_at": time.time(),
             "clip_hash": clip.script_hash,
             "script_text": script,
+            "gain_offset_db": gain_offset_db,
         }
     finally:
         db.close()
@@ -753,30 +756,38 @@ def get_news_clip(config: AppConfig) -> dict | None:
 # They keep player_next focused on orchestration: cadence checks and assembly.
 
 
-def _attach_news(config: AppConfig) -> tuple[str | None, str | None]:
-    """Return (clip_url, script_text) for the news segment, or (None, None)."""
+def _attach_news(config: AppConfig) -> tuple[str | None, str | None, float]:
+    """Return (clip_url, script_text, voice_gain_offset_db) for the news segment."""
     entry = get_news_clip(config)
     if not entry:
-        return None, None
+        return None, None, 0.0
     age_s = round(time.time() - entry["generated_at"])
     _log_event("player.next.news_attached", level=logging.DEBUG, source=config.alerts.news.rss_url, age_s=age_s)
-    return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"]
+    return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"], entry.get("gain_offset_db", 0.0)
 
 
 def _attach_ad(
     db: Session, station: StationConfig, config: AppConfig, provider,
-) -> tuple[str | None, str | None]:
-    """Return (clip_url, script_text). script_text may be set even if clip is None."""
+) -> tuple[str | None, str | None, float]:
+    """Return (clip_url, script_text, voice_gain_offset_db). script_text may be set even if clip is None."""
     ads_cfg = config.alerts.ads
     ad_clip: DJClip | None = None
     ad_script_text: str | None = None
     ad_cached = False
+    ad_gain_offset_db = 0.0
 
     pool_count = db.query(DJClip).filter(DJClip.is_ad == True).count()  # noqa: E712
     if pool_count >= ads_cfg.pool_size:
         ad_clip = random.choice(db.query(DJClip).filter(DJClip.is_ad == True).all())  # noqa: E712
         ad_script_text = ad_clip.script_text
         ad_cached = True
+        # Pool-served ad: we don't know which AdVoice originally produced it
+        # (the voice column on DJClip has the OpenAI voice name, not a pool
+        # index). Look up the matching AdVoice by name; fall back to 0.
+        ad_gain_offset_db = next(
+            (v.gain_offset_db for v in ads_cfg.voices if v.voice == ad_clip.voice),
+            0.0,
+        )
         _log_event("player.next.ad_pool_hit", level=logging.DEBUG, pool_count=pool_count)
     else:
         ad_script_text = generate_ad_script(station, config)
@@ -784,6 +795,7 @@ def _attach_ad(
             ad_voice_cfg = random.choice(ads_cfg.voices) if ads_cfg.voices else None
             ad_voice = ad_voice_cfg.voice if ad_voice_cfg else None
             ad_instructions = ad_voice_cfg.voice_instructions if ad_voice_cfg else None
+            ad_gain_offset_db = ad_voice_cfg.gain_offset_db if ad_voice_cfg else 0.0
             try:
                 ad_clip, _, ad_cached = get_or_create_dj_clip(
                     db, script_text=ad_script_text, voice=ad_voice,
@@ -796,23 +808,30 @@ def _attach_ad(
                     db, script_text=ad_script_text, voice=None, provider=provider,
                     is_ad=True, clip_type="ads",
                 )
+                ad_gain_offset_db = 0.0  # default voice has no per-voice trim
 
     if ad_clip is None:
-        return None, ad_script_text
+        return None, ad_script_text, 0.0
 
-    _log_event("player.next.ad_attached", level=logging.DEBUG, ad_cached=ad_cached, pool_count=pool_count)
-    return f"/media/dj-clip/{ad_clip.script_hash}", ad_script_text
+    _log_event("player.next.ad_attached", level=logging.DEBUG, ad_cached=ad_cached, pool_count=pool_count, gain_db=ad_gain_offset_db)
+    return f"/media/dj-clip/{ad_clip.script_hash}", ad_script_text, ad_gain_offset_db
 
 
 def _attach_station_id(
     db: Session, station: StationConfig, voice: str | None, config: AppConfig, provider,
-) -> str | None:
-    """Return clip URL for a station-ID stinger, or None if disabled / failed."""
+) -> tuple[str | None, float]:
+    """Return (clip_url, voice_gain_offset_db) for the station-ID stinger,
+    or (None, 0.0) if disabled / failed.
+
+    The stinger uses the active DJ voice, so the gain trim is inherited from
+    the station's effective voice_gain_offset_db (which active_station already
+    set to the persona's trim if a persona is active).
+    """
     if not config.alerts.station_id.enabled:
-        return None
+        return None, 0.0
     phrases = get_station_id_phrases(config)
     if not phrases:
-        return None
+        return None, 0.0
     sid_text = random.choice(phrases)
     try:
         sid_clip, _, sid_cached = get_or_create_dj_clip(
@@ -822,11 +841,11 @@ def _attach_station_id(
         )
     except RuntimeError:
         logger.warning("Station ID synthesis failed with voice=%r; skipping", voice)
-        return None
+        return None, 0.0
     if sid_clip is None:
-        return None
+        return None, 0.0
     _log_event("player.next.station_id_attached", level=logging.DEBUG, phrase=sid_text[:60], cached=sid_cached)
-    return f"/media/dj-clip/{sid_clip.script_hash}"
+    return f"/media/dj-clip/{sid_clip.script_hash}", station.voice_gain_offset_db
 
 
 @app.post("/player/next", response_model=PlayerNextResponse)
@@ -931,20 +950,23 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     # interaction, and error handling; cadence checks stay here.
     news_clip_url: str | None = None
     news_script_text: str | None = None
+    news_voice_gain_offset_db = 0.0
     if config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks):
-        news_clip_url, news_script_text = _attach_news(config)
+        news_clip_url, news_script_text, news_voice_gain_offset_db = _attach_news(config)
 
     ad_clip_url: str | None = None
     ad_script_text: str | None = None
+    ad_voice_gain_offset_db = 0.0
     if config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks):
-        ad_clip_url, ad_script_text = _attach_ad(db, station, config, provider)
+        ad_clip_url, ad_script_text, ad_voice_gain_offset_db = _attach_ad(db, station, config, provider)
 
     # Station ID stinger throws back to music after any non-music segment
     # (news or ad). Without one after news, the bulletin runs straight into
     # the next track which feels jarring; the stinger acts as a soft handoff.
     station_id_clip_url: str | None = None
+    station_id_voice_gain_offset_db = 0.0
     if ad_clip_url or news_clip_url:
-        station_id_clip_url = _attach_station_id(db, station, voice, config, provider)
+        station_id_clip_url, station_id_voice_gain_offset_db = _attach_station_id(db, station, voice, config, provider)
 
     state.queue_index = next_idx
     state.current_track_id = next_track.id
@@ -971,11 +993,15 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
         current_track_metadata=TrackOut.model_validate(next_track),
         current_track_label=_track_label(next_track),
         dj_clip_url=f"/media/dj-clip/{clip.script_hash}",
+        dj_voice_gain_offset_db=station.voice_gain_offset_db,
         ad_clip_url=ad_clip_url,
         ad_script=ad_script_text,
+        ad_voice_gain_offset_db=ad_voice_gain_offset_db,
         news_clip_url=news_clip_url,
         news_script=news_script_text,
+        news_voice_gain_offset_db=news_voice_gain_offset_db,
         station_id_clip_url=station_id_clip_url,
+        station_id_voice_gain_offset_db=station_id_voice_gain_offset_db,
         next_track_url=f"/media/track/{look_ahead_track.id}" if look_ahead_track else None,
         next_track_metadata=TrackOut.model_validate(look_ahead_track) if look_ahead_track else None,
         dj_script=script_text or "",
@@ -1002,10 +1028,13 @@ def player_prefetch(db: Session = Depends(get_db)):
     return {"status": "scheduled"}
 
 
-@app.get("/player/stinger-url")
+@app.get("/player/stinger-url", response_model=StingerUrlResponse)
 def player_stinger_url(db: Session = Depends(get_db)):
-    """Return a random cached station-ID clip URL for the client to play during the
-    dead-air gap after a user-initiated skip. No LLM/TTS work — just a DB pick."""
+    """Return a random cached station-ID clip URL for the client to play during
+    the dead-air gap after a user-initiated skip. No LLM/TTS work — just a DB pick.
+
+    Also returns the current effective DJ-voice gain offset so the client can
+    apply the same per-voice trim that on-air stingers get."""
     clip = (
         db.query(DJClip)
         .filter(DJClip.audio_path.like("%/station_ids/%"))
@@ -1013,8 +1042,13 @@ def player_stinger_url(db: Session = Depends(get_db)):
         .first()
     )
     if clip is None:
-        return {"clip_url": None}
-    return {"clip_url": f"/media/dj-clip/{clip.script_hash}"}
+        return StingerUrlResponse()
+    config = load_config()
+    station = active_station(config.station, config)
+    return StingerUrlResponse(
+        clip_url=f"/media/dj-clip/{clip.script_hash}",
+        voice_gain_offset_db=station.voice_gain_offset_db,
+    )
 
 
 @app.post("/tts/preview", response_model=TTSPreviewResponse)

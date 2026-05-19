@@ -27,6 +27,7 @@ const EXPORTED_NAMES = [
   '_personaColor', '_jsDayToGridIndex',
   '_gridRowHeightPx', '_gridColWidthPx',
   '_fmtHourBoundary', '_fmtShiftRange',
+  '_dbToGainMultiplier',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',

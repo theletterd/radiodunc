@@ -1069,7 +1069,7 @@ def test_attach_news_returns_none_when_no_clip(monkeypatch):
 
     monkeypatch.setattr("app.main.get_news_clip", lambda cfg: None)
 
-    assert _attach_news(_attach_config()) == (None, None)
+    assert _attach_news(_attach_config()) == (None, None, 0.0)
 
 
 def test_attach_news_returns_url_and_script_on_success(monkeypatch):
@@ -1083,7 +1083,7 @@ def test_attach_news_returns_url_and_script_on_success(monkeypatch):
     }
     monkeypatch.setattr("app.main.get_news_clip", lambda cfg: entry)
 
-    url, script = _attach_news(_attach_config())
+    url, script, _gain = _attach_news(_attach_config())
     assert url == "/media/dj-clip/newshash123"
     assert script == "Here is the news."
 
@@ -1114,7 +1114,7 @@ def test_attach_ad_pool_full_returns_random_existing_clip(monkeypatch, tmp_path)
         lambda *a, **k: pytest.fail("generate_ad_script should not be called"),
     )
 
-    url, script = _attach_ad(db, cfg.station, cfg, provider=None)
+    url, script, _gain = _attach_ad(db, cfg.station, cfg, provider=None)
     assert url == "/media/dj-clip/adhash0"
     assert script == "ad script 0"
 
@@ -1128,7 +1128,7 @@ def test_attach_ad_generate_returns_none_when_script_is_none(monkeypatch):
 
     monkeypatch.setattr("app.main.generate_ad_script", lambda station, config: None)
 
-    url, script = _attach_ad(db, cfg.station, cfg, provider=None)
+    url, script, _gain = _attach_ad(db, cfg.station, cfg, provider=None)
     assert url is None
     assert script is None
 
@@ -1147,7 +1147,7 @@ def test_attach_ad_generate_succeeds(monkeypatch):
         lambda db, **kwargs: (clip, "", False),
     )
 
-    url, script = _attach_ad(db, cfg.station, cfg, provider=None)
+    url, script, _gain = _attach_ad(db, cfg.station, cfg, provider=None)
     assert url == "/media/dj-clip/genadhash"
     assert script == "buy stuff"
 
@@ -1172,7 +1172,7 @@ def test_attach_ad_retries_with_default_voice_on_runtime_error(monkeypatch):
 
     monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_get_or_create)
 
-    url, script = _attach_ad(db, cfg.station, cfg, provider=None)
+    url, script, _gain = _attach_ad(db, cfg.station, cfg, provider=None)
     assert url == "/media/dj-clip/retryadhash"
     assert script == "buy stuff"
     assert len(calls) == 2
@@ -1194,7 +1194,7 @@ def test_attach_station_id_returns_none_when_disabled(monkeypatch):
         lambda config: pytest.fail("phrases should not be fetched when disabled"),
     )
 
-    assert _attach_station_id(db, cfg.station, voice=None, config=cfg, provider=None) is None
+    assert _attach_station_id(db, cfg.station, voice=None, config=cfg, provider=None) == (None, 0.0)
 
 
 def test_attach_station_id_returns_none_when_no_phrases(monkeypatch):
@@ -1205,7 +1205,7 @@ def test_attach_station_id_returns_none_when_no_phrases(monkeypatch):
 
     monkeypatch.setattr("app.main.get_station_id_phrases", lambda config: [])
 
-    assert _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None) is None
+    assert _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None) == (None, 0.0)
 
 
 def test_attach_station_id_returns_url_on_success(monkeypatch):
@@ -1222,7 +1222,7 @@ def test_attach_station_id_returns_url_on_success(monkeypatch):
         lambda db, **kwargs: (clip, "", True),
     )
 
-    url = _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None)
+    url, _gain = _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None)
     assert url == "/media/dj-clip/sidhash"
 
 
@@ -1239,7 +1239,7 @@ def test_attach_station_id_returns_none_on_runtime_error(monkeypatch):
 
     monkeypatch.setattr("app.main.get_or_create_dj_clip", boom)
 
-    assert _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None) is None
+    assert _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None) == (None, 0.0)
 
 
 # _build_news_clip
@@ -1335,14 +1335,15 @@ def _seed_station_id_clip(db, *, script_hash: str, audio_path: str) -> DJClip:
 def test_player_stinger_url_returns_null_when_pool_empty():
     db = _make_db_session()
     result = player_stinger_url(db)
-    assert result == {"clip_url": None}
+    assert result.clip_url is None
+    assert result.voice_gain_offset_db == 0.0
 
 
 def test_player_stinger_url_returns_station_id_clip_url():
     db = _make_db_session()
     _seed_station_id_clip(db, script_hash="stingerhash1", audio_path="generated_audio/station_ids/stingerhash1.mp3")
     result = player_stinger_url(db)
-    assert result == {"clip_url": "/media/dj-clip/stingerhash1"}
+    assert result.clip_url == "/media/dj-clip/stingerhash1"
 
 
 def test_player_stinger_url_ignores_clips_outside_station_ids_subdir():
@@ -1352,7 +1353,7 @@ def test_player_stinger_url_ignores_clips_outside_station_ids_subdir():
     # An ad clip — should NOT be picked either.
     _seed_station_id_clip(db, script_hash="adhash1", audio_path="generated_audio/ads/adhash1.mp3")
     result = player_stinger_url(db)
-    assert result == {"clip_url": None}
+    assert result.clip_url is None
 
 
 def test_player_stinger_url_picks_from_multiple_station_id_clips():
@@ -1363,11 +1364,23 @@ def test_player_stinger_url_picks_from_multiple_station_id_clips():
         _seed_station_id_clip(db, script_hash=h, audio_path=f"generated_audio/station_ids/{h}.mp3")
     seen = set()
     for _ in range(20):
-        url = player_stinger_url(db)["clip_url"]
+        url = player_stinger_url(db).clip_url
         assert url is not None
         seen.add(url)
     # In 20 picks across 3 clips, we should see at least 2 different hashes.
     assert len(seen) >= 2, f"expected variety across 3 clips, only got: {seen}"
+
+
+def test_player_stinger_url_returns_active_voice_gain_offset(monkeypatch):
+    """The skip-stinger plays in the active DJ voice, so the trim follows the
+    station's effective voice_gain_offset_db (persona-aware via active_station)."""
+    from app.config import AppConfig, StationConfig
+    db = _make_db_session()
+    _seed_station_id_clip(db, script_hash="stingerwithtrim", audio_path="generated_audio/station_ids/x.mp3")
+    cfg = AppConfig(station=StationConfig(name="Hot FM", voice="sage", voice_gain_offset_db=-3.0))
+    monkeypatch.setattr("app.main.load_config", lambda: cfg)
+    result = player_stinger_url(db)
+    assert result.voice_gain_offset_db == -3.0
 
 
 # ── Cache warmup ──────────────────────────────────────────────────────────────

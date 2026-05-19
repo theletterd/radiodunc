@@ -17,6 +17,15 @@ const STINGER_GAIN   = 2.0;  // DJ-voice throws, close to DJ but not above
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
+// Per-voice trim is configured in dB on the backend (each NewsVoice / AdVoice
+// / StationConfig / DJPersona has gain_offset_db). The backend reports the
+// effective offset alongside every clip URL in PlayerNextResponse, and we
+// multiply it onto the segment's base gain at scheduling time.
+function _dbToGainMultiplier(db) {
+  // amplitude ratio = 10^(dB / 20). 0 dB → 1.0, -6 dB → 0.5, +6 dB → 2.0.
+  return Math.pow(10, (db || 0) / 20);
+}
+
 // ── App state ────────────────────────────────────────────────────────────────
 let serverState = null;
 
@@ -259,12 +268,13 @@ async function _playSkipStinger() {
   try {
     const resp = await fetch('/player/stinger-url');
     if (!resp.ok) return;
-    const { clip_url: clipUrl } = await resp.json();
+    const { clip_url: clipUrl, voice_gain_offset_db: offsetDb } = await resp.json();
     if (!clipUrl || !ctx) return;
     const buf = await fetchAndDecode(clipUrl);
     if (!ctx) return;
     const start = ctx.currentTime + 0.05;
-    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN });
+    const sidGain = STINGER_GAIN * _dbToGainMultiplier(offsetDb);
+    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: sidGain });
     stingerEndTime = start + buf.duration;
     setOnAirMode('dj');  // brief pink "On air" badge
   } catch (err) {
@@ -453,10 +463,18 @@ async function triggerTransition(reason) {
     let adStart   = null;
     let sidStart  = null;
 
-    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip', { gain: DJ_GAIN }); cursor = djEnd; }
-    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip', { gain: NEWS_GAIN }); }
-    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip',   { gain: AD_GAIN }); }
-    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN }); }
+    // Apply per-voice trim from the backend (PlayerNextResponse) on top of
+    // the segment-type base gain. A loud voice config like sage at -3 dB
+    // multiplies into roughly 0.71 of the base.
+    const djGain    = DJ_GAIN      * _dbToGainMultiplier(next.dj_voice_gain_offset_db);
+    const newsGain  = NEWS_GAIN    * _dbToGainMultiplier(next.news_voice_gain_offset_db);
+    const adGain    = AD_GAIN      * _dbToGainMultiplier(next.ad_voice_gain_offset_db);
+    const sidGain   = STINGER_GAIN * _dbToGainMultiplier(next.station_id_voice_gain_offset_db);
+
+    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip', { gain: djGain }); cursor = djEnd; }
+    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip', { gain: newsGain }); }
+    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip',   { gain: adGain }); }
+    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: sidGain }); }
     djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
     // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
