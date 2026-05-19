@@ -305,8 +305,8 @@ describe('persona editor form', () => {
     stubFetch({ 'GET /config': () => configWithRoster(roster) });
     await openEditor(0);
 
-    // -6 dB → slider value 25 (50 + -6 * 50/12)
-    expect(document.getElementById('pf-volume-trim').value).toBe('25');
+    // -6 dB on the ±18 dB range → slider value 33 (50 + -6 * 50/18 = 33.33 → rounded)
+    expect(document.getElementById('pf-volume-trim').value).toBe('33');
     expect(document.getElementById('pf-volume-readout').textContent).toBe('Quieter');
   });
 
@@ -318,7 +318,7 @@ describe('persona editor form', () => {
     });
     await openEditor(0);
 
-    // Drag the slider to "Much louder" → value 90, +9.6 dB
+    // Drag the slider to "Much louder" → value 90, +14.4 dB (90-50)*18/50
     const slider = document.getElementById('pf-volume-trim');
     slider.value = '90';
     slider.dispatchEvent(new Event('input', { bubbles: true }));
@@ -328,7 +328,6 @@ describe('persona editor form', () => {
 
     expect(savedConfig).not.toBeNull();
     const persona = savedConfig.station.dj_roster[0];
-    // 90 → (90-50) * 12/50 = 9.6
-    expect(persona.voice_gain_offset_db).toBeCloseTo(9.6, 3);
+    expect(persona.voice_gain_offset_db).toBeCloseTo(14.4, 3);
   });
 });

@@ -122,18 +122,18 @@ describe('pure helpers', () => {
   });
 
   it('volume slider ⇄ dB round-trip preserves the value', () => {
-    // 50 → 0 dB; 0 → -12 dB; 100 → +12 dB. Symmetric, linear.
+    // 50 → 0 dB; 0 → -18 dB; 100 → +18 dB. Symmetric, linear.
     expect(globalThis._volumeSliderToDb(50)).toBe(0);
-    expect(globalThis._volumeSliderToDb(0)).toBe(-12);
-    expect(globalThis._volumeSliderToDb(100)).toBe(12);
-    expect(globalThis._volumeSliderToDb(25)).toBe(-6);
+    expect(globalThis._volumeSliderToDb(0)).toBe(-18);
+    expect(globalThis._volumeSliderToDb(100)).toBe(18);
+    expect(globalThis._volumeSliderToDb(25)).toBe(-9);
     // Round-trip
     expect(globalThis._dbToVolumeSlider(0)).toBe(50);
-    expect(globalThis._dbToVolumeSlider(-3)).toBe(38);  // 50 + -3*50/12 = 50-12.5 → 38
-    expect(globalThis._dbToVolumeSlider(-12)).toBe(0);
-    expect(globalThis._dbToVolumeSlider(12)).toBe(100);
+    expect(globalThis._dbToVolumeSlider(-18)).toBe(0);
+    expect(globalThis._dbToVolumeSlider(18)).toBe(100);
+    expect(globalThis._dbToVolumeSlider(-9)).toBe(25);
     // String input survives (form inputs return strings)
-    expect(globalThis._volumeSliderToDb('25')).toBe(-6);
+    expect(globalThis._volumeSliderToDb('25')).toBe(-9);
   });
 
   it('_volumeSliderLabel describes the slider position', () => {
