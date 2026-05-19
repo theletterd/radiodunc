@@ -197,7 +197,13 @@ class DJPersona(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    style: str = Field(min_length=1)
+    personality: str = Field(
+        min_length=1,
+        description=(
+            "What this persona SAYS — slang, attitude, what they'd talk about. "
+            "Separate from voice/voice_instructions which control HOW they sound."
+        ),
+    )
     voice: str | None = None
     prompt_template: str | None = None
     voice_instructions: str | None = None
@@ -208,19 +214,28 @@ class DJPersona(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_legacy_schedule(cls, data):
-        """Convert the old days+start_hour+end_hour fields into shifts on load.
+    def migrate_legacy_fields(cls, data):
+        """Migrate two legacy shapes onto the current model in one pass.
 
-        Old shape:  {days: ["fri","sat"], start_hour: 20, end_hour: 23}
-        New shape:  {shifts: [{day:"fri",start_hour:20,end_hour:23},
-                              {day:"sat",start_hour:20,end_hour:23}]}
+        1. Schedule:  days + start_hour + end_hour  →  shifts list
+        2. Naming:   style  →  personality (rename only, no value transform)
 
-        Lets existing radio_config.json files keep working without manual edits.
+        Both run on load so existing radio_config.json files keep working with
+        no manual edits. Once the user saves through the UI the file is
+        rewritten in the new shape.
         """
         if not isinstance(data, dict):
             return data
+
+        # Rename style → personality.
+        if "personality" not in data and "style" in data:
+            data["personality"] = data.pop("style")
+        elif "style" in data:
+            # Both present (unusual) — prefer the new name and drop the old.
+            data.pop("style")
+
+        # Schedule migration.
         if "shifts" in data and data["shifts"]:
-            # New shape already present — drop any legacy keys that snuck in.
             for key in ("days", "start_hour", "end_hour"):
                 data.pop(key, None)
             return data
@@ -229,7 +244,6 @@ class DJPersona(BaseModel):
         start = data.pop("start_hour", None)
         end = data.pop("end_hour", None)
 
-        # If neither schedule field is set, leave shifts empty (always-on).
         if not days and start is None and end is None:
             return data
 
@@ -239,7 +253,7 @@ class DJPersona(BaseModel):
         data["shifts"] = [{"day": d, "start_hour": s, "end_hour": e} for d in target_days]
         return data
 
-    @field_validator("name", "style", mode="before")
+    @field_validator("name", "personality", mode="before")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
         if not isinstance(value, str):
@@ -271,7 +285,14 @@ class StationConfig(BaseModel):
     genre_focus: list[str] = Field(default_factory=list)
     core_artists: list[str] = Field(default_factory=list)
     dj_name: str = Field(default="DJ", min_length=1)
-    dj_style: str = Field(default="warm and conversational", min_length=1)
+    personality: str = Field(
+        default="warm and conversational",
+        min_length=1,
+        description=(
+            "What the default DJ SAYS — attitude, slang, what they'd talk about. "
+            "Voice and voice_instructions control HOW they sound."
+        ),
+    )
     voice: str | None = None
     voice_instructions: str | None = None
     dj_prompt_template: str | None = Field(
@@ -279,9 +300,10 @@ class StationConfig(BaseModel):
         description=(
             "Optional override for the DJ transition prompt. Supports placeholders: "
             "{max_sentences}, {station_name}, {station_format}, {station_description}, "
-            "{station_era}, {station_genre_focus}, {dj_name}, {dj_style}, "
+            "{station_era}, {station_genre_focus}, {dj_name}, {personality}, "
             "{previous_track}, {next_track}, {current_time}, {current_weekday}, "
             "{weather_block}, {news_block}, {ad_block}, {reason_block}. "
+            "({dj_style} is kept as an alias for {personality} for backwards compatibility.) "
             "Leave null to use the built-in default."
         ),
     )
@@ -289,12 +311,25 @@ class StationConfig(BaseModel):
         default_factory=list,
         description=(
             "Optional list of DJ personas with day/hour scheduling. When a persona's "
-            "days/hours match the current time, it overrides dj_name/dj_style/voice/"
+            "days/hours match the current time, it overrides dj_name/personality/voice/"
             "dj_prompt_template. Empty roster = always use the station's default DJ."
         ),
     )
 
-    @field_validator("name", "tagline", "format", "dj_name", "dj_style", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, data):
+        """Rename legacy dj_style → personality on load. Keeps existing
+        radio_config.json files working without manual edits."""
+        if not isinstance(data, dict):
+            return data
+        if "personality" not in data and "dj_style" in data:
+            data["personality"] = data.pop("dj_style")
+        elif "dj_style" in data:
+            data.pop("dj_style")
+        return data
+
+    @field_validator("name", "tagline", "format", "dj_name", "personality", mode="before")
     @classmethod
     def strip_required_text(cls, value: str) -> str:
         if not isinstance(value, str):

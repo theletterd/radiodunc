@@ -76,7 +76,7 @@ describe('drag-to-move', () => {
   it('click without movement opens the persona editor', async () => {
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
       ]),
     });
 
@@ -103,7 +103,7 @@ describe('drag-to-move', () => {
     let putCalled = false;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
       ]),
       'PUT /config': (body) => { putCalled = true; return body; },
     });
@@ -128,7 +128,7 @@ describe('drag-to-move', () => {
   it('drag past threshold suppresses click and saves with updated hours', async () => {
     let savedConfig = null;
     const initial = configWithRoster([
-      { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+      { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
     ]);
     stubFetch({
       'GET /config': () => initial,
@@ -158,7 +158,7 @@ describe('drag-to-move', () => {
   it('horizontal drag changes the day', async () => {
     let savedConfig = null;
     const initial = configWithRoster([
-      { name: 'Morgan', style: 'cheerful', shifts: [{ day: 'monday', start_hour: 9, end_hour: 11 }] },
+      { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 9, end_hour: 11 }] },
     ]);
     stubFetch({
       'GET /config': () => initial,
@@ -186,7 +186,7 @@ describe('drag-to-move', () => {
   it('day is clamped to sunday when dragged past the last column', async () => {
     let savedConfig = null;
     const initial = configWithRoster([
-      { name: 'Sam', style: 'x', shifts: [{ day: 'saturday', start_hour: 10, end_hour: 12 }] },
+      { name: 'Sam', personality: 'x', shifts: [{ day: 'saturday', start_hour: 10, end_hour: 12 }] },
     ]);
     stubFetch({
       'GET /config': () => initial,
@@ -210,7 +210,7 @@ describe('drag-to-move', () => {
   it('start hour clamped so end stays ≤ 23', async () => {
     let savedConfig = null;
     const initial = configWithRoster([
-      { name: 'Late', style: 'x', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
+      { name: 'Late', personality: 'x', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
     ]);
     stubFetch({
       'GET /config': () => initial,
@@ -237,7 +237,7 @@ describe('drag-to-move', () => {
     let putCalled = false;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Owl', style: 'mellow', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
+        { name: 'Owl', personality: 'mellow', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
       ]),
       'PUT /config': (body) => { putCalled = true; return body; },
     });
@@ -267,7 +267,7 @@ describe('drag-to-move', () => {
     let putCalled = false;
     stubFetch({
       'GET /config': () => configWithRoster([
-        { name: 'Day', style: 'bright', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
+        { name: 'Day', personality: 'bright', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
       ]),
       'PUT /config': (body) => { putCalled = true; return body; },
     });

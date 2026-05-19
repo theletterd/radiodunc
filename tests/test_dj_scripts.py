@@ -181,7 +181,7 @@ def test_active_station_overrides_dj_fields():
     cfg = AppConfig(station=station)
     eff = active_station(station, cfg, now=MONDAY_NOON)
     assert eff.dj_name == "Override Olive"
-    assert eff.dj_style == "dramatic"
+    assert eff.personality == "dramatic"
     assert eff.voice == "echo"
     assert eff.dj_prompt_template == "custom {dj_name}"
 
@@ -567,3 +567,47 @@ def test_legacy_and_new_shape_in_same_persona_prefers_new():
         days=["sunday"], start_hour=22, end_hour=23,
     )
     assert p.shifts == [DJShift(day="monday", start_hour=10, end_hour=11)]
+
+
+# ── Persona refactor: dj_style → personality migration ──────────────────────
+
+def test_station_config_legacy_dj_style_migrates_to_personality():
+    """Old configs (and tests) pass dj_style — migration validator renames it."""
+    s = StationConfig(dj_style="warm and dry")
+    assert s.personality == "warm and dry"
+    assert not hasattr(s, "dj_style")
+
+
+def test_dj_persona_legacy_style_migrates_to_personality():
+    p = DJPersona(name="Legacy", style="loose")
+    assert p.personality == "loose"
+
+
+def test_personality_field_takes_precedence_over_legacy_style():
+    """If both are set, the new field wins and the old is dropped."""
+    p = DJPersona(name="Mix", personality="bright", style="should-be-ignored")
+    assert p.personality == "bright"
+
+
+def test_dj_prompt_template_dj_style_alias_still_resolves():
+    """Custom templates written with {dj_style} continue to render even though
+    the canonical field is now {personality}."""
+    cfg = AppConfig(
+        station=StationConfig(
+            personality="loose and warm",
+            dj_prompt_template="DJ vibe: {dj_style}",
+        ),
+    )
+    prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert prompt == "DJ vibe: loose and warm"
+
+
+def test_dj_prompt_template_new_personality_placeholder_works():
+    cfg = AppConfig(
+        station=StationConfig(
+            personality="dry",
+            dj_prompt_template="vibe: {personality}",
+        ),
+    )
+    prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert prompt == "vibe: dry"

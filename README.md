@@ -72,7 +72,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
   "genre_focus": ["indie rock", "alternative"],
   "core_artists": [],
   "dj_name": "DJ Name",
-  "dj_style": "warm storyteller with dry wit",
+  "personality": "warm storyteller with dry wit",
   "voice": null,
   "voice_instructions": null,
   "dj_prompt_template": null,
@@ -82,7 +82,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 
 **Prompt fields** — all of these feed directly into the LLM script on every transition:
 
-- **`dj_style`** — the DJ's on-air personality. The more vivid, the better: `"warm storyteller with dry wit"` gets a different result from `"hyper-energetic 90s Top 40 host who's had too much coffee"`.
+- **`personality`** — what the DJ SAYS: attitude, slang, vibe, what they'd talk about. The more vivid, the better: `"warm storyteller with dry wit"` gets a different result from `"hyper-energetic 90s Top 40 host who's had too much coffee"`. Separate from `voice` / `voice_instructions`, which control HOW they sound. (Old configs with `dj_style` keep working — they're auto-migrated on load.)
 - **`era`** — adds `Era: X.` to the station context, nudging the DJ to reference that period (e.g. `"80s and 90s"`, `"late 60s psychedelia"`). Leave `null` for no era bias.
 - **`genre_focus`** — list of genres injected into the station context (e.g. `["indie rock", "post-punk"]`). Prompts the DJ to make genre-aware connections between tracks. Purely a prompt hint — does not filter which tracks get played.
 - **`description`** — free-form station flavour text appended to the format line in the prompt.
@@ -93,7 +93,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 
 - **`core_artists`** — when non-empty, the queue is built *exclusively* from tracks by these artists (exact match on the artist metadata tag). Everything else in your library is excluded. Falls back to the full library if no tracks match. Use this to make a focused artist-spotlight station: `["David Bowie", "Brian Eno", "Roxy Music"]`.
 
-`dj_prompt_template` accepts a Python format string with these placeholders: `{station_name}`, `{dj_name}`, `{dj_style}`, `{station_format}`, `{station_description}`, `{station_era}`, `{station_genre_focus}`, `{previous_track}`, `{next_track}`, `{current_time}`, `{current_weekday}`, `{weather_block}`, `{news_block}`, `{ad_block}`, `{reason_block}`, `{max_sentences}`. Omit it to use the built-in default.
+`dj_prompt_template` accepts a Python format string with these placeholders: `{station_name}`, `{dj_name}`, `{personality}`, `{station_format}`, `{station_description}`, `{station_era}`, `{station_genre_focus}`, `{previous_track}`, `{next_track}`, `{current_time}`, `{current_weekday}`, `{weather_block}`, `{news_block}`, `{ad_block}`, `{reason_block}`, `{max_sentences}`. `{dj_style}` is kept as an alias for `{personality}` for backwards compatibility. Omit the template to use the built-in default.
 
 ### DJ roster (scheduled personas)
 
@@ -103,7 +103,7 @@ Add entries to `dj_roster` to swap DJ personality by day/hour:
 "dj_roster": [
   {
     "name": "Saturday Night Sam",
-    "style": "high-energy party host",
+    "personality": "high-energy party host",
     "voice": "fable",
     "voice_instructions": "Upbeat and punchy. Fast-paced with infectious energy.",
     "days": ["friday", "saturday"],

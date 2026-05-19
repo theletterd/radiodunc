@@ -62,7 +62,7 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
         return station
     return station.model_copy(update={
         "dj_name": persona.name,
-        "dj_style": persona.style,
+        "personality": persona.personality,
         "voice": persona.voice or station.voice,
         "voice_instructions": persona.voice_instructions or station.voice_instructions,
         "dj_prompt_template": persona.prompt_template or station.dj_prompt_template,
@@ -71,7 +71,7 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
 
 DEFAULT_DJ_PROMPT_TEMPLATE = """\
 Write a {max_sentences}-sentence radio DJ transition for '{station_name}'.
-DJ: {dj_name} ({dj_style}).
+DJ: {dj_name} ({personality}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
 Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
@@ -232,7 +232,9 @@ def _build_prompt(
         "station_era": f" Era: {station.era}." if station.era else "",
         "station_genre_focus": f" Genre focus: {', '.join(station.genre_focus)}." if station.genre_focus else "",
         "dj_name": station.dj_name,
-        "dj_style": station.dj_style,
+        "personality": station.personality,
+        # Alias so custom prompt_templates written before the rename still resolve.
+        "dj_style": station.personality,
         "previous_track": _track_ref(previous_track),
         "next_track": _track_ref(next_track),
         "current_time": current_time,
@@ -573,7 +575,7 @@ def generate_dj_script(
             f"We've got a request coming in — this one goes out to whoever called in for {_track_ref(next_track)}."
         )
     sentence_pool.extend([
-        f"You're listening to {station.name} with {station.dj_name}, keeping it {station.dj_style} tonight.",
+        f"You're listening to {station.name} with {station.dj_name}, keeping it {station.personality} tonight.",
         f"We just heard {_track_ref(previous_track)}, and up next is {_track_ref(next_track)}.",
         f"{station.tagline}",
     ])

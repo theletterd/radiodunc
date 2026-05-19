@@ -75,7 +75,7 @@ The example config is `example-radio_config.json`. The local config is `radio_co
 
 | Field | Affects | Effect |
 |---|---|---|
-| `dj_style` | LLM prompt | Injected as `DJ: {name} ({style}).` — shapes tone and personality |
+| `personality` | LLM prompt | Injected as `DJ: {name} ({personality}).` — what the DJ SAYS: attitude, slang, vibe. Separate from voice/voice_instructions which control HOW they sound. (Old `dj_style` field auto-migrates.) |
 | `era` | LLM prompt | Adds `Era: X.` to station context — nudges DJ to reference that period |
 | `genre_focus` | LLM prompt | Adds `Genre focus: X, Y.` — prompts genre-aware track connections |
 | `description` | LLM prompt | Free-form flavour text appended to the format line |
