@@ -4,10 +4,16 @@
 // Adjust these to taste; all audio scheduling uses AudioContext time (sample-accurate).
 const FADE_OUT_S     = 9.0;  // current track fades 1→0 over this many seconds
 const FADE_IN_S      = 1.2;  // next track fades 0→1 over this many seconds
-// DJ peak gain. Speech RMS is naturally lower than full-mix music at the same
-// digital peak, so we boost spoken segments above unity. Don't push too far —
-// OpenAI TTS already comes near 0 dB peaks, so anything > ~2.2 risks clipping.
-const DJ_GAIN        = 2.1;
+// Per-segment peak gain. Speech RMS sits below a full music mix at the same
+// digital peak, so spoken segments need a lift above unity to feel level.
+// We split by segment type because ad voices are often delivered with more
+// energy than DJ banter (especially "fable" / "echo" infomercial voices),
+// so the SAME gain makes ads feel louder than DJ.
+// OpenAI TTS comes out near -3 dB peaks; keep gains below ~2.2 to avoid clipping.
+const DJ_GAIN        = 2.1;  // the DJ themselves — sit hot, like real radio
+const NEWS_GAIN      = 1.7;  // professional, sit slightly behind the DJ
+const AD_GAIN        = 1.6;  // ad voices are already energetic; don't pile on
+const STINGER_GAIN   = 2.0;  // DJ-voice throws, close to DJ but not above
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
@@ -169,10 +175,15 @@ async function fetchAndDecode(url) {
 const STINGER_FADE_S = 0.02;
 
 // Place an arbitrary buffer on the AudioContext timeline with a small in/out fade.
-// fadeIn/fadeOut override DJ_EDGE_S per segment (use a tiny value for short clips
-// whose first/last consonant would otherwise be eaten by the default fade).
+// Options:
+//   fadeIn / fadeOut — override DJ_EDGE_S per segment (use a tiny value for
+//                      short clips whose first/last consonant would otherwise
+//                      be eaten by the default fade).
+//   gain            — peak gain. Defaults to DJ_GAIN; callers pass NEWS_GAIN /
+//                     AD_GAIN / STINGER_GAIN so segment loudness can be tuned
+//                     independently of DJ banter.
 // Returns the end time so callers can chain segments back-to-back.
-function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ_EDGE_S } = {}) {
+function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ_EDGE_S, gain = DJ_GAIN } = {}) {
   // Clamp so fade-in and fade-out can never overlap on a very short clip.
   const inS  = Math.min(fadeIn,  buf.duration / 2);
   const outS = Math.min(fadeOut, buf.duration / 2);
@@ -183,11 +194,11 @@ function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ
   src.connect(g);
   g.connect(masterGain);
   g.gain.setValueAtTime(0, startAt);
-  g.gain.linearRampToValueAtTime(DJ_GAIN, startAt + inS);
-  g.gain.setValueAtTime(DJ_GAIN, startAt + buf.duration - outS);
+  g.gain.linearRampToValueAtTime(gain, startAt + inS);
+  g.gain.setValueAtTime(gain, startAt + buf.duration - outS);
   g.gain.linearRampToValueAtTime(0, startAt + buf.duration);
   src.start(startAt);
-  console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)} in=${inS.toFixed(2)}`);
+  console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)} gain=${gain.toFixed(2)} in=${inS.toFixed(2)}`);
   return startAt + buf.duration;
 }
 
@@ -253,7 +264,7 @@ async function _playSkipStinger() {
     const buf = await fetchAndDecode(clipUrl);
     if (!ctx) return;
     const start = ctx.currentTime + 0.05;
-    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S });
+    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN });
     stingerEndTime = start + buf.duration;
     setOnAirMode('dj');  // brief pink "On air" badge
   } catch (err) {
@@ -442,10 +453,10 @@ async function triggerTransition(reason) {
     let adStart   = null;
     let sidStart  = null;
 
-    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip');     cursor = djEnd; }
-    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip'); }
-    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip'); }
-    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S }); }
+    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip', { gain: DJ_GAIN }); cursor = djEnd; }
+    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip', { gain: NEWS_GAIN }); }
+    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip',   { gain: AD_GAIN }); }
+    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN }); }
     djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
     // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
