@@ -94,7 +94,19 @@ def test_skip_reason_adds_reason_block_to_prompt():
     cfg = _make_config(name="X FM")
     payload = DJScriptGenerateRequest(max_sentences=1, reason="skip")
     prompt = _build_prompt(cfg.station, payload, None, None, cfg)
-    assert "audience" in prompt
+    assert "skipped" in prompt
+
+
+def test_skip_prompt_bans_stock_well_well_well_opener():
+    """The 'well, well, well…' filler showed up repeatedly in production. The
+    reason block now lists banned stock openers explicitly so the LLM avoids
+    them."""
+    cfg = _make_config(name="X FM")
+    payload = DJScriptGenerateRequest(max_sentences=1, reason="skip")
+    prompt = _build_prompt(cfg.station, payload, None, None, cfg)
+    assert "Well, well, well" in prompt
+    assert "Alright, alright, alright" in prompt
+    assert "AVOID" in prompt or "Don't start with" in prompt
 
 
 def test_no_reason_omits_reason_block():
@@ -611,3 +623,78 @@ def test_dj_prompt_template_new_personality_placeholder_works():
     )
     prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
     assert prompt == "vibe: dry"
+
+
+# ── OpenAI temperature plumbing ─────────────────────────────────────────────
+
+def test_call_openai_text_uses_config_temperature_by_default(monkeypatch):
+    """Verifies the configured openai_text_temperature lands in the request body."""
+    from app.dj_scripts import _call_openai_text
+    captured = {}
+
+    class FakeResp:
+        def read(self): return b'{"output_text": "hi"}'
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    def fake_urlopen(req, timeout=40):
+        body = json.loads(req.data.decode('utf-8'))
+        captured.update(body)
+        return FakeResp()
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", fake_urlopen)
+    cfg = AppConfig(
+        script_provider="openai",
+        openai_api_key="sk-fake",
+        openai_text_temperature=1.4,
+    )
+    _call_openai_text("test prompt", cfg)
+    assert captured["temperature"] == 1.4
+
+
+def test_call_openai_text_temperature_override_wins(monkeypatch):
+    """Per-call temperature overrides the config default — used by news for
+    a more professional / predictable tone."""
+    from app.dj_scripts import _call_openai_text
+    captured = {}
+
+    class FakeResp:
+        def read(self): return b'{"output_text": "ok"}'
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    def fake_urlopen(req, timeout=40):
+        body = json.loads(req.data.decode('utf-8'))
+        captured.update(body)
+        return FakeResp()
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", fake_urlopen)
+    cfg = AppConfig(
+        script_provider="openai",
+        openai_api_key="sk-fake",
+        openai_text_temperature=1.2,
+    )
+    _call_openai_text("test prompt", cfg, temperature=0.5)
+    assert captured["temperature"] == 0.5
+
+
+def test_generate_news_script_uses_lower_temperature(monkeypatch):
+    """The news pathway pulls temperature down to 0.7 for professional tone,
+    regardless of the higher config default used for DJ banter."""
+    from app.dj_scripts import generate_news_script
+
+    captured_temps = []
+
+    def fake_call(prompt, config, *, temperature=None):
+        captured_temps.append(temperature)
+        return "bulletin"
+
+    monkeypatch.setattr("app.dj_scripts._call_openai_text", fake_call)
+    monkeypatch.setattr(
+        "app.dj_scripts.fetch_top_headlines",
+        lambda url, count: {"source": "Source", "items": [{"title": "t", "description": "d"}]},
+    )
+
+    cfg = AppConfig(openai_text_temperature=1.5)  # high default
+    generate_news_script(cfg, newsreader_name="Alex")
+    assert captured_temps == [0.7]

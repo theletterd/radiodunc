@@ -356,6 +356,17 @@ class AppConfig(BaseModel):
     script_provider: str = "template"
     openai_api_key: str | None = None
     openai_text_model: str = "gpt-4o-mini"
+    openai_text_temperature: float = Field(
+        default=1.2,
+        ge=0.0,
+        le=2.0,
+        description=(
+            "Sampling temperature passed to OpenAI text generation. 1.0 is the API "
+            "default; we lean slightly higher (1.2) for more variety in DJ banter "
+            "and stinger phrases. News bulletins override this lower for a "
+            "professional, predictable tone."
+        ),
+    )
     openai_tts_model: str = "gpt-4o-mini-tts"
     openai_tts_voice: str = "verse"
     playlist_artist_repeat_window: int = Field(default=3, ge=0, le=50)

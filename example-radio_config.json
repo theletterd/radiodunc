@@ -121,6 +121,7 @@
   "tts_provider": "openai",
   "script_provider": "openai",
   "openai_text_model": "gpt-4o-mini",
+  "openai_text_temperature": 1.2,
   "openai_tts_model": "gpt-4o-mini-tts",
   "openai_tts_voice": "verse"
 }
