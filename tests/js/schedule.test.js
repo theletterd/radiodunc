@@ -91,6 +91,16 @@ describe('pure helpers', () => {
     expect(globalThis._fmtHourBoundary(24)).toBe('midnight');  // wraps cleanly
   });
 
+  it('_dbToGainMultiplier converts dB to amplitude ratio', () => {
+    // 0 dB → 1.0; -6 dB → ~0.501 (half); +6 dB → ~2.0
+    expect(globalThis._dbToGainMultiplier(0)).toBeCloseTo(1.0, 4);
+    expect(globalThis._dbToGainMultiplier(-6)).toBeCloseTo(0.5012, 3);
+    expect(globalThis._dbToGainMultiplier(6)).toBeCloseTo(1.995, 3);
+    expect(globalThis._dbToGainMultiplier(-3)).toBeCloseTo(0.708, 2);  // roughly half loudness
+    expect(globalThis._dbToGainMultiplier(undefined)).toBe(1);  // missing → no trim
+    expect(globalThis._dbToGainMultiplier(null)).toBe(1);
+  });
+
   it('_fmtShiftRange treats end as inclusive — 23 ends at midnight', () => {
     // The whole point of this helper: make "23 → 23" unambiguous to users.
     expect(globalThis._fmtShiftRange(23, 23)).toBe('11pm → midnight');

@@ -23,7 +23,8 @@
         {
           "voice": "sage",
           "name": "Sam Whitfield",
-          "voice_instructions": "Thoughtful and composed, like a long-running public radio host. Even pacing, careful phrasing, no rush. Trusts the listener to follow along."
+          "voice_instructions": "Thoughtful and composed, like a long-running public radio host. Even pacing, careful phrasing, no rush. Trusts the listener to follow along.",
+          "gain_offset_db": -3.0
         }
       ],
       "prompt_template": null

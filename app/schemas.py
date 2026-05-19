@@ -110,14 +110,23 @@ class PlayerNextResponse(BaseModel):
     current_track_metadata: TrackOut  # the new current track (what's playing after the transition)
     current_track_label: str          # display label (artist - title or filename fallback)
     dj_clip_url: str
+    dj_voice_gain_offset_db: float = 0.0  # per-voice playback trim (config: station/persona)
     ad_clip_url: str | None = None    # plays right after the DJ clip when an ad fires
     ad_script: str | None = None
+    ad_voice_gain_offset_db: float = 0.0  # per-voice trim from the AdVoice config that was picked
     news_clip_url: str | None = None  # plays right after the DJ clip when news fires (before ads if both)
     news_script: str | None = None
+    news_voice_gain_offset_db: float = 0.0  # per-voice trim from the NewsVoice config that was picked
     station_id_clip_url: str | None = None  # short stinger played after an ad break
+    station_id_voice_gain_offset_db: float = 0.0  # stinger uses active DJ voice — same trim as the DJ
     next_track_url: str | None = None
     next_track_metadata: TrackOut | None = None  # look-ahead (N+2) for prefetch hints
     dj_script: str
+
+
+class StingerUrlResponse(BaseModel):
+    clip_url: str | None = None
+    voice_gain_offset_db: float = 0.0
 
 
 class QueueItemOut(BaseModel):

@@ -60,11 +60,15 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
     persona = pick_active_persona(station, now)
     if persona is None:
         return station
+    # voice_gain_offset_db follows voice: if persona supplies its own voice,
+    # use the persona's offset (even if 0). If the persona inherits the
+    # station's voice, inherit the station's offset too.
     return station.model_copy(update={
         "dj_name": persona.name,
         "personality": persona.personality,
         "voice": persona.voice or station.voice,
         "voice_instructions": persona.voice_instructions or station.voice_instructions,
+        "voice_gain_offset_db": persona.voice_gain_offset_db if persona.voice else station.voice_gain_offset_db,
         "dj_prompt_template": persona.prompt_template or station.dj_prompt_template,
     })
 
