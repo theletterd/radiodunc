@@ -5,66 +5,49 @@
 Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started
 playing on its own without any user gesture.
 
-Possible suspects:
-- The 10 s `setInterval(refreshServerState, 10_000)` rehydrates `serverState`
-  from the server, but `is_playing` should be false after Stop. Unless something
-  is re-setting it server-side?
-- The `visibilitychange` listener calls `refreshServerState()` on visible — but
-  refresh only updates state, doesn't trigger playback. Worth re-checking.
-- AudioContext suspend/resume interaction with the OS waking? Maybe the
-  context auto-resumed and triggered something via the audio element?
-- Did `triggerTransition` somehow fire from a stale timer that survived stop?
-  `stopPlayback` clears autoTrigger, prefetch, stinger, mode timers — looks
-  thorough but worth a re-audit.
+**Status**: instrumentation shipped in PR #119 (Nov 2026). Every playback
+entry point now logs through `_logPlayback(event, fields)` with full state
+context, and `triggerTransition` defensively bails with a `console.warn` if
+`serverState?.is_playing` is false. So:
 
-Plan when picked up:
-1. Add a one-line log at the top of `triggerTransition`, `startPlayback`, and
-   `resumeAfterRefresh` so we can see exactly which path fired on next repro.
-2. Audit every place we call `el.play()` or `ctx.resume()`.
-3. Confirm `stopPlayback` clears everything (it sets `_autoTriggerRemaining`
-   and `paused` to defaults — should be fine, but verify).
+- Symptom is suppressed: the user no longer hears unexpected playback when
+  this bug fires (the guard catches it before any audio plays).
+- Diagnosis is automatic: next time the bug repros, the browser console
+  shows exactly which entry point fired and why — look for the
+  `triggerTransition blocked — serverState says not playing` warn and the
+  preceding entry log.
 
-## ☐ Always-async news generation — never block player_next on news
+Waiting on a fresh repro to chase the root cause. Likely suspect: a stale
+`autoTrigger` setTimeout that survived `stopPlayback` (macOS power
+management may suspend/resume the JS event loop without firing
+`clearTimeout` cleanly). If confirmed, fix is to give timers a
+generation token, or have the autoTrigger callback re-check
+`serverState.is_playing` itself.
 
-Today `get_news_clip` is mostly async (20-min TTL with background refresh between
-20–30 min), but past 30 min OR on a cold cache it still generates **inline**,
-adding ~5 s of dead-air to that transition. Warmup helps but doesn't cover every
-edge (long pause between play sessions, server restart, etc.).
+## ✅ Always-async news generation
+Shipped in PR #118. `get_news_clip` never blocks on regeneration anymore;
+cache miss = skip the segment + queue a refresh. The warmup on `player_play`
+keeps the cache warm in normal use, so the skip path almost never fires.
 
-Option leaning: serve whatever's cached when news is requested, even if expired.
-On every news-cadence hit, also kick off a background refresh if the cache is
-older than X minutes — so we proactively warm. If the cache is completely empty
-(very first news call after a fresh boot with no warmup), skip the news segment
-this round AND spawn the background refresh, so it's ready by the next cadence.
+## ✅ Persona definition refactor — split personality from voice
+Shipped in PR #120. `dj_style` → `personality` on both `StationConfig`
+and `DJPersona`, with silent migration validators that accept the old
+keys. UI form label now reads "Personality — what they SAY". Voice
+direction lives in `voice` + `voice_instructions` as before.
 
-End state: `_attach_news` is non-blocking by construction.
+## ☐ Future ideas (not committed yet)
 
-Pick up when picked up:
-- Drop the 'inline regenerate on expiry' branch in `get_news_clip`
-- Treat cache absence as "skip this segment, queue a refresh"
-- Maybe add a debug log so we can see how often news was skipped due to cache miss
-
-## ☐ Persona definition refactor — split personality from voice
-
-Today a persona is `dj_style` (free-text) + `voice` + `voice_instructions`.
-The free-text style field mixes two distinct concerns: **what they say**
-(personality, slang, attitude, what they'd talk about) and **how they sound**
-(pacing, accent, delivery characteristics). These should be separate fields.
-
-The base prompt template (DJ role, ad-break teases, time mentions, weather/
-news handoffs, station-name pronunciation rules) should remain unchangeable
-scaffolding — personas slot personality + voice into clearly-named placeholders
-inside it, rather than overriding the whole template.
-
-End state lets us swap in distinct vibes cleanly:
-  - "Flirty late-night naughty DJ" (personality) + (breathy, low, intimate voice)
-  - "Perky kids morning DJ" (personality) + (bright, energetic voice)
-
-Implementation when picked up:
-- Rename `dj_style` → `personality` on StationConfig + DJPersona, with a
-  migration validator that keeps existing configs working
-- Document the base prompt template as the locked-in scaffolding
-- UI Phase 3 should expose personality and voice_description as separate fields
+- **Cost guardrail** — track $/day OpenAI usage in the DB, surface in
+  the UI, optional soft cap with a warning toast. Lets you experiment
+  with bigger phrase pools / longer prompts without anxiety.
+- **Like / dislike signal** — heart/x buttons in the player that bias
+  the scheduler. Connects what you actually enjoy to what plays.
+- **Stinger pool variety on warmup** — currently the startup warmup
+  seeds ONE stinger clip; could top up the pool gradually so the first
+  few skip-stingers have variety from minute one.
+- **Multi-listener / shareable URL** — would need a real broadcast
+  layer (icecast, HLS, or just polling-based sync). Big architectural
+  shift; only worth it if you want friends to tune in.
 
 ## DJ / personality system
 - ✅ Consolidate DJ config: station fields are the default DJ, `dj_roster` entries are scheduled overrides
