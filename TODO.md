@@ -1,49 +1,66 @@
 # RadioDunc — Backlog
 
-## ☐ Front-end audio compression — stop the per-voice tuning treadmill
+## ☐ Move more settings into the UI
 
-Hand-tuning every voice via gain offset is fiddly and never quite right:
-voices vary track-to-track, your music varies song-to-song, and the
-listener ends up reaching for the system volume mid-listen. The right
-tool is dynamics compression in the audio chain — it automatically
-attenuates loud peaks and lifts quiet stretches so everything sits at
-a consistent perceived level.
+Right now the schedule editor only exposes persona/DJ fields. Stuff still
+hidden in radio_config.json that users routinely want to tweak:
 
-Web Audio API ships with this baked in:
+- `alerts.weather_location` / `weather_latitude` / `weather_longitude`
+- `alerts.weather.every_n_breaks`, `alerts.news.every_n_breaks`,
+  `alerts.ads.every_n_breaks` (segment cadences)
+- `alerts.news.rss_url`, `alerts.news.headline_count`
+- `alerts.ads.enabled` / `risque_chance` / `pool_size`
+- `alerts.station_id.enabled` / `phrase_count`
+- `station.name` / `tagline` / `format` / `description` / `era` / `genre_focus`
+- `openai_text_temperature`
 
-**DynamicsCompressorNode** — built into every browser, no library
-needed. Settings:
-- `threshold` (dB, default -24): start compressing above this level
-- `knee` (dB, default 30): soft transition into the threshold
-- `ratio` (default 12): how aggressively to squash above the threshold
-- `attack` (s, default 0.003): how fast to react to a peak
-- `release` (s, default 0.25): how fast to let go
+End state: a "Station settings" panel (probably another sidebar takeover
+like the schedule editor) with grouped forms. Each tweak hits PUT /config
+the same way persona edits do.
 
-Add it once in `initAudio()` between `masterGain` and `ctx.destination`,
-and every clip benefits automatically. Typical broadcast settings:
-threshold ≈ -18 dB, ratio ≈ 4, attack ≈ 5 ms, release ≈ 100 ms. Gentle
-enough not to crush dynamics, strong enough to flatten the sage-vs-fable
-gap without manual trim.
+## ☐ DJ roster with AI-generated icons
 
-Optional follow-ons:
-- A **brick-wall limiter** at -1 dB threshold, ratio 20, fast attack
-  to prevent any clipping (the safety net).
-- Frequency-aware compression via multiple bands (more complex; only
-  needed if a single-band compressor sounds pumpy).
-- **AnalyserNode + custom JS** to measure incoming levels and
-  surface them in the UI ("DJ peak: -3 dB / music: -6 dB") — useful
-  for tuning even if we don't auto-correct.
+Each DJ gets a small avatar generated from their personality+voice
+description (DALL-E or similar). Shown:
+- as a chip in the schedule grid's legend
+- inside the persona block on the grid (small circle in the corner)
+- in the persona editor next to the name field
+- in the "On air with [DJ]" badge when that DJ is live
 
-Implementation when picked up:
-1. Add `compressorNode = ctx.createDynamicsCompressor()` in `initAudio()`
-   with broadcast-style defaults.
-2. Rewire: `masterGain → compressorNode → ctx.destination` (currently
-   `masterGain → ctx.destination`).
-3. Expose threshold/ratio in config so power users can tune.
-4. Once it sounds right, **revisit the per-voice trim**: most users
-   should be able to leave it at 0 and let the compressor handle it.
-   Trim remains useful for "this voice is just plain too quiet to
-   compensate from" extreme cases.
+Generation flow: on save, if the persona's personality changed, queue
+a background image-gen job. Cache the result keyed by personality hash
+in generated_audio/dj_icons/{hash}.png (or a new generated_dj_icons/
+subdir). Default to a coloured initial if no icon yet (matches the
+palette colour we already assign per persona). Backend serves the
+icon at /media/dj-icon/{persona_name_slug}.
+
+Cost: ~$0.04 per DJ icon at DALL-E pricing; small one-time per DJ.
+
+## ☐ Hot-reload config on PUT /config
+
+Today `load_config()` reads from disk every call (no cache), so saved
+changes ARE picked up by subsequent requests — BUT the cache layers
+that derive things from config (news cache, station-ID phrase cache,
+weather cache) won't notice a config change. e.g. renaming the station
+won't trigger a station-ID phrase regen. Add a config-change hook that
+invalidates the relevant caches.
+
+Suspects to invalidate when station.name changes:
+- station_id phrase cache (already keyed by name, but the IN-MEMORY
+  copy doesn't know to refresh)
+- news bulletin cache (might reference the station name)
+- any prefetched DJ clips (different prompt context)
+
+Probably implement as a `_on_config_changed(old, new)` hook called
+from `update_config` that compares old vs new and clears caches
+selectively.
+
+## ✅ Front-end audio compression
+Shipped in PR #134. `DynamicsCompressorNode` sits between `masterGain` and
+`ctx.destination` in `initAudio()` with broadcast defaults (threshold -18
+dB, ratio 4:1, attack 5 ms, release 100 ms). Auto-flattens the loud/quiet
+gap between voices and between voices vs music. The per-voice trim plumbing
+was subsequently ripped out (PR #135) since the compressor handles it.
 
 ## ☐ Separate DJ from show
 
