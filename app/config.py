@@ -31,6 +31,16 @@ class NewsVoice(BaseModel):
         description="Natural language delivery guidance passed to the TTS model.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_gain_offset(cls, data):
+        """Silently drop gain_offset_db from configs saved during the per-voice
+        trim era. The DynamicsCompressor handles loudness levelling now, so
+        the field no longer exists — but old configs would fail extra='forbid'."""
+        if isinstance(data, dict):
+            data.pop("gain_offset_db", None)
+        return data
+
 
 class NewsPreferences(BaseModel):
     enabled: bool = True
@@ -78,6 +88,15 @@ class AdVoice(BaseModel):
         default=None,
         description="Natural language delivery guidance passed to the TTS model.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_gain_offset(cls, data):
+        """Same migration as NewsVoice — strip the removed gain_offset_db field
+        from configs saved during the per-voice trim era."""
+        if isinstance(data, dict):
+            data.pop("gain_offset_db", None)
+        return data
 
 
 class AdBreakPreferences(BaseModel):
@@ -215,17 +234,22 @@ class DJPersona(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_fields(cls, data):
-        """Migrate two legacy shapes onto the current model in one pass.
+        """Migrate legacy shapes onto the current model in one pass.
 
         1. Schedule:  days + start_hour + end_hour  →  shifts list
         2. Naming:   style  →  personality (rename only, no value transform)
+        3. Removed:  voice_gain_offset_db (per-voice trim — superseded by
+                     the audio chain's DynamicsCompressor; silently dropped)
 
-        Both run on load so existing radio_config.json files keep working with
+        Runs on load so existing radio_config.json files keep working with
         no manual edits. Once the user saves through the UI the file is
         rewritten in the new shape.
         """
         if not isinstance(data, dict):
             return data
+
+        # Drop removed per-voice trim.
+        data.pop("voice_gain_offset_db", None)
 
         # Rename style → personality.
         if "personality" not in data and "style" in data:
@@ -319,10 +343,16 @@ class StationConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_fields(cls, data):
-        """Rename legacy dj_style → personality on load. Keeps existing
-        radio_config.json files working without manual edits."""
+        """Migrate legacy shapes on load. Keeps existing radio_config.json files
+        working without manual edits:
+
+        - dj_style → personality (rename)
+        - voice_gain_offset_db: silently dropped (per-voice trim was superseded
+          by the audio chain's DynamicsCompressor)
+        """
         if not isinstance(data, dict):
             return data
+        data.pop("voice_gain_offset_db", None)
         if "personality" not in data and "dj_style" in data:
             data["personality"] = data.pop("dj_style")
         elif "dj_style" in data:
