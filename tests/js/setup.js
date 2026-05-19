@@ -34,6 +34,16 @@ globalThis.AudioContext = class FakeAudioContext {
   createGain() { return new FakeGainNode(); }
   createMediaElementSource() { return { connect: vi.fn() }; }
   createBufferSource() { return new FakeBufferSource(); }
+  createDynamicsCompressor() {
+    return {
+      threshold: { value: 0 },
+      knee: { value: 0 },
+      ratio: { value: 1 },
+      attack: { value: 0 },
+      release: { value: 0 },
+      connect: vi.fn(),
+    };
+  }
   suspend() { return Promise.resolve(); }
   resume() { return Promise.resolve(); }
   decodeAudioData() { return Promise.resolve({ duration: 2 }); }

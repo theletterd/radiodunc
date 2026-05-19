@@ -30,6 +30,7 @@ const EXPORTED_NAMES = [
   '_dbToGainMultiplier',
   '_volumeSliderToDb', '_dbToVolumeSlider', '_volumeSliderLabel',
   '_autoResizeTextarea',
+  'initAudio',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',
