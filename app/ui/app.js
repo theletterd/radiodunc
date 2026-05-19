@@ -106,6 +106,18 @@ async function animateLabel(el, newText) {
 function savedVolume()    { return Number(localStorage.getItem('volume') ?? serverState?.volume ?? 80); }
 function musicVolume()    { return Math.max(0, Math.min(1, savedVolume() / 100)); }
 
+// Capture state at every playback entry point so we can diagnose intermittent
+// bugs (e.g. unprompted playback after laptop wake) from a console transcript
+// — the bug's repro is rare so we want full context every time anything
+// playback-shaped fires.
+function _logPlayback(event, fields = {}) {
+  console.log(`[playback] ${event}`, {
+    serverIsPlaying: serverState?.is_playing,
+    paused, transitioning, hasCtx: !!ctx, onAirMode,
+    ...fields,
+  });
+}
+
 async function api(path, opts = {}) {
   const method = opts.method || 'GET';
   const isGet  = method === 'GET';
@@ -188,7 +200,10 @@ function scheduleAutoTrigger(trackDurationSec) {
   const elapsed  = curSlot().el.currentTime || 0;
   const delaySec = Math.max(0, trackDurationSec - elapsed - AUTO_PREROLL_S);
   console.log(`[audio] auto-trigger in ${delaySec.toFixed(1)}s (dur=${trackDurationSec.toFixed(1)}s)`);
-  autoTriggerTimer = setTimeout(() => triggerTransition('auto'), delaySec * 1000);
+  autoTriggerTimer = setTimeout(() => {
+    _logPlayback('autoTrigger.fired');
+    triggerTransition('auto');
+  }, delaySec * 1000);
 }
 
 // ── Prefetch scheduling ───────────────────────────────────────────────────────
@@ -297,8 +312,17 @@ function loadWithRetry(el, url, { attempts = 3, delayMs = 2000 } = {}) {
 // already gone silent; we just start the DJ clip the moment it's decoded.
 // There may be a brief silence, but there's no crackle or restart.
 async function triggerTransition(reason) {
+  _logPlayback('triggerTransition.enter', { reason });
   if (transitioning) {
     console.log('[audio] transition suppressed (already in progress)');
+    return;
+  }
+  // Defensive: triggerTransition should NEVER fire when the server says we're
+  // stopped. If it does, a stale timer survived stopPlayback (or some other
+  // path snuck through) — log loudly and bail rather than starting playback
+  // the user didn't ask for. Suspected source of the lid-wake bug.
+  if (!serverState?.is_playing) {
+    console.warn('[playback] triggerTransition blocked — serverState says not playing', { reason });
     return;
   }
   transitioning = true;
@@ -527,6 +551,7 @@ async function _playCurrentTrackFromServer() {
 }
 
 async function startPlayback() {
+  _logPlayback('startPlayback.enter');
   paused = false;
   _autoTriggerRemaining = null;
   initAudio();
@@ -544,6 +569,7 @@ async function startPlayback() {
 // is_playing=true but the client has no AudioContext. This picks up the current
 // track at position 0 and resumes without rebuilding the queue.
 async function resumeAfterRefresh() {
+  _logPlayback('resumeAfterRefresh.enter');
   paused = false;
   _autoTriggerRemaining = null;
   initAudio();
@@ -554,6 +580,7 @@ async function resumeAfterRefresh() {
 
 // ── Stop playback ─────────────────────────────────────────────────────────────
 async function stopPlayback() {
+  _logPlayback('stopPlayback.enter');
   clearAutoTrigger();
   clearPrefetchTimer();
   clearStingerTimer();
@@ -582,6 +609,7 @@ async function stopPlayback() {
 
 // ── Pause playback ────────────────────────────────────────────────────────────
 async function pausePlayback() {
+  _logPlayback('pausePlayback.enter');
   if (!ctx || paused) return;
   paused = true;
 
@@ -603,6 +631,7 @@ async function pausePlayback() {
 
 // ── Resume playback ───────────────────────────────────────────────────────────
 async function resumePlayback() {
+  _logPlayback('resumePlayback.enter');
   if (!ctx || !paused) return;
   paused = false;
 
@@ -1515,6 +1544,7 @@ document.getElementById('volume').addEventListener('input', async (e) => {
 });
 
 document.addEventListener('visibilitychange', () => {
+  _logPlayback('visibilitychange', { visibilityState: document.visibilityState });
   if (document.visibilityState === 'visible' && serverState?.is_playing) refreshServerState();
 });
 
