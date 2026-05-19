@@ -66,6 +66,10 @@ function fakeJsonResponse(body, status = 200) {
     headers: { get: () => 'application/json' },
     json: async () => body,
     text: async () => JSON.stringify(body),
+    // For clients that fetch the response as bytes (e.g. preview audio bytes
+    // piped through AudioContext.decodeAudioData). The real bytes don't matter
+    // because decodeAudioData is itself stubbed.
+    arrayBuffer: async () => new ArrayBuffer(0),
   };
 }
 
