@@ -677,24 +677,30 @@ def _news_config():
     return AppConfig(station=StationConfig(name="News FM", dj_name="DJ News"))
 
 
-def test_news_cache_empty_builds_inline(monkeypatch, _reset_news_cache):
+def test_news_cache_empty_returns_none_and_queues_refresh(monkeypatch, _reset_news_cache):
+    """get_news_clip never blocks on cold start — it returns None and queues
+    the cache to be warmed in the background. The caller (_attach_news) treats
+    None as 'skip the news segment this round'."""
     import app.main as m
 
-    entry = _news_entry(generated_at=_time_mod.time(), hash_suffix="fresh")
-    calls = []
-
-    def fake_build(config):
-        calls.append(config)
-        return entry
-
-    monkeypatch.setattr("app.main._build_news_clip", fake_build)
+    build_calls = []
+    monkeypatch.setattr(
+        "app.main._build_news_clip",
+        lambda config: build_calls.append(config) or _news_entry(_time_mod.time(), "new"),
+    )
+    _ImmediateThread.instances = []
+    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
 
     cfg = _news_config()
     result = m.get_news_clip(cfg)
 
-    assert result is entry
-    assert len(calls) == 1
-    assert m._news_cache is entry
+    assert result is None
+    # A background refresh was queued (and ran synchronously via the fake Thread),
+    # so the NEXT call will hit a populated cache.
+    assert len(_ImmediateThread.instances) == 1
+    assert _ImmediateThread.instances[0].started is True
+    assert build_calls == [cfg]
+    assert m._news_cache is not None  # populated by the refresh
 
 
 def test_news_cache_fresh_returns_cached_without_build(monkeypatch, _reset_news_cache):
@@ -771,7 +777,10 @@ def test_news_cache_aging_skips_refresh_when_already_in_flight(monkeypatch, _res
     assert build_calls == []
 
 
-def test_news_cache_expired_rebuilds_inline(monkeypatch, _reset_news_cache):
+def test_news_cache_expired_returns_none_and_queues_refresh(monkeypatch, _reset_news_cache):
+    """A cache older than NEWS_EXPIRE_AFTER_S (30 min) is treated as missing —
+    don't serve stale-stale news. Same path as the empty-cache case: return
+    None so the segment is skipped this round, refresh in the background."""
     import app.main as m
 
     cached = _news_entry(generated_at=_time_mod.time() - 35 * 60, hash_suffix="old")
@@ -779,47 +788,45 @@ def test_news_cache_expired_rebuilds_inline(monkeypatch, _reset_news_cache):
 
     fresh = _news_entry(generated_at=_time_mod.time(), hash_suffix="fresh")
     build_calls = []
-
-    def fake_build(config):
-        build_calls.append(config)
-        return fresh
-
-    monkeypatch.setattr("app.main._build_news_clip", fake_build)
-
-    # If the expired branch mistakenly spawned a thread we want to notice.
+    monkeypatch.setattr(
+        "app.main._build_news_clip",
+        lambda config: build_calls.append(config) or fresh,
+    )
     _ImmediateThread.instances = []
     monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
 
     cfg = _news_config()
     result = m.get_news_clip(cfg)
 
-    assert result is fresh
+    # Caller gets nothing (skip this transition's news segment) …
+    assert result is None
+    # … but the background refresh fires immediately and warms the cache for next time.
+    assert len(_ImmediateThread.instances) == 1
     assert build_calls == [cfg]
     assert m._news_cache is fresh
-    assert _ImmediateThread.instances == []
 
 
-def test_news_cache_expired_falls_back_to_stale_on_build_failure(monkeypatch, _reset_news_cache):
+def test_news_cache_expired_when_refresh_already_in_flight(monkeypatch, _reset_news_cache):
+    """Don't pile up parallel refreshes when one is already running."""
     import app.main as m
 
     cached = _news_entry(generated_at=_time_mod.time() - 35 * 60, hash_suffix="old")
     m._news_cache = cached
+    m._news_refresh_in_flight = True
 
     build_calls = []
+    monkeypatch.setattr(
+        "app.main._build_news_clip",
+        lambda config: build_calls.append(config) or _news_entry(_time_mod.time(), "x"),
+    )
+    _ImmediateThread.instances = []
+    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
 
-    def fake_build(config):
-        build_calls.append(config)
-        return None
+    result = m.get_news_clip(_news_config())
 
-    monkeypatch.setattr("app.main._build_news_clip", fake_build)
-
-    cfg = _news_config()
-    result = m.get_news_clip(cfg)
-
-    assert result is cached
-    assert build_calls == [cfg]
-    # Cache should not have been overwritten with the failed (None) result.
-    assert m._news_cache is cached
+    assert result is None  # skip this round regardless
+    assert _ImmediateThread.instances == []  # no second refresh queued
+    assert build_calls == []
 
 
 # ── Prefetch endpoint and worker ──────────────────────────────────────────────

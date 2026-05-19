@@ -622,9 +622,13 @@ def _take_prefetched(target_idx: int) -> dict | None:
 # News bulletins are expensive to produce (LLM + TTS, ~5 s). We keep one ready
 # at all times: hand back the cached clip immediately, and refresh in the
 # background once it crosses the "stale" threshold so the next request still
-# gets something recent without paying the latency.
+# gets something recent without paying the latency. get_news_clip never
+# blocks on regeneration — if we don't have a usable cached clip we skip the
+# news segment for this transition and queue a background refresh, so the
+# NEXT news-cadence hit has fresh material. The warmup that fires on
+# player_play seeds the cache before the user reaches their first cadence.
 NEWS_STALE_AFTER_S  = 20 * 60   # spawn background refresh after this
-NEWS_EXPIRE_AFTER_S = 30 * 60   # block and regenerate inline after this
+NEWS_EXPIRE_AFTER_S = 30 * 60   # past this, the cached clip is too old to serve
 
 _news_cache: dict | None = None
 _news_cache_lock = threading.Lock()
@@ -687,47 +691,59 @@ def _refresh_news_background(config: AppConfig) -> None:
             _news_refresh_in_flight = False
 
 
+def _spawn_news_refresh(config: AppConfig, reason: str, age_s: int | None = None) -> None:
+    """Kick off a background refresh of the news cache if one isn't already
+    in flight. Lock is held just long enough to flip the in-flight flag —
+    the thread is started OUTSIDE the lock so _refresh_news_background can
+    re-acquire it without contending (and so a test's synchronous fake
+    Thread can't deadlock here)."""
+    global _news_refresh_in_flight
+    should_spawn = False
+    with _news_cache_lock:
+        if not _news_refresh_in_flight:
+            _news_refresh_in_flight = True
+            should_spawn = True
+    if should_spawn:
+        threading.Thread(
+            target=_refresh_news_background, args=(config,), daemon=True,
+        ).start()
+        fields = {"reason": reason}
+        if age_s is not None:
+            fields["age_s"] = age_s
+        _log_event("news.cache.refresh_scheduled", **fields)
+
+
 def get_news_clip(config: AppConfig) -> dict | None:
-    """Return a cached news clip, refreshing in the background if it's aging."""
-    global _news_cache, _news_refresh_in_flight
+    """Return a usable cached news clip, or None if the cache is missing/expired.
+
+    Never blocks on regeneration. Strategy:
+      - fresh (< NEWS_STALE_AFTER_S): return cached
+      - aging (NEWS_STALE_AFTER_S .. NEWS_EXPIRE_AFTER_S): return cached AND
+        spawn a background refresh
+      - expired (> NEWS_EXPIRE_AFTER_S): return None AND spawn a refresh —
+        the caller skips the news segment this round; next cadence has fresh
+      - empty: same as expired — return None, queue a refresh
+
+    The warmup that fires on player_play seeds the cache so the user's first
+    news transition almost always hits the fresh path.
+    """
     now = time.time()
     with _news_cache_lock:
         cached = _news_cache
     age = (now - cached["generated_at"]) if cached else None
 
-    # No cache yet — generate inline (only happens on the first call after startup).
     if cached is None:
-        entry = _build_news_clip(config)
-        if entry:
-            with _news_cache_lock:
-                _news_cache = entry
-        return entry
+        _log_event("news.cache.miss", reason="empty")
+        _spawn_news_refresh(config, reason="empty")
+        return None
 
-    # Expired — regenerate inline; fall back to stale cache if that fails.
     if age > NEWS_EXPIRE_AFTER_S:
-        _log_event("news.cache.expired", age_s=round(age))
-        entry = _build_news_clip(config)
-        if entry:
-            with _news_cache_lock:
-                _news_cache = entry
-            return entry
-        return cached
+        _log_event("news.cache.miss", reason="expired", age_s=round(age))
+        _spawn_news_refresh(config, reason="expired", age_s=round(age))
+        return None
 
-    # Aging — spawn background refresh (if one isn't already running) and return stale.
-    # The spawn happens OUTSIDE the lock so the background thread can acquire it
-    # without contending with us (and so the test's synchronous fake-Thread can't
-    # deadlock in _refresh_news_background's lock acquisitions).
     if age > NEWS_STALE_AFTER_S:
-        should_spawn = False
-        with _news_cache_lock:
-            if not _news_refresh_in_flight:
-                _news_refresh_in_flight = True
-                should_spawn = True
-        if should_spawn:
-            threading.Thread(
-                target=_refresh_news_background, args=(config,), daemon=True,
-            ).start()
-            _log_event("news.cache.refresh_scheduled", age_s=round(age))
+        _spawn_news_refresh(config, reason="stale", age_s=round(age))
 
     return cached
 
