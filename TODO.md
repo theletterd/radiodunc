@@ -1,5 +1,29 @@
 # RadioDunc — Backlog
 
+## ☐ Spurious unprompted playback after lid-close / wake
+
+Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started
+playing on its own without any user gesture.
+
+Possible suspects:
+- The 10 s `setInterval(refreshServerState, 10_000)` rehydrates `serverState`
+  from the server, but `is_playing` should be false after Stop. Unless something
+  is re-setting it server-side?
+- The `visibilitychange` listener calls `refreshServerState()` on visible — but
+  refresh only updates state, doesn't trigger playback. Worth re-checking.
+- AudioContext suspend/resume interaction with the OS waking? Maybe the
+  context auto-resumed and triggered something via the audio element?
+- Did `triggerTransition` somehow fire from a stale timer that survived stop?
+  `stopPlayback` clears autoTrigger, prefetch, stinger, mode timers — looks
+  thorough but worth a re-audit.
+
+Plan when picked up:
+1. Add a one-line log at the top of `triggerTransition`, `startPlayback`, and
+   `resumeAfterRefresh` so we can see exactly which path fired on next repro.
+2. Audit every place we call `el.play()` or `ctx.resume()`.
+3. Confirm `stopPlayback` clears everything (it sets `_autoTriggerRemaining`
+   and `paused` to defaults — should be fine, but verify).
+
 ## ☐ Always-async news generation — never block player_next on news
 
 Today `get_news_clip` is mostly async (20-min TTL with background refresh between
