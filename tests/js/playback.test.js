@@ -203,6 +203,9 @@ describe('scheduleAutoTrigger', () => {
     const fakeCtx = makeFakeCtx();
     globalThis.__setCtx(fakeCtx);
     stubActiveSlot({ currentTime: 0, duration: 300 });
+    // triggerTransition now defensively bails if serverState says not playing
+    // (lid-wake bug guard). Set is_playing so this test's trigger fires normally.
+    globalThis.__setServerState({ is_playing: true });
 
     // Stub /player/next to return 400 (end-of-queue) so triggerTransition
     // calls stopPlayback() and exits cleanly without dereferencing a null
@@ -236,6 +239,36 @@ describe('scheduleAutoTrigger', () => {
     // triggerTransition calls clearAutoTrigger() as its first action,
     // which nulls the timer.
     expect(globalThis.__getAutoTriggerTimer()).toBeNull();
+  });
+
+  it('autoTrigger firing while serverState.is_playing=false is suppressed (lid-wake guard)', () => {
+    // Repro for the lid-wake bug class: a stale timer survives stopPlayback
+    // and fires later. Even if the timer fires, triggerTransition should bail
+    // out because the server says we're stopped.
+    globalThis.__setCtx(makeFakeCtx());
+    stubActiveSlot({ currentTime: 0, duration: 300 });
+    globalThis.__setServerState({ is_playing: true });
+
+    globalThis.scheduleAutoTrigger(300);
+    expect(globalThis.__getAutoTriggerTimer()).not.toBeNull();
+
+    // User hits Stop — serverState flips to not playing, but a stale timer
+    // is still in flight (in this synthetic case we just override state
+    // without calling stopPlayback's timer cleanup).
+    globalThis.__setServerState({ is_playing: false });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.advanceTimersByTime(291_000);  // fire the timer
+
+    // The defensive guard inside triggerTransition warned and returned early,
+    // so the timer ID was NEVER cleared (clearAutoTrigger is the first line
+    // AFTER the guard). The bare setTimeout callback fired but did nothing
+    // playback-shaped.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('triggerTransition blocked'),
+      expect.objectContaining({ reason: 'auto' }),
+    );
+    warn.mockRestore();
   });
 });
 
