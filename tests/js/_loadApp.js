@@ -27,8 +27,6 @@ const EXPORTED_NAMES = [
   '_personaColor', '_jsDayToGridIndex',
   '_gridRowHeightPx', '_gridColWidthPx',
   '_fmtHourBoundary', '_fmtShiftRange',
-  '_dbToGainMultiplier',
-  '_volumeSliderToDb', '_dbToVolumeSlider', '_volumeSliderLabel',
   '_autoResizeTextarea',
   'initAudio',
   // schedule rendering / mode

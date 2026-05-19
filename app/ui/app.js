@@ -17,15 +17,6 @@ const STINGER_GAIN   = 2.0;  // DJ-voice throws, close to DJ but not above
 const DJ_EDGE_S      = 0.2;  // DJ clip's own tiny in/out fade
 const AUTO_PREROLL_S = 10;   // start transition this many seconds before track end
 
-// Per-voice trim is configured in dB on the backend (each NewsVoice / AdVoice
-// / StationConfig / DJPersona has gain_offset_db). The backend reports the
-// effective offset alongside every clip URL in PlayerNextResponse, and we
-// multiply it onto the segment's base gain at scheduling time.
-function _dbToGainMultiplier(db) {
-  // amplitude ratio = 10^(dB / 20). 0 dB → 1.0, -6 dB → 0.5, +6 dB → 2.0.
-  return Math.pow(10, (db || 0) / 20);
-}
-
 // Auto-grow a textarea to fit its content. Wired up after the persona form
 // renders so the personality / voice-instructions boxes expand as you type
 // (and start at the right size for pre-existing content). Sets height to
@@ -41,29 +32,6 @@ function _autoResizeTextarea(el) {
   resize();
 }
 
-// UI slider goes 0..100 with 50 = neutral, mapping linearly to ±12 dB.
-// We hide dB from the form because it's developer-speak; the slider feels
-// like a volume knob ("quieter ←→ louder") which is what the user wants.
-// ±18 dB at the extremes. 18 dB = ~8× amplitude — enough to compensate even
-// the genuinely quiet voices (sage in particular). Higher than this and we'd
-// start clipping on the louder TTS peaks; the right answer past ±18 is to add
-// a DynamicsCompressorNode to the audio chain instead of pushing gain higher.
-const VOLUME_TRIM_DB_RANGE = 18;  // max ± dB at slider extremes
-function _volumeSliderToDb(slider) {
-  const v = Number(slider);
-  return ((Number.isFinite(v) ? v : 50) - 50) * VOLUME_TRIM_DB_RANGE / 50;
-}
-function _dbToVolumeSlider(db) {
-  return Math.round(50 + (Number(db) || 0) * 50 / VOLUME_TRIM_DB_RANGE);
-}
-function _volumeSliderLabel(slider) {
-  const v = Number(slider);
-  if (v === 50)                    return 'Normal';
-  if (v > 75)                      return 'Much louder';
-  if (v > 50)                      return 'Louder';
-  if (v < 25)                      return 'Much quieter';
-  return 'Quieter';
-}
 
 // ── App state ────────────────────────────────────────────────────────────────
 let serverState = null;
@@ -326,13 +294,12 @@ async function _playSkipStinger() {
   try {
     const resp = await fetch('/player/stinger-url');
     if (!resp.ok) return;
-    const { clip_url: clipUrl, voice_gain_offset_db: offsetDb } = await resp.json();
+    const { clip_url: clipUrl } = await resp.json();
     if (!clipUrl || !ctx) return;
     const buf = await fetchAndDecode(clipUrl);
     if (!ctx) return;
     const start = ctx.currentTime + 0.05;
-    const sidGain = STINGER_GAIN * _dbToGainMultiplier(offsetDb);
-    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: sidGain });
+    scheduleSegment(buf, start, 'Skip stinger', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN });
     stingerEndTime = start + buf.duration;
     setOnAirMode('dj');  // brief pink "On air" badge
   } catch (err) {
@@ -521,18 +488,10 @@ async function triggerTransition(reason) {
     let adStart   = null;
     let sidStart  = null;
 
-    // Apply per-voice trim from the backend (PlayerNextResponse) on top of
-    // the segment-type base gain. A loud voice config like sage at -3 dB
-    // multiplies into roughly 0.71 of the base.
-    const djGain    = DJ_GAIN      * _dbToGainMultiplier(next.dj_voice_gain_offset_db);
-    const newsGain  = NEWS_GAIN    * _dbToGainMultiplier(next.news_voice_gain_offset_db);
-    const adGain    = AD_GAIN      * _dbToGainMultiplier(next.ad_voice_gain_offset_db);
-    const sidGain   = STINGER_GAIN * _dbToGainMultiplier(next.station_id_voice_gain_offset_db);
-
-    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip', { gain: djGain }); cursor = djEnd; }
-    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip', { gain: newsGain }); }
-    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip',   { gain: adGain }); }
-    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: sidGain }); }
+    if (djBuf)   { djEnd = scheduleSegment(djBuf, djStart, 'DJ clip', { gain: DJ_GAIN }); cursor = djEnd; }
+    if (newsBuf) { newsStart = cursor + 0.1; cursor = scheduleSegment(newsBuf, newsStart, 'News clip', { gain: NEWS_GAIN }); }
+    if (adBuf)   { adStart   = cursor + 0.1; cursor = scheduleSegment(adBuf,   adStart,   'Ad clip',   { gain: AD_GAIN }); }
+    if (sidBuf)  { sidStart  = cursor + 0.1; cursor = scheduleSegment(sidBuf,  sidStart,  'Station ID', { fadeIn: STINGER_FADE_S, fadeOut: STINGER_FADE_S, gain: STINGER_GAIN }); }
     djEnd = cursor; // re-use existing variable name for the "everything is done" timestamp
 
     // 4b. Schedule on-air mode indicators. Each clip gets its own badge.
@@ -1425,22 +1384,6 @@ function _renderPersonaForm() {
       </div>
     </div>
     <div>
-      <label for="pf-volume-trim">Volume trim <span class="muted" style="text-transform:none; font-weight:400;">— dial down loud voices (sage, nova) or boost quiet ones</span></label>
-      <div class="trim-row">
-        <span class="trim-end">Quieter</span>
-        <!-- No name attribute: we read .value via JS, never submit it through
-             the form, and an unnamed input is one fewer fillable target LP
-             can latch onto. -->
-        <input type="range" id="pf-volume-trim"
-               min="0" max="100" step="1"
-               value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}"
-               autocomplete="off" data-lpignore="true" data-1p-ignore="true"
-               data-form-type="other" aria-autocomplete="none" />
-        <span class="trim-end">Louder</span>
-        <span class="trim-readout" id="pf-volume-readout">${_volumeSliderLabel(_dbToVolumeSlider(p.voice_gain_offset_db ?? 0))}</span>
-      </div>
-    </div>
-    <div>
       <label for="pf-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
       <textarea id="pf-voice-instructions" autocomplete="off"
                 data-lpignore="true" data-1p-ignore="true">${_escapeText(p.voice_instructions || '')}</textarea>
@@ -1473,16 +1416,6 @@ function _renderPersonaForm() {
     _renderShifts();
   });
   form.querySelector('#pf-preview-btn').addEventListener('click', () => _previewVoice(previewSample));
-
-  // Live-update the volume-trim readout as the slider moves; persist into the
-  // working persona so Preview uses the latest value too.
-  const trimSlider = form.querySelector('#pf-volume-trim');
-  const trimReadout = form.querySelector('#pf-volume-readout');
-  trimSlider?.addEventListener('input', () => {
-    const sliderVal = Number(trimSlider.value);
-    trimReadout.textContent = _volumeSliderLabel(sliderVal);
-    schedulerWorkingPersona.voice_gain_offset_db = _volumeSliderToDb(sliderVal);
-  });
 
   if (!isNew) {
     form.querySelector('#pf-delete').addEventListener('click', _deletePersona);
@@ -1573,15 +1506,7 @@ function _readFormIntoWorkingPersona() {
   p.voice = v || null;
   const vi = document.getElementById('pf-voice-instructions').value.trim();
   p.voice_instructions = vi || null;
-  const trim = document.getElementById('pf-volume-trim');
-  if (trim) p.voice_gain_offset_db = _volumeSliderToDb(trim.value);
 }
-
-// Lazy-init a dedicated AudioContext for the preview path. We don't reuse the
-// main `ctx` because it might be suspended (paused playback) and we don't want
-// a preview to side-effect playback state. The Preview button click counts as
-// a user gesture, so creating a context here doesn't trip autoplay policy.
-let _previewCtx = null;
 
 async function _previewVoice(sampleText) {
   _readFormIntoWorkingPersona();
@@ -1598,26 +1523,14 @@ async function _previewVoice(sampleText) {
         voice_instructions: schedulerWorkingPersona.voice_instructions,
       }),
     });
-    // Route preview through AudioContext + GainNode so the trim is audible
-    // BOTH below and above 0 dB. HTMLAudioElement.volume caps at 1.0, which
-    // made any boost (e.g. +6 dB to lift sage) inaudible in preview. WebAudio
-    // gain has no upper cap until clipping, so a +6 dB boost actually sounds
-    // 2× louder here, matching on-air behaviour.
-    if (!_previewCtx) _previewCtx = new AudioContext();
-    if (_previewCtx.state === 'suspended') await _previewCtx.resume();
-    const audioResp = await fetch(resp.clip_url);
-    const buf = await _previewCtx.decodeAudioData(await audioResp.arrayBuffer());
-
-    const src = _previewCtx.createBufferSource();
-    src.buffer = buf;
-    const gainNode = _previewCtx.createGain();
-    gainNode.gain.value = _dbToGainMultiplier(schedulerWorkingPersona.voice_gain_offset_db || 0);
-    src.connect(gainNode);
-    gainNode.connect(_previewCtx.destination);
-
+    // Play the preview clip via a plain HTMLAudioElement now that there's no
+    // per-voice trim to apply. The system's master volume + the on-page
+    // volume slider give the user enough control.
+    const audio = new Audio(resp.clip_url);
     status.textContent = 'Playing…';
-    src.onended = () => { status.textContent = ''; };
-    src.start();
+    audio.onended = () => { status.textContent = ''; };
+    audio.onerror = () => { status.textContent = 'Playback failed.'; };
+    await audio.play();
   } catch (err) {
     status.textContent = `Preview failed: ${err.message}`;
   } finally {
