@@ -66,6 +66,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 ```json
 "station": {
   "name": "RadioDunc 107.2 FM",
+  "spoken_name": "Radio Dunk, one oh seven point two F M",
   "tagline": "Your music, forever.",
   "format": "Eclectic Mixtape",
   "description": "No rules, only great songs.",
@@ -84,6 +85,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 **Prompt fields** — all of these feed directly into the LLM script on every transition:
 
 - **`personality`** — what the DJ SAYS: attitude, slang, vibe, what they'd talk about. The more vivid, the better: `"warm storyteller with dry wit"` gets a different result from `"hyper-energetic 90s Top 40 host who's had too much coffee"`. Separate from `voice` / `voice_instructions`, which control HOW they sound. (Old configs with `dj_style` keep working — they're auto-migrated on load.)
+- **`spoken_name`** — optional phonetic spelling of the station name for TTS. Use this when `name` has digits or formatting that the LLM/TTS would mangle: `"RadioDunc 107.2 FM"` gets read as "RadioDunc one hundred and seven point two FM" without help. Set `"Radio Dunk, one oh seven point two F M"` and the LLM is told to emit `[[STATION]]` placeholders that the server substitutes before TTS. Leave null to use `name` verbatim. Delete `generated_station_ids.json` after changing this so the stinger pool regenerates with the new pronunciation.
 - **`era`** — adds `Era: X.` to the station context, nudging the DJ to reference that period (e.g. `"80s and 90s"`, `"late 60s psychedelia"`). Leave `null` for no era bias.
 - **`genre_focus`** — list of genres injected into the station context (e.g. `["indie rock", "post-punk"]`). Prompts the DJ to make genre-aware connections between tracks. Purely a prompt hint — does not filter which tracks get played.
 - **`description`** — free-form station flavour text appended to the format line in the prompt.

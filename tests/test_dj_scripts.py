@@ -698,3 +698,76 @@ def test_generate_news_script_uses_lower_temperature(monkeypatch):
     cfg = AppConfig(openai_text_temperature=1.5)  # high default
     generate_news_script(cfg, newsreader_name="Alex")
     assert captured_temps == [0.7]
+
+
+# ── Station name placeholder substitution ───────────────────────────────────
+
+def test_substitute_station_placeholder_uses_spoken_name_when_set():
+    from app.dj_scripts import substitute_station_placeholder
+    cfg = AppConfig(station=StationConfig(
+        name="RadioDunc 107.2 FM",
+        spoken_name="Radio Dunk, one oh seven point two F M",
+    ))
+    result = substitute_station_placeholder(
+        "You're listening to [[STATION]]. We'll be right back.",
+        cfg,
+    )
+    assert result == "You're listening to Radio Dunk, one oh seven point two F M. We'll be right back."
+
+
+def test_substitute_station_placeholder_falls_back_to_name_when_spoken_unset():
+    from app.dj_scripts import substitute_station_placeholder
+    cfg = AppConfig(station=StationConfig(name="KVW 96", spoken_name=None))
+    result = substitute_station_placeholder("This is [[STATION]] tonight.", cfg)
+    assert result == "This is KVW 96 tonight."
+
+
+def test_substitute_station_placeholder_passthrough_when_no_placeholder():
+    from app.dj_scripts import substitute_station_placeholder
+    cfg = AppConfig(station=StationConfig(name="X FM"))
+    text = "No placeholder here, just text."
+    assert substitute_station_placeholder(text, cfg) == text
+
+
+def test_substitute_station_placeholder_handles_multiple_occurrences():
+    from app.dj_scripts import substitute_station_placeholder
+    cfg = AppConfig(station=StationConfig(name="KWV", spoken_name="K-W-V"))
+    result = substitute_station_placeholder(
+        "[[STATION]] always. You're on [[STATION]].",
+        cfg,
+    )
+    assert result == "K-W-V always. You're on K-W-V."
+
+
+def test_substitute_station_placeholder_handles_empty_or_none():
+    from app.dj_scripts import substitute_station_placeholder
+    cfg = AppConfig()
+    assert substitute_station_placeholder("", cfg) == ""
+    assert substitute_station_placeholder(None, cfg) is None
+
+
+def test_dj_prompt_tells_llm_to_emit_station_placeholder():
+    """Regression hook: the DJ prompt must instruct the LLM to emit [[STATION]]
+    rather than spelling the name out itself, since otherwise we lose the
+    pronunciation control."""
+    cfg = _make_config(name="Test 96")
+    prompt = _build_prompt(cfg.station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert "[[STATION]]" in prompt
+
+
+def test_station_id_prompt_requires_placeholder():
+    """Station-ID stingers are MEANT to name the station, so the placeholder
+    instruction is even more emphatic here ('every line must contain')."""
+    from app.dj_scripts import STATION_ID_PROMPT_TEMPLATE
+    assert "[[STATION]]" in STATION_ID_PROMPT_TEMPLATE
+
+
+def test_generate_ad_script_substitutes_station_placeholder(monkeypatch):
+    """Ads can reference the station ('brought to you by [[STATION]]'). The
+    substitution kicks in on the LLM's returned text."""
+    cfg = AppConfig(station=StationConfig(name="KWV", spoken_name="K Double-You V"))
+    with patch("app.dj_scripts._call_openai_text",
+               return_value="Brought to you by [[STATION]]. The bean for every scene."):
+        result = generate_ad_script(cfg.station, cfg)
+    assert "K Double-You V" in result
+    assert "[[STATION]]" not in result
