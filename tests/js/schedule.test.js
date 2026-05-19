@@ -101,6 +101,26 @@ describe('pure helpers', () => {
     expect(globalThis._dbToGainMultiplier(null)).toBe(1);
   });
 
+  it('_autoResizeTextarea sets height to scrollHeight on input', () => {
+    const ta = document.createElement('textarea');
+    document.body.appendChild(ta);
+    // Stub scrollHeight since happy-dom doesn't compute layout. Different
+    // value per call so we can assert the helper re-reads each time.
+    let mockScrollHeight = 50;
+    Object.defineProperty(ta, 'scrollHeight', { get: () => mockScrollHeight });
+
+    globalThis._autoResizeTextarea(ta);
+    expect(ta.style.height).toBe('50px');  // initial resize
+
+    mockScrollHeight = 120;
+    ta.dispatchEvent(new Event('input'));
+    expect(ta.style.height).toBe('120px');
+
+    mockScrollHeight = 70;  // user deletes content
+    ta.dispatchEvent(new Event('input'));
+    expect(ta.style.height).toBe('70px');  // shrinks back down
+  });
+
   it('volume slider ⇄ dB round-trip preserves the value', () => {
     // 50 → 0 dB; 0 → -12 dB; 100 → +12 dB. Symmetric, linear.
     expect(globalThis._volumeSliderToDb(50)).toBe(0);

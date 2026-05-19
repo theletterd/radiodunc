@@ -619,6 +619,11 @@ ul {
   min-height: 70px;
   resize: vertical;
   line-height: 1.4;
+  /* JS auto-grows the height to fit content (see _autoResizeTextarea in
+     app.js). overflow:hidden keeps the scrollHeight measurement accurate
+     and avoids a stray scrollbar appearing during the brief moment
+     between content change and resize. */
+  overflow: hidden;
 }
 .persona-form .voice-row {
   display: flex;
