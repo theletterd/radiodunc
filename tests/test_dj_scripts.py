@@ -206,6 +206,22 @@ def test_active_station_falls_back_when_no_match():
     assert eff.dj_name == "Default Dan"
 
 
+def test_persona_voice_gain_offset_db_always_wins():
+    """Even when a persona inherits the station's voice (persona.voice is null),
+    the persona's gain trim takes precedence over the station's. Matches the UI
+    behaviour: the slider on a persona affects THAT persona."""
+    persona = DJPersona(name="P", personality="x", voice=None, voice_gain_offset_db=4.0)
+    station = StationConfig(
+        dj_name="Default", voice="sage", voice_gain_offset_db=-3.0,
+        dj_roster=[persona],
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg, now=MONDAY_NOON)
+    # Persona's +4 wins over the station's -3, even though voice falls back to station's.
+    assert eff.voice == "sage"
+    assert eff.voice_gain_offset_db == 4.0
+
+
 # ── Ad script generation ──────────────────────────────────────────────────────
 
 def test_generate_ad_script_returns_text_from_openai_call():

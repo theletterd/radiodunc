@@ -44,7 +44,11 @@ function _autoResizeTextarea(el) {
 // UI slider goes 0..100 with 50 = neutral, mapping linearly to ±12 dB.
 // We hide dB from the form because it's developer-speak; the slider feels
 // like a volume knob ("quieter ←→ louder") which is what the user wants.
-const VOLUME_TRIM_DB_RANGE = 12;  // max ± dB at slider extremes
+// ±18 dB at the extremes. 18 dB = ~8× amplitude — enough to compensate even
+// the genuinely quiet voices (sage in particular). Higher than this and we'd
+// start clipping on the louder TTS peaks; the right answer past ±18 is to add
+// a DynamicsCompressorNode to the audio chain instead of pushing gain higher.
+const VOLUME_TRIM_DB_RANGE = 18;  // max ± dB at slider extremes
 function _volumeSliderToDb(slider) {
   const v = Number(slider);
   return ((Number.isFinite(v) ? v : 50) - 50) * VOLUME_TRIM_DB_RANGE / 50;
@@ -1402,9 +1406,11 @@ function _renderPersonaForm() {
       <label for="pf-volume-trim">Volume trim <span class="muted" style="text-transform:none; font-weight:400;">— dial down loud voices (sage, nova) or boost quiet ones</span></label>
       <div class="trim-row">
         <span class="trim-end">Quieter</span>
-        <input type="range" id="pf-volume-trim" min="0" max="100" step="1"
+        <input type="range" id="pf-volume-trim" name="rd-volume-trim"
+               min="0" max="100" step="1"
                value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}"
-               autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
+               autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+               data-form-type="other" />
         <span class="trim-end">Louder</span>
         <span class="trim-readout" id="pf-volume-readout">${_volumeSliderLabel(_dbToVolumeSlider(p.voice_gain_offset_db ?? 0))}</span>
       </div>
