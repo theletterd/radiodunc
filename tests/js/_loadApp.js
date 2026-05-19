@@ -38,13 +38,44 @@ const EXPORTED_NAMES = [
   // drag-to-move
   '_startMoveDrag', '_onMoveDragMove', '_onMoveDragEnd',
   '_onBlockMouseDown', '_onBlockClick',
+  // player rendering
+  'renderPlayer', 'renderQueue', 'renderAll',
+  'refreshServerState', 'refreshLibraryStatus',
+  'setOnAirMode', 'animateLabel',
+  // playback timing
+  'pausePlayback', 'resumePlayback', 'stopPlayback',
+  'clearAutoTrigger', 'scheduleAutoTrigger',
+  'clearModeTimers', 'scheduleMode',
+  'clearStingerTimer', 'clearPrefetchTimer', 'schedulePrefetch',
 ];
 
 function _appSource() {
   if (_cachedAppSource === null) {
     const raw = readFileSync(APP_JS_PATH, 'utf-8');
     const exports = EXPORTED_NAMES.map(n => `globalThis.${n} = ${n};`).join('\n');
-    _cachedAppSource = raw + '\n;\n' + exports + '\n';
+    // Expose the `schedulerWorkingPersona` let-binding via an accessor because
+    // let/const bindings can't be assigned to globalThis directly from outside
+    // the module scope. Tests call globalThis.__getSchedulerWorkingPersona()
+    // to read the current mutable form state without going through the DOM.
+    const accessor = `globalThis.__getSchedulerWorkingPersona = () => schedulerWorkingPersona;`;
+    // Accessors for private let-bindings needed by player render tests.
+    const playerAccessors = [
+      `globalThis.__setServerState = (s) => { serverState = s; };`,
+      `globalThis.__setCtx = (c) => { ctx = c; };`,
+      `globalThis.__getCtx = () => ctx;`,
+      `globalThis.__setPaused = (p) => { paused = p; };`,
+      `globalThis.__getPaused = () => paused;`,
+      `globalThis.__setOnAirModeVar = (m) => { onAirMode = m; };`,
+      `globalThis.__getOnAirMode = () => onAirMode;`,
+      `globalThis.__getAutoTriggerTimer = () => autoTriggerTimer;`,
+      `globalThis.__getAutoTriggerRemaining = () => _autoTriggerRemaining;`,
+      `globalThis.__getStingerTimer = () => _stingerTimer;`,
+      `globalThis.__getPrefetchTimer = () => _prefetchTimer;`,
+      `globalThis.__getModeTimers = () => _modeTimers;`,
+      `globalThis.__setActiveSlot = (s) => { activeSlot = s; };`,
+      `globalThis.__setSlots = (newSlots) => { for (const k in newSlots) slots[k] = newSlots[k]; };`,
+    ].join('\n');
+    _cachedAppSource = raw + '\n;\n' + exports + '\n' + accessor + '\n' + playerAccessors + '\n';
   }
   return _cachedAppSource;
 }
