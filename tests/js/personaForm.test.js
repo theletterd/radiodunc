@@ -66,7 +66,7 @@ describe('persona editor form', () => {
 
     await openEditor(0);
 
-    expect(document.getElementById('pf-name').value).toBe('Morgan');
+    expect(document.getElementById('pf-handle').value).toBe('Morgan');
     expect(document.getElementById('pf-personality').value).toBe('warm and welcoming');
     // happy-dom doesn't update select.value from innerHTML `selected` attributes,
     // so we check the selected option's value attribute directly.
@@ -82,7 +82,7 @@ describe('persona editor form', () => {
 
     await openEditor(-1);
 
-    expect(document.getElementById('pf-name').value).toBe('');
+    expect(document.getElementById('pf-handle').value).toBe('');
     expect(document.getElementById('pf-personality').value).toBe('');
     expect(document.getElementById('pf-voice').value).toBe('');
     expect(document.getElementById('pf-voice-instructions').value).toBe('');
@@ -191,7 +191,7 @@ describe('persona editor form', () => {
 
     await openEditor(0);
 
-    document.getElementById('pf-name').value = 'Morgan Updated';
+    document.getElementById('pf-handle').value = 'Morgan Updated';
     document.getElementById('pf-personality').value = 'energetic';
 
     const form = document.getElementById('personaForm');
@@ -215,7 +215,7 @@ describe('persona editor form', () => {
 
     await openEditor(-1);
 
-    document.getElementById('pf-name').value = 'Alex';
+    document.getElementById('pf-handle').value = 'Alex';
     document.getElementById('pf-personality').value = 'cool and calm';
 
     const form = document.getElementById('personaForm');

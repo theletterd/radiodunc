@@ -95,7 +95,7 @@ describe('drag-to-move', () => {
     // Editor should have opened: sub-view switches to 'edit' and form is populated.
     const panel = document.querySelector('.sidebar-scheduler');
     expect(panel?.dataset.subView).toBe('edit');
-    const nameInput = document.getElementById('pf-name');
+    const nameInput = document.getElementById('pf-handle');
     expect(nameInput?.value).toBe('Morgan');
   });
 

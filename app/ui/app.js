@@ -1383,9 +1383,13 @@ function _renderPersonaForm() {
   // "save this?" prompt because it scans every input it can see.
   form.innerHTML = `
     <div>
-      <label for="pf-name">Name</label>
-      <input type="text" id="pf-name" value="${_escapeAttr(p.name)}" required
-             autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
+      <label for="pf-handle">Name</label>
+      <!-- id intentionally NOT 'pf-name' — LastPass keyword-matches on 'name'
+           and tries to autofill the user's actual name. The label still
+           reads "Name" but the field id avoids the trigger. -->
+      <input type="text" id="pf-handle" value="${_escapeAttr(p.name)}" required
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+             aria-autocomplete="none" />
     </div>
     <div>
       <label for="pf-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY: attitude, slang, vibe</span></label>
@@ -1406,11 +1410,14 @@ function _renderPersonaForm() {
       <label for="pf-volume-trim">Volume trim <span class="muted" style="text-transform:none; font-weight:400;">— dial down loud voices (sage, nova) or boost quiet ones</span></label>
       <div class="trim-row">
         <span class="trim-end">Quieter</span>
-        <input type="range" id="pf-volume-trim" name="rd-volume-trim"
+        <!-- No name attribute: we read .value via JS, never submit it through
+             the form, and an unnamed input is one fewer fillable target LP
+             can latch onto. -->
+        <input type="range" id="pf-volume-trim"
                min="0" max="100" step="1"
                value="${_dbToVolumeSlider(p.voice_gain_offset_db ?? 0)}"
                autocomplete="off" data-lpignore="true" data-1p-ignore="true"
-               data-form-type="other" />
+               data-form-type="other" aria-autocomplete="none" />
         <span class="trim-end">Louder</span>
         <span class="trim-readout" id="pf-volume-readout">${_volumeSliderLabel(_dbToVolumeSlider(p.voice_gain_offset_db ?? 0))}</span>
       </div>
@@ -1541,7 +1548,7 @@ function _renderShifts() {
 
 function _readFormIntoWorkingPersona() {
   const p = schedulerWorkingPersona;
-  p.name = document.getElementById('pf-name').value.trim();
+  p.name = document.getElementById('pf-handle').value.trim();
   p.personality = document.getElementById('pf-personality').value.trim();
   const v = document.getElementById('pf-voice').value;
   p.voice = v || null;
