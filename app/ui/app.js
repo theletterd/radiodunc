@@ -1001,6 +1001,16 @@ async function _attachBlockClickHandlers() {
 
 let _suppressNextClick = false;
 
+// Set _suppressNextClick safely: also queues an auto-reset on the next macrotask
+// so the flag doesn't get stuck-true if the post-drag click never fires (e.g.
+// mouseup lands off the dragged block, or renderSchedule replaces the DOM
+// before the click is dispatched). Without this, ALL subsequent block clicks
+// got eaten silently until the schedule was closed and reopened.
+function _suppressClickOnce() {
+  _suppressNextClick = true;
+  setTimeout(() => { _suppressNextClick = false; }, 0);
+}
+
 function _onBlockMouseDown(e) {
   // Resize handles take precedence (they have their own mousedown handler).
   if (e.target.classList.contains('resize-handle')) return;
@@ -1114,7 +1124,7 @@ async function _onDragEnd() {
   _dragState.readout?.remove();
   // Defensive: a drag-resize that lands on the block body could otherwise
   // trigger _onBlockClick and open the editor.
-  _suppressNextClick = true;
+  _suppressClickOnce();
 
   const changed = _dragState.newStartHour !== _dragState.originalStartHour
                 || _dragState.newEndHour   !== _dragState.originalEndHour;
@@ -1243,7 +1253,7 @@ async function _onMoveDragEnd(e) {
   _moveState.block.style.cursor = 'grab';
   _moveState.readout?.remove();
   // Block the click that fires after mouseup on the same element.
-  _suppressNextClick = true;
+  _suppressClickOnce();
 
   const dayChanged = _moveState.newDayIdx !== _moveState.originalDayIdx;
   const startChanged = _moveState.newStart !== _moveState.originalStart;
