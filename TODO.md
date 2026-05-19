@@ -1,5 +1,49 @@
 # RadioDunc — Backlog
 
+## ☐ Spurious unprompted playback after lid-close / wake
+
+Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started
+playing on its own without any user gesture.
+
+Possible suspects:
+- The 10 s `setInterval(refreshServerState, 10_000)` rehydrates `serverState`
+  from the server, but `is_playing` should be false after Stop. Unless something
+  is re-setting it server-side?
+- The `visibilitychange` listener calls `refreshServerState()` on visible — but
+  refresh only updates state, doesn't trigger playback. Worth re-checking.
+- AudioContext suspend/resume interaction with the OS waking? Maybe the
+  context auto-resumed and triggered something via the audio element?
+- Did `triggerTransition` somehow fire from a stale timer that survived stop?
+  `stopPlayback` clears autoTrigger, prefetch, stinger, mode timers — looks
+  thorough but worth a re-audit.
+
+Plan when picked up:
+1. Add a one-line log at the top of `triggerTransition`, `startPlayback`, and
+   `resumeAfterRefresh` so we can see exactly which path fired on next repro.
+2. Audit every place we call `el.play()` or `ctx.resume()`.
+3. Confirm `stopPlayback` clears everything (it sets `_autoTriggerRemaining`
+   and `paused` to defaults — should be fine, but verify).
+
+## ☐ Always-async news generation — never block player_next on news
+
+Today `get_news_clip` is mostly async (20-min TTL with background refresh between
+20–30 min), but past 30 min OR on a cold cache it still generates **inline**,
+adding ~5 s of dead-air to that transition. Warmup helps but doesn't cover every
+edge (long pause between play sessions, server restart, etc.).
+
+Option leaning: serve whatever's cached when news is requested, even if expired.
+On every news-cadence hit, also kick off a background refresh if the cache is
+older than X minutes — so we proactively warm. If the cache is completely empty
+(very first news call after a fresh boot with no warmup), skip the news segment
+this round AND spawn the background refresh, so it's ready by the next cadence.
+
+End state: `_attach_news` is non-blocking by construction.
+
+Pick up when picked up:
+- Drop the 'inline regenerate on expiry' branch in `get_news_clip`
+- Treat cache absence as "skip this segment, queue a refresh"
+- Maybe add a debug log so we can see how often news was skipped due to cache miss
+
 ## ☐ Persona definition refactor — split personality from voice
 
 Today a persona is `dj_style` (free-text) + `voice` + `voice_instructions`.
