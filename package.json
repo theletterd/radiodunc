@@ -1,0 +1,15 @@
+{
+  "name": "radiodunc-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-side unit tests for RadioDunc's UI logic. The app itself runs without Node — this is test infra only.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.7",
+    "vitest": "^2.1.8"
+  }
+}

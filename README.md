@@ -174,9 +174,17 @@ radio_config.json          — your local config (gitignored)
 ## Running tests
 
 ```bash
+# Python suite only
 pytest -q
-# or: make test
+
+# JS suite only (requires `npm install` first)
+npm test
+
+# Both
+make test
 ```
+
+The JS tests use Vitest + happy-dom and live in `tests/js/`. They cover the UI logic in `app/ui/app.js`. Run `npm install` once after cloning to pull the dev deps.
 
 ## API overview
 
