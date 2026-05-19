@@ -771,3 +771,31 @@ def test_generate_ad_script_substitutes_station_placeholder(monkeypatch):
         result = generate_ad_script(cfg.station, cfg)
     assert "K Double-You V" in result
     assert "[[STATION]]" not in result
+# ── Legacy gain_offset_db migration (removed after compressor landed) ───────
+
+def test_news_voice_silently_drops_legacy_gain_offset_db():
+    """Configs saved during the per-voice trim era have gain_offset_db on
+    NewsVoice. The field was removed (compressor handles it), but loading
+    should NOT error — the validator strips it silently."""
+    from app.config import NewsVoice
+    # Should not raise.
+    v = NewsVoice(voice="sage", name="Sam", gain_offset_db=-3.0)
+    assert v.voice == "sage"
+    assert not hasattr(v, "gain_offset_db")
+
+
+def test_ad_voice_silently_drops_legacy_gain_offset_db():
+    from app.config import AdVoice
+    v = AdVoice(voice="echo", gain_offset_db=-3.0)
+    assert v.voice == "echo"
+    assert not hasattr(v, "gain_offset_db")
+
+
+def test_station_config_silently_drops_legacy_voice_gain_offset_db():
+    s = StationConfig(name="X", voice_gain_offset_db=-3.0)
+    assert not hasattr(s, "voice_gain_offset_db")
+
+
+def test_dj_persona_silently_drops_legacy_voice_gain_offset_db():
+    p = DJPersona(name="P", personality="x", voice_gain_offset_db=-3.0)
+    assert not hasattr(p, "voice_gain_offset_db")

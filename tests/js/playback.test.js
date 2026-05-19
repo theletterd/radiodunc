@@ -164,15 +164,24 @@ describe('setOnAirMode', () => {
     loadAppJs();
   });
 
-  it("setOnAirMode('dj') sets data-mode='dj' and queues '🎙️ On air' text", () => {
+  it("setOnAirMode('dj') sets data-mode='dj' and queues '🎙️ On air with [DJ]' text", async () => {
+    globalThis.__setServerState({ station: { dj_name: 'Ms. Jessica Danger' } });
     globalThis.setOnAirMode('dj');
     const el = document.getElementById('nowPlaying');
     expect(el.dataset.mode).toBe('dj');
-    // animateLabel is async — it sets textContent after the out-animation.
-    // In happy-dom the animation finishes immediately so textContent updates
-    // on the microtask after this call. We rely on the data-mode being set
-    // synchronously and check onAirMode.
     expect(globalThis.__getOnAirMode()).toBe('dj');
+    // animateLabel resolves on next microtask in happy-dom.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(el.textContent).toBe('🎙️ On air with Ms. Jessica Danger');
+  });
+
+  it("setOnAirMode('dj') falls back to plain 'On air' when no DJ name in serverState", async () => {
+    globalThis.__setServerState(null);
+    globalThis.setOnAirMode('dj');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(document.getElementById('nowPlaying').textContent).toBe('🎙️ On air');
   });
 
   it("setOnAirMode('ad') sets data-mode='ad' and onAirMode='ad'", () => {
