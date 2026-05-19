@@ -98,7 +98,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 
 ### DJ roster (scheduled personas)
 
-Add entries to `dj_roster` to swap DJ personality by day/hour:
+Add entries to `dj_roster` to swap DJ personality by day/hour. Each persona has a list of `shifts` — one entry per on-air slot, so a single persona can cover different hours on different days:
 
 ```json
 "dj_roster": [
@@ -107,14 +107,19 @@ Add entries to `dj_roster` to swap DJ personality by day/hour:
     "personality": "high-energy party host",
     "voice": "fable",
     "voice_instructions": "Upbeat and punchy. Fast-paced with infectious energy.",
-    "days": ["friday", "saturday"],
-    "start_hour": 20,
-    "end_hour": 23
+    "shifts": [
+      { "day": "friday", "start_hour": 20, "end_hour": 23 },
+      { "day": "saturday", "start_hour": 19, "end_hour": 1 }
+    ]
   }
 ]
 ```
 
-The first roster entry whose `days`/`start_hour`/`end_hour` matches the current time wins. Falls back to the base station DJ when nothing matches. `voice` and `voice_instructions` are optional per entry.
+`start_hour` ≤ `end_hour` means a contiguous slot; `start_hour > end_hour` wraps past midnight (so `22 → 3` covers 22, 23, 0, 1, 2, 3). The first roster entry whose `shifts` matches the current `(weekday, hour)` wins — order = priority. Falls back to the base station DJ when nothing matches. `voice` and `voice_instructions` are optional per entry.
+
+Old configs with `days` + `start_hour` + `end_hour` keep working — they're auto-migrated to `shifts` on load.
+
+**Editing the roster visually**: there's a schedule editor UI behind the **📅 The Schedule** button in the sidebar — weekly grid view, click a block to edit the persona, drag edges to resize shifts, drag the body to move them. A ▶ Preview button next to each voice field lets you audition the voice combo without waiting for a transition.
 
 ### Alerts
 
@@ -203,6 +208,9 @@ The JS tests use Vitest + happy-dom and live in `tests/js/`. They cover the UI l
 | `POST` | `/player/queue/reorder` | Drag-reorder queue items |
 | `POST` | `/player/queue/inject` | Inject a requested track |
 | `POST` | `/player/queue/extend` | Append more tracks to the queue |
+| `POST` | `/player/prefetch` | Pre-generate the next DJ clip in the background (client calls ~20 s before track end) |
+| `GET` | `/player/stinger-url` | Random cached station-ID clip URL — used by the client to cover dead-air on skips |
+| `POST` | `/tts/preview` | Synthesise an arbitrary line in a given voice + instructions; used by the persona editor |
 | `GET` | `/media/{track_id}` | Serve audio file |
 | `GET` | `/config` | Read current config |
-| `PUT` | `/config` | Update config |
+| `PUT` | `/config` | Update config (atomic — writes via temp file + rename) |
