@@ -69,8 +69,25 @@ def active_station(station: StationConfig, config: AppConfig, now: datetime | No
     })
 
 
+STATION_PLACEHOLDER = "[[STATION]]"
+
+
+def substitute_station_placeholder(script: str, config: AppConfig) -> str:
+    """Replace [[STATION]] in an LLM-generated script with the station's
+    spoken pronunciation. Uses spoken_name if set, falls back to name.
+
+    LLMs (and TTS engines) garble formatted station names like 'RadioDunc
+    107.2 FM' — they read '107.2' as 'one hundred and seven point two'
+    instead of 'one oh seven point two', or skip the FM, or change the
+    word order. Telling the LLM to emit a placeholder and substituting
+    here gets us deterministic, configurable pronunciation."""
+    if not script or STATION_PLACEHOLDER not in script:
+        return script
+    spoken = config.station.spoken_name or config.station.name
+    return script.replace(STATION_PLACEHOLDER, spoken)
+
 DEFAULT_DJ_PROMPT_TEMPLATE = """\
-Write a {max_sentences}-sentence radio DJ transition for '{station_name}'.
+Write a {max_sentences}-sentence radio DJ transition for the station named '{station_name}'.
 DJ: {dj_name} ({personality}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
 Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
@@ -78,7 +95,7 @@ We just heard: {previous_track}.
 Up next: {next_track}.
 {reason_block}{weather_block}{news_block}{ad_block}\
 Return plain text only — no headings, no markdown.
-When mentioning the station name, you MUST say it in full, e.g 'KVW 98 point 6 FM'"""
+When you would mention the station by name, write the literal placeholder [[STATION]] (with the double square brackets) — the radio software substitutes the correct spoken pronunciation before audio is generated. Never write the station name out as digits or abbreviations yourself."""
 
 
 # Curated category list. One is picked at random per call and injected into the
@@ -378,7 +395,8 @@ def generate_news_script(config: AppConfig, newsreader_name: str | None = None) 
     )
     # News should sound professional and predictable — pull temperature down
     # from the higher default we use for DJ banter.
-    return _call_openai_text(prompt, config, temperature=0.7)
+    result = _call_openai_text(prompt, config, temperature=0.7)
+    return substitute_station_placeholder(result, config) if result else result
 
 
 STATION_ID_CACHE_FILE = Path("generated_station_ids.json")
@@ -423,12 +441,15 @@ Vibe for this batch: {vibe}
 Each stinger should be:
 - ONE sentence, 4–10 words. Short and snappy.
 - Easy to say out loud.
-- Reference the station name naturally. Sometimes use the full name; sometimes
-  just the call letters or numbers.
+- Reference the station BY NAME. Write the literal placeholder [[STATION]]
+  (with the double square brackets) wherever you'd write the station name —
+  the radio software substitutes the spoken pronunciation before audio
+  generation. Examples: "This is [[STATION]].", "You're locked in to [[STATION]]."
 - Plain text only. No quotation marks, no numbering, no markdown, no emojis,
   no commentary.
 
-Return them as a plain list, one per line."""
+Return them as a plain list, one per line. Every line must contain [[STATION]]
+at least once."""
 
 
 def _load_station_id_cache() -> dict[str, list[str]]:
@@ -540,8 +561,13 @@ def get_station_id_phrases(config: AppConfig) -> list[str]:
 
     if not deduped:
         logger.warning("Station ID generation returned no usable phrases; using fallback")
-        deduped = [f"This is {station_name}."]
+        deduped = [f"This is {STATION_PLACEHOLDER}."]
 
+    # Substitute [[STATION]] with the configured spoken name before caching,
+    # so the on-disk JSON and the TTS clip hash both bake in the resolved
+    # pronunciation. If the user later changes spoken_name, deleting
+    # generated_station_ids.json regenerates with the new spelling.
+    deduped = [substitute_station_placeholder(p, config) for p in deduped]
     cache[station_name] = deduped
     _save_station_id_cache(cache)
     return deduped
@@ -570,7 +596,8 @@ def generate_ad_script(station: StationConfig, config: AppConfig) -> str | None:
         "Generating ad-break script via OpenAI",
         extra={"ad_category": fields["ad_category"][:60], "risque": is_risque},
     )
-    return _call_openai_text(prompt, config)
+    result = _call_openai_text(prompt, config)
+    return substitute_station_placeholder(result, config) if result else result
 
 
 def generate_dj_script(
@@ -618,6 +645,10 @@ def generate_dj_script(
     if config is not None:
         scripted = _generate_openai_script(station, payload, previous_track, next_track, config)
         if scripted:
+            # Replace [[STATION]] placeholders with the configured spoken
+            # pronunciation BEFORE splitting into sentences — so the substituted
+            # text gets the same trimming/cleaning everything else does.
+            scripted = substitute_station_placeholder(scripted, config)
             parts = [part.strip() for part in scripted.replace("\n", " ").split(".") if part.strip()]
             sentences = [f"{part}." for part in parts[: payload.max_sentences]]
             if sentences:

@@ -302,6 +302,19 @@ class StationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(default="RadioDunc", min_length=1)
+    spoken_name: str | None = Field(
+        default=None,
+        description=(
+            "Optional spelled-out version of the station name for TTS. Use this "
+            "when the written name has digits, abbreviations, or formatting that "
+            "the LLM and TTS engine mangle — write the phonetic form you want "
+            "heard. Example: name='RadioDunc 107.2 FM', spoken_name='Radio Dunk, "
+            "one oh seven point two F M'. The LLM is told to emit [[STATION]] "
+            "wherever it would mention the station; the server then substitutes "
+            "this string (falling back to `name`) before TTS. Leave null to use "
+            "`name` verbatim."
+        ),
+    )
     tagline: str = Field(default="Your personal AI radio station.", min_length=1)
     format: str = Field(default="Eclectic", min_length=1)
     description: str | None = None
