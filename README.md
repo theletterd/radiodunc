@@ -56,6 +56,7 @@ Open `http://127.0.0.1:8000` and hit **Play**.
 | `tts_provider` | `"tone"` | `"openai"` for real TTS, `"tone"` for a local beep placeholder |
 | `script_provider` | `"template"` | `"openai"` for LLM scripts, `"template"` for canned sentences |
 | `openai_text_model` | `"gpt-4o-mini"` | Model used for DJ script generation |
+| `openai_text_temperature` | `1.2` | Sampling temperature for text generation (0–2). The API default is 1.0; we lean slightly higher for variety in DJ banter and stinger phrases. News bulletins override this lower (0.7) for a professional tone. |
 | `openai_tts_model` | `"gpt-4o-mini-tts"` | Model used for TTS synthesis |
 | `openai_tts_voice` | `"alloy"` | Default TTS voice (OpenAI voice name) |
 | `playlist_artist_repeat_window` | `3` | Minimum tracks between same-artist plays |

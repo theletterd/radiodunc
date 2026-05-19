@@ -208,8 +208,11 @@ def _build_prompt(
     reason_block = ""
     if payload.reason == "skip":
         reason_block = (
-            "Reason: the audience didn't like the previous track. "
-            "Acknowledge that lightly and tee up the next one with extra enthusiasm.\n"
+            "Reason: the listener skipped that last track. React briefly in YOUR voice and pivot energy onto the next song.\n"
+            "AVOID these stock openings — they're canned LLM tells: "
+            "'Well, well, well…', 'Alright, alright, alright…', 'Okay then', 'Moving on', "
+            "'Not for everyone', 'Yeah, no', 'So…', 'Anyway'. Don't start with any of them.\n"
+            "Better: say something specific and interesting about the NEXT track instead of dwelling on the skip.\n"
         )
     elif payload.reason == "request":
         reason_block = (
@@ -252,8 +255,13 @@ def _build_prompt(
         return DEFAULT_DJ_PROMPT_TEMPLATE.format_map(fields)
 
 
-def _call_openai_text(prompt: str, config: AppConfig) -> str | None:
-    """POST a prompt to OpenAI's Responses API and return the text, or None on failure."""
+def _call_openai_text(prompt: str, config: AppConfig, *, temperature: float | None = None) -> str | None:
+    """POST a prompt to OpenAI's Responses API and return the text, or None on failure.
+
+    `temperature` overrides config.openai_text_temperature for this call only —
+    useful for tasks where we want lower variance than the default (e.g. news
+    bulletins, which should sound professional and predictable).
+    """
     if config.script_provider != "openai":
         logger.info("Skipping OpenAI text generation: script_provider=%s", config.script_provider)
         return None
@@ -261,9 +269,14 @@ def _call_openai_text(prompt: str, config: AppConfig) -> str | None:
         logger.warning("Skipping OpenAI text generation: OPENAI_API_KEY is missing")
         return None
 
+    effective_temp = temperature if temperature is not None else config.openai_text_temperature
     req = urllib.request.Request(
         "https://api.openai.com/v1/responses",
-        data=json.dumps({"model": config.openai_text_model, "input": prompt}).encode("utf-8"),
+        data=json.dumps({
+            "model": config.openai_text_model,
+            "input": prompt,
+            "temperature": effective_temp,
+        }).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {config.openai_api_key}"},
         method="POST",
     )
@@ -363,7 +376,9 @@ def generate_news_script(config: AppConfig, newsreader_name: str | None = None) 
         "Generating news bulletin via OpenAI",
         extra={"headline_count": len(feed["items"]), "source": feed["source"], "newsreader": newsreader_name or "anonymous"},
     )
-    return _call_openai_text(prompt, config)
+    # News should sound professional and predictable — pull temperature down
+    # from the higher default we use for DJ banter.
+    return _call_openai_text(prompt, config, temperature=0.7)
 
 
 STATION_ID_CACHE_FILE = Path("generated_station_ids.json")
