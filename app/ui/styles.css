@@ -400,6 +400,21 @@ ul {
   border-radius: 3px;
   display: inline-block;
 }
+.legend-swatch.default-swatch {
+  background: #334155;
+  border: 1px dashed #64748b;
+}
+.legend-swatch.warning-swatch {
+  background: #78350f;  /* amber-900 */
+  border: 1px solid #f59e0b;  /* amber-500 */
+}
+.legend-unscheduled {
+  cursor: pointer;
+  opacity: 0.85;
+}
+.legend-unscheduled:hover {
+  opacity: 1;
+}
 
 .schedule-grid {
   display: grid;
@@ -447,6 +462,32 @@ ul {
   text-shadow: 0 1px 2px rgba(0,0,0,0.35);
 }
 .grid-persona-block { position: relative; }
+/* Default-DJ slots get a dashed outline + muted fill so they read
+   immediately as "this is where the station's own DJ takes over" rather than
+   blending in with the colour-coded show blocks. */
+.grid-persona-block.default-dj {
+  background: rgba(51, 65, 85, 0.65) !important;  /* override inline #334155 */
+  border: 1px dashed #94a3b8;
+  color: #cbd5e1;
+}
+/* Two-line block layout: DJ name primary, show name caption underneath. */
+.grid-persona-block .block-primary {
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid-persona-block .block-caption {
+  font-weight: 400;
+  font-size: 0.62rem;
+  opacity: 0.85;
+  line-height: 1.1;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .grid-persona-block:hover {
   filter: brightness(1.15);
   box-shadow: 0 0 10px rgba(255,255,255,0.35);
@@ -862,4 +903,66 @@ ul {
   flex: 1;
   text-align: right;
   min-height: 1.2em;
+}
+
+/* ── Show editor: empty-shifts warning + inline DJ-create modal ─────────── */
+
+.empty-shifts-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid #f59e0b;  /* amber-500 */
+  color: #fbbf24;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  margin: 6px 0;
+}
+
+/* The DJ-create modal sits on top of the show editor when the user picks
+   "+ Create new DJ" from the picker. We absolutely-position it inside the
+   sidebar so the underlying form stays visible (greyed out) — the user sees
+   their in-progress Show edits while filling in the new DJ. */
+.dj-create-modal {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.82);
+  z-index: 50;
+  overflow-y: auto;
+  padding: 18px;
+}
+.dj-create-modal.open {
+  display: block;
+}
+.dj-create-modal-inner {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  max-width: 420px;
+  margin: 12px auto;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+}
+.dj-create-modal-inner label {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+}
+.dj-create-modal-inner input,
+.dj-create-modal-inner textarea,
+.dj-create-modal-inner select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.dj-create-modal-inner textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+.dj-create-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }

@@ -52,7 +52,7 @@
           <div id="scheduleLegend" class="schedule-legend"></div>
           <div id="scheduleGrid" class="schedule-grid"></div>
           <div class="row" style="margin-top:14px; justify-content:space-between;">
-            <button id="addPersonaBtn" class="primary">+ New persona</button>
+            <button id="addShowBtn" class="primary">+ New show</button>
             <span class="muted" style="font-size:0.72rem;">Click a block to edit</span>
           </div>
         </div>
@@ -66,9 +66,18 @@
                opt-out attribute set. A plain <div> with a button-driven save
                (wired up in JS via click, not submit) sidesteps the heuristic
                entirely. -->
-          <div id="personaForm" class="persona-form" role="group"
-               aria-label="Edit persona"></div>
+          <div id="showForm" class="persona-form" role="group"
+               aria-label="Edit show"></div>
         </div>
+
+        <!-- Inline DJ-create modal — opens over the Show editor when the user
+             picks "+ Create new DJ…" from the DJ picker. Hidden by default;
+             JS toggles its `.open` class. Preserves the in-progress Show
+             edits underneath. Slice 6 will introduce the full DJ Roster
+             takeover with a richer editor; this modal is the minimal subset
+             needed to keep the Show flow moving. -->
+        <div id="djCreateModal" class="dj-create-modal" role="dialog"
+             aria-label="Create new DJ" aria-modal="true"></div>
       </div>
 
       <!-- Station settings view (sidebar takeover, like the scheduler) -->

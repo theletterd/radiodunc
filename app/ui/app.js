@@ -899,24 +899,65 @@ function _appendCell(grid, content, className, col, row) {
   return el;
 }
 
-function _appendPersonaBlock(grid, persona, color, col, rowStart, rowEndExclusive, meta = {}) {
+// Resolve a Show's display: DJ name (primary), show name (caption), and the
+// colour applied to the block. dj_id=null means the Default DJ hosts the slot
+// — those get a distinct dashed-border treatment so the schedule reads at a
+// glance ("here's where the station's own DJ takes over").
+function _showDisplay(show, djsById, djColorByIdx, stationDjName) {
+  const isDefault = !show.dj_id;
+  const dj = isDefault ? null : djsById.get(show.dj_id);
+  const djName = dj ? dj.name : (stationDjName || 'Default DJ');
+  // Colour: use the DJ's position in djs[] so the same DJ is always the same
+  // colour, even when they host multiple shows. Default-DJ slots render in
+  // a neutral slate with a dashed outline; never picks up a palette colour.
+  const colour = (dj && djColorByIdx.has(dj.id))
+    ? djColorByIdx.get(dj.id)
+    : '#334155';  // matches the legend's "default" swatch
+  return { dj, djName, isDefault, colour, showName: show.name || '' };
+}
+
+function _appendShowBlock(grid, show, display, col, rowStart, rowEndExclusive, meta = {}) {
   const block = document.createElement('div');
   block.className = 'grid-persona-block';
+  if (display.isDefault) block.classList.add('default-dj');
   block.style.gridColumn = String(col);
   block.style.gridRow = `${rowStart} / ${rowEndExclusive}`;
-  block.style.backgroundColor = color;
-  block.title = `${persona.name} — ${persona.personality}`;
-  // Show the name only in the first block of a stack; for very short shifts,
-  // a 1-letter monogram avoids overflow.
-  const span = (rowEndExclusive - rowStart) >= 2 ? persona.name : persona.name.slice(0, 1);
-  block.textContent = span;
-  // Tag with indices so drag/click handlers can find their backing data.
-  if (meta.personaIdx != null) block.dataset.personaIdx = String(meta.personaIdx);
-  if (meta.shiftIdx   != null) block.dataset.shiftIdx   = String(meta.shiftIdx);
-  if (meta.isWrap)              block.dataset.isWrap     = '1';
-  if (meta.wrapHalf)            block.dataset.wrapHalf   = meta.wrapHalf;  // 'today' | 'tomorrow'
+  block.style.backgroundColor = display.colour;
+  // Tooltip carries DJ + show name + (if present) the DJ's personality so you
+  // get a quick read on hover without having to open the editor.
+  const tooltipParts = [display.djName];
+  if (display.showName) tooltipParts.push(`Show: ${display.showName}`);
+  if (display.dj?.personality) tooltipParts.push(display.dj.personality);
+  block.title = tooltipParts.join(' — ');
+
+  // Two-line layout when there's room: DJ name primary, show name caption
+  // below. Tight blocks (1 hour) fall back to a single-letter monogram so the
+  // grid stays readable.
+  const height = rowEndExclusive - rowStart;
+  if (height >= 2) {
+    const primary = document.createElement('div');
+    primary.className = 'block-primary';
+    primary.textContent = display.djName;
+    block.appendChild(primary);
+    if (display.showName && height >= 3) {
+      const caption = document.createElement('div');
+      caption.className = 'block-caption';
+      caption.textContent = display.showName;
+      block.appendChild(caption);
+    }
+  } else {
+    block.textContent = display.djName.slice(0, 1);
+  }
+
+  // Tag with the show id (stable across renders, even if list order changes)
+  // and the shift index so click + drag handlers can resolve the backing row.
+  block.dataset.showId = show.id;
+  if (meta.shiftIdx != null) block.dataset.shiftIdx = String(meta.shiftIdx);
+  if (meta.isWrap)            block.dataset.isWrap   = '1';
+  if (meta.wrapHalf)          block.dataset.wrapHalf = meta.wrapHalf;  // 'today' | 'tomorrow'
+
   // Add resize handles on non-wrap shifts. Wrap shifts (start > end render as
-  // two blocks across midnight) are still editable via the form for v1.
+  // two blocks across midnight) are still editable via the form.
   if (!meta.isWrap) {
     const top = document.createElement('div');    top.className    = 'resize-handle top';
     const bottom = document.createElement('div'); bottom.className = 'resize-handle bottom';
@@ -936,19 +977,61 @@ async function renderSchedule() {
   let config;
   try { config = await api('/config'); } catch (_) { return; }
   const station = config.station || {};
-  const roster = station.dj_roster || [];
+  const djs   = station.djs   || [];
+  const shows = station.shows || [];
+
+  // Build lookups. djColorByIdx pins each DJ to a stable palette index so
+  // every Show hosted by the same DJ paints in the same colour.
+  const djsById = new Map(djs.map(d => [d.id, d]));
+  const djColorByIdx = new Map(djs.map((d, i) => [d.id, _personaColor(i)]));
+
+  // Which DJs actually appear in any Show? Drives the legend so we don't show
+  // chips for orphan DJs (created but never scheduled). Slice 6's DJ Roster
+  // view will be the place to see those.
+  const djsUsed = new Set(shows.map(s => s.dj_id).filter(Boolean));
+  const anyDefaultSlot = shows.some(s => !s.dj_id);
 
   // ── Legend
   legend.innerHTML = '';
+  // Default-DJ chip — always present so users know who hosts unscheduled
+  // hours. Use the dashed-border swatch when a Show explicitly uses the
+  // default slot; solid otherwise still reads as "this is the fallback".
   const baseChip = document.createElement('span');
   baseChip.className = 'legend-item';
-  baseChip.innerHTML = `<span class="legend-swatch" style="background:#334155; border:1px dashed #64748b;"></span>` +
-                       `${station.dj_name || 'Base DJ'} (default)`;
+  const baseHint = anyDefaultSlot ? ' (default)' : ' (default, unused)';
+  baseChip.innerHTML = `<span class="legend-swatch default-swatch"></span>` +
+                       `${station.dj_name || 'Default DJ'}${baseHint}`;
   legend.appendChild(baseChip);
-  roster.forEach((persona, i) => {
+
+  djs.forEach((dj) => {
+    if (!djsUsed.has(dj.id)) return;  // orphan DJ — surfaces in the Roster, not here
     const chip = document.createElement('span');
     chip.className = 'legend-item';
-    chip.innerHTML = `<span class="legend-swatch" style="background:${_personaColor(i)};"></span>${persona.name}`;
+    // Tooltip lists the show names this DJ hosts (when any have a name). Makes
+    // the contrast between DJ identity and show identity legible at a glance.
+    const hosted = shows.filter(s => s.dj_id === dj.id);
+    const namedShows = hosted.map(s => s.name).filter(Boolean);
+    const tip = namedShows.length
+      ? `${dj.name} — hosts: ${namedShows.join(', ')}`
+      : `${dj.name}`;
+    chip.title = tip;
+    chip.innerHTML = `<span class="legend-swatch" style="background:${djColorByIdx.get(dj.id)};"></span>${dj.name}`;
+    legend.appendChild(chip);
+  });
+
+  // Surface Shows that exist but won't air (no shifts). They're invisible on
+  // the grid by design (the resolver skips them), but lurking-and-uneditable
+  // is worse than a soft "click to fix" affordance.
+  const unscheduled = shows.filter(s => !(s.shifts || []).length);
+  unscheduled.forEach((show) => {
+    const display = _showDisplay(show, djsById, djColorByIdx, station.dj_name);
+    const chip = document.createElement('span');
+    chip.className = 'legend-item legend-unscheduled';
+    chip.dataset.showId = show.id;
+    chip.title = 'No shifts — this show won\'t air. Click to add shifts.';
+    chip.innerHTML = `<span class="legend-swatch warning-swatch"></span>` +
+                     `${display.djName}${display.showName ? ` · ${display.showName}` : ''} <span class="muted">(no shifts)</span>`;
+    chip.addEventListener('click', () => _openShowEditor(show.id));
     legend.appendChild(chip);
   });
 
@@ -963,10 +1046,11 @@ async function renderSchedule() {
     _appendCell(grid, h % 3 === 0 ? String(h).padStart(2, '0') : '', 'grid-hour-label', 1, h + 2);
   }
 
-  // ── Persona blocks (iterate in roster order so we can show overlap warnings later)
-  roster.forEach((persona, personaIdx) => {
-    const color = _personaColor(personaIdx);
-    const shifts = persona.shifts || [];
+  // ── Show blocks (one block per shift; iterate in shows[] order so overlap
+  // ordering is predictable and matches the resolver's first-match-wins rule)
+  shows.forEach((show) => {
+    const display = _showDisplay(show, djsById, djColorByIdx, station.dj_name);
+    const shifts = show.shifts || [];
     shifts.forEach((shift, shiftIdx) => {
       const dayIdx = DAYS_FULL.indexOf(shift.day);
       if (dayIdx === -1) return;
@@ -974,14 +1058,14 @@ async function renderSchedule() {
       const start = Number(shift.start_hour);
       const end = Number(shift.end_hour);
       if (start <= end) {
-        _appendPersonaBlock(grid, persona, color, col, start + 2, end + 3, { personaIdx, shiftIdx });
+        _appendShowBlock(grid, show, display, col, start + 2, end + 3, { shiftIdx });
       } else {
         // Wraps past midnight: render two blocks (today + tomorrow)
-        _appendPersonaBlock(grid, persona, color, col, start + 2, 26,
-                            { personaIdx, shiftIdx, isWrap: true, wrapHalf: 'today' });
+        _appendShowBlock(grid, show, display, col, start + 2, 26,
+                         { shiftIdx, isWrap: true, wrapHalf: 'today' });
         const tomorrowCol = ((dayIdx + 1) % 7) + 2;
-        _appendPersonaBlock(grid, persona, color, tomorrowCol, 2, end + 3,
-                            { personaIdx, shiftIdx, isWrap: true, wrapHalf: 'tomorrow' });
+        _appendShowBlock(grid, show, display, tomorrowCol, 2, end + 3,
+                         { shiftIdx, isWrap: true, wrapHalf: 'tomorrow' });
       }
     });
   });
@@ -1075,8 +1159,8 @@ function _onBlockClick(e) {
     return;
   }
   if (e.target.classList.contains('resize-handle')) return;
-  const idx = Number(e.currentTarget.dataset.personaIdx);
-  if (!Number.isNaN(idx)) _openPersonaEditor(idx);
+  const showId = e.currentTarget.dataset.showId;
+  if (showId) _openShowEditor(showId);
 }
 
 // ── Drag-to-resize for shift blocks ─────────────────────────────────────────
@@ -1102,15 +1186,15 @@ async function _startResizeDrag(e) {
 
   let config;
   try { config = await api('/config'); } catch (_) { return; }
-  const personaIdx = Number(block.dataset.personaIdx);
+  const showId = block.dataset.showId;
   const shiftIdx = Number(block.dataset.shiftIdx);
-  const persona = config.station?.dj_roster?.[personaIdx];
-  const shift = persona?.shifts?.[shiftIdx];
+  const show = (config.station?.shows || []).find(s => s.id === showId);
+  const shift = show?.shifts?.[shiftIdx];
   if (!shift) return;
 
   _dragState = {
     config,
-    persona,
+    show,
     shift,
     block,
     edge: handle.dataset.edge,
@@ -1213,10 +1297,10 @@ async function _startMoveDrag(e) {
   const block = e.currentTarget;
   let config;
   try { config = await api('/config'); } catch (_) { return; }
-  const personaIdx = Number(block.dataset.personaIdx);
+  const showId = block.dataset.showId;
   const shiftIdx = Number(block.dataset.shiftIdx);
-  const persona = config.station?.dj_roster?.[personaIdx];
-  const shift = persona?.shifts?.[shiftIdx];
+  const show = (config.station?.shows || []).find(s => s.id === showId);
+  const shift = show?.shifts?.[shiftIdx];
   if (!shift) return;
 
   const start = Number(shift.start_hour);
@@ -1227,7 +1311,7 @@ async function _startMoveDrag(e) {
 
   _moveState = {
     config,
-    persona,
+    show,
     shift,
     block,
     startX: e.clientX,
@@ -1322,80 +1406,82 @@ async function _onMoveDragEnd(e) {
   }
 }
 
-// ── Persona editor form ─────────────────────────────────────────────────────
-// schedulerEditing: null = no form open; -1 = new persona; >=0 = index in roster
+// ── Show editor form ────────────────────────────────────────────────────────
+// schedulerEditing: null = no form open; '__new__' = new show; otherwise the
+// id of the show being edited (UUID string).
 let schedulerEditing = null;
-let schedulerWorkingPersona = null;  // mutable form state, written through on Save
+let schedulerWorkingShow = null;  // mutable form state for the Show
 
-async function _openPersonaEditor(personaIdx) {
+// Backwards-compat alias for the test infra that reads the working state via
+// __getSchedulerWorkingPersona. Same object — just two names so we can rename
+// the JS without breaking the harness in lock-step.
+function _getSchedulerWorking() { return schedulerWorkingShow; }
+
+async function _openShowEditor(showId) {
   let config;
   try { config = await api('/config'); } catch (_) { return; }
-  const roster = config.station?.dj_roster || [];
+  const shows = config.station?.shows || [];
 
-  if (personaIdx === -1) {
-    schedulerWorkingPersona = {
-      name: '',
-      personality: '',
-      voice: null,
-      voice_instructions: null,
+  if (showId === '__new__' || showId === -1 || showId == null) {
+    schedulerWorkingShow = {
+      id: (globalThis.crypto?.randomUUID?.() ?? `tmp-${Math.random().toString(36).slice(2)}`),
+      name: null,
+      dj_id: null,           // default DJ slot by default; user can pick
       shifts: [],
     };
+    schedulerEditing = '__new__';
   } else {
-    // Deep clone so cancel returns the original untouched.
-    schedulerWorkingPersona = JSON.parse(JSON.stringify(roster[personaIdx]));
-    // Old-shape configs that haven't been resaved may not have shifts yet.
-    schedulerWorkingPersona.shifts = schedulerWorkingPersona.shifts || [];
+    const found = shows.find(s => s.id === showId);
+    if (!found) return;
+    // Deep clone so Cancel returns the original untouched.
+    schedulerWorkingShow = JSON.parse(JSON.stringify(found));
+    schedulerWorkingShow.shifts = schedulerWorkingShow.shifts || [];
+    schedulerEditing = showId;
   }
-  schedulerEditing = personaIdx;
   // Switch to the edit sub-view BEFORE rendering, so the form's container
   // isn't display:none when _autoResizeTextarea reads scrollHeight (which
   // returns 0 on hidden elements, defeating the resize).
   _setSchedulerSubView('edit');
-  _renderPersonaForm();
+  await _renderShowForm();
 }
 
-function _renderPersonaForm() {
-  const form = document.getElementById('personaForm');
-  if (!form || !schedulerWorkingPersona) return;
+async function _renderShowForm() {
+  const form = document.getElementById('showForm');
+  if (!form || !schedulerWorkingShow) return;
 
-  const p = schedulerWorkingPersona;
-  const isNew = schedulerEditing === -1;
-  const previewSample = p.name
-    ? `Hi, you're listening to ${p.name} on RadioDunc.`
-    : `Hi, you're listening to RadioDunc.`;
+  // Pull the live config so the DJ picker reflects any DJs created via the
+  // inline modal in the same session.
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const djs = (config.station?.djs || []).slice().sort((a, b) => a.name.localeCompare(b.name));
 
-  // data-lpignore/data-1p-ignore stop LastPass and 1Password from popping
-  // their autofill UI on these fields. Sliders especially trigger LastPass'
-  // "save this?" prompt because it scans every input it can see.
+  const s = schedulerWorkingShow;
+  const isNew = schedulerEditing === '__new__';
+  const noShifts = !(s.shifts || []).length;
+
+  const djOption = (dj) =>
+    `<option value="${_escapeAttr(dj.id)}"${s.dj_id === dj.id ? ' selected' : ''}>${_escapeText(dj.name)}</option>`;
+
   form.innerHTML = `
     <div>
-      <label for="pf-handle">On-air handle <span class="muted" style="text-transform:none; font-weight:400;">— the name the DJ goes by</span></label>
-      <!-- LP keyword-matches on the visible label text. "Name" triggered
-           profile autofill; "On-air handle" doesn't. -->
-      <input type="text" id="pf-handle" value="${_escapeAttr(p.name)}" required
+      <label for="sf-name">Show name <span class="muted" style="text-transform:none; font-weight:400;">— optional, e.g. "Late Night Sessions"</span></label>
+      <input type="text" id="sf-name" value="${_escapeAttr(s.name || '')}" maxlength="50"
+             placeholder="Leave blank to use the DJ's name"
              autocomplete="off" data-lpignore="true" data-1p-ignore="true"
              aria-autocomplete="none" />
     </div>
     <div>
-      <label for="pf-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY: attitude, slang, vibe</span></label>
-      <textarea id="pf-personality" required autocomplete="off"
-                data-lpignore="true" data-1p-ignore="true">${_escapeText(p.personality)}</textarea>
+      <label for="sf-dj">DJ <span class="muted" style="text-transform:none; font-weight:400;">— who hosts this show</span></label>
+      <select id="sf-dj" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+        <option value=""${!s.dj_id ? ' selected' : ''}>(Default DJ)</option>
+        ${djs.map(djOption).join('')}
+        <option value="__new__">+ Create new DJ…</option>
+      </select>
     </div>
-    <div>
-      <label for="pf-voice">Voice</label>
-      <div class="voice-row">
-        <select id="pf-voice" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
-          <option value="">(use station default)</option>
-          ${OPENAI_VOICES.map(v => `<option value="${v}"${p.voice === v ? ' selected' : ''}>${v}</option>`).join('')}
-        </select>
-        <button type="button" class="preview-btn" id="pf-preview-btn">▶ Preview</button>
-      </div>
-    </div>
-    <div>
-      <label for="pf-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
-      <textarea id="pf-voice-instructions" autocomplete="off"
-                data-lpignore="true" data-1p-ignore="true">${_escapeText(p.voice_instructions || '')}</textarea>
-    </div>
+    ${noShifts ? `
+    <div class="empty-shifts-warning">
+      ⚠ No shifts — this show won't air. Add at least one shift below.
+    </div>` : ''}
     <div>
       <label>Shifts</label>
       <div id="pf-shifts" class="shifts-list"></div>
@@ -1404,7 +1490,7 @@ function _renderPersonaForm() {
     <div class="preview-status" id="pf-preview-status"></div>
     <div class="persona-form-actions">
       <div class="left-group">
-        <button type="button" id="pf-save" class="primary">${isNew ? 'Create persona' : 'Save changes'}</button>
+        <button type="button" id="pf-save" class="primary">${isNew ? 'Create show' : 'Save changes'}</button>
         <button type="button" id="pf-cancel">Cancel</button>
       </div>
       ${isNew ? '' : '<button type="button" class="delete-btn" id="pf-delete">Delete</button>'}
@@ -1413,23 +1499,124 @@ function _renderPersonaForm() {
 
   _renderShifts();
 
-  // Personality and voice_instructions grow as you type; existing content
-  // also opens at the right size instead of being trapped in a tiny scrollable box.
-  _autoResizeTextarea(form.querySelector('#pf-personality'));
-  _autoResizeTextarea(form.querySelector('#pf-voice-instructions'));
-
+  form.querySelector('#sf-name').addEventListener('input', (e) => {
+    const v = e.target.value.trim();
+    schedulerWorkingShow.name = v || null;
+  });
+  form.querySelector('#sf-dj').addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v === '__new__') {
+      // Snap the picker back to its current value while the modal is open —
+      // if the user cancels, nothing should appear to have changed yet.
+      e.target.value = s.dj_id || '';
+      _openDJCreateModal();
+    } else {
+      schedulerWorkingShow.dj_id = v || null;
+    }
+  });
   form.querySelector('#pf-cancel').addEventListener('click', () => _setSchedulerSubView('grid'));
   form.querySelector('#pf-add-shift').addEventListener('click', () => {
-    p.shifts.push({ day: 'monday', start_hour: 9, end_hour: 17 });
-    _renderShifts();
+    schedulerWorkingShow.shifts.push({ day: 'monday', start_hour: 9, end_hour: 17 });
+    _renderShowForm();  // re-render so the empty-shifts warning disappears
   });
-  form.querySelector('#pf-preview-btn').addEventListener('click', () => _previewVoice(previewSample));
 
   if (!isNew) {
-    form.querySelector('#pf-delete').addEventListener('click', _deletePersona);
+    form.querySelector('#pf-delete').addEventListener('click', _deleteShow);
   }
-  // No <form>, no submit event. Wire the Save button directly.
-  form.querySelector('#pf-save').addEventListener('click', _savePersona);
+  form.querySelector('#pf-save').addEventListener('click', _saveShow);
+}
+
+// ── Inline "Create new DJ" modal ─────────────────────────────────────────────
+// Triggered from the Show editor's DJ picker. Minimal subset of fields —
+// slice 6's full DJ Roster view is the place to set up rich identities. This
+// is just enough to keep the Show flow uninterrupted: name, personality,
+// voice, voice instructions.
+function _openDJCreateModal() {
+  const modal = document.getElementById('djCreateModal');
+  if (!modal) return;
+  modal.classList.add('open');
+  modal.innerHTML = `
+    <div class="dj-create-modal-inner">
+      <h3 style="margin:0 0 10px 0;">Create new DJ</h3>
+      <p class="muted" style="margin:0 0 14px 0;">Quick-add a DJ for this show. You can flesh out the rest later in the DJ Roster.</p>
+      <div>
+        <label for="dj-modal-name">On-air handle</label>
+        <input type="text" id="dj-modal-name" required
+               autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+               aria-autocomplete="none" />
+      </div>
+      <div>
+        <label for="dj-modal-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY</span></label>
+        <textarea id="dj-modal-personality" required autocomplete="off"
+                  data-lpignore="true" data-1p-ignore="true"></textarea>
+      </div>
+      <div>
+        <label for="dj-modal-voice">Voice</label>
+        <select id="dj-modal-voice" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+          <option value="">(use station default)</option>
+          ${OPENAI_VOICES.map(v => `<option value="${v}">${v}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label for="dj-modal-voice-instructions">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— optional</span></label>
+        <textarea id="dj-modal-voice-instructions" autocomplete="off"
+                  data-lpignore="true" data-1p-ignore="true"></textarea>
+      </div>
+      <div class="dj-create-modal-actions">
+        <button type="button" id="dj-modal-save" class="primary">Create DJ</button>
+        <button type="button" id="dj-modal-cancel">Cancel</button>
+      </div>
+      <div class="preview-status" id="dj-modal-status"></div>
+    </div>
+  `;
+  modal.querySelector('#dj-modal-cancel').addEventListener('click', _closeDJCreateModal);
+  modal.querySelector('#dj-modal-save').addEventListener('click', _saveDJCreate);
+  modal.querySelector('#dj-modal-name').focus();
+}
+
+function _closeDJCreateModal() {
+  const modal = document.getElementById('djCreateModal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.innerHTML = '';
+}
+
+async function _saveDJCreate() {
+  const name = document.getElementById('dj-modal-name').value.trim();
+  const personality = document.getElementById('dj-modal-personality').value.trim();
+  const voice = document.getElementById('dj-modal-voice').value || null;
+  const voiceInstructions = document.getElementById('dj-modal-voice-instructions').value.trim() || null;
+  const status = document.getElementById('dj-modal-status');
+  if (!name || !personality) {
+    status.textContent = 'Name and personality are required.';
+    return;
+  }
+  const newDJ = {
+    id: (globalThis.crypto?.randomUUID?.() ?? `tmp-${Math.random().toString(36).slice(2)}`),
+    name,
+    personality,
+    voice,
+    voice_instructions: voiceInstructions,
+    prompt_template: null,
+  };
+  status.textContent = 'Saving…';
+  let config;
+  try { config = await api('/config'); } catch (_) { status.textContent = 'Could not load config.'; return; }
+  config.station = config.station || {};
+  config.station.djs = config.station.djs || [];
+  config.station.djs.push(newDJ);
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+  } catch (err) {
+    status.textContent = `Save failed: ${err.message}`;
+    return;
+  }
+  // Pre-select the new DJ in the Show picker and close the modal. We don't
+  // need to re-fetch — _renderShowForm pulls a fresh config which includes
+  // the just-saved DJ.
+  schedulerWorkingShow.dj_id = newDJ.id;
+  _closeDJCreateModal();
+  await _renderShowForm();
 }
 
 // Format an hour boundary 0..24 as "midnight" / "noon" / "Nam" / "Npm".
@@ -1453,7 +1640,7 @@ function _renderShifts() {
   if (!container) return;
   container.innerHTML = '';
 
-  schedulerWorkingPersona.shifts.forEach((shift, i) => {
+  schedulerWorkingShow.shifts.forEach((shift, i) => {
     const row = document.createElement('div');
     row.className = 'shift-row';
     row.innerHTML = `
@@ -1475,15 +1662,17 @@ function _renderShifts() {
   container.querySelectorAll('[data-shift-i]').forEach(el => {
     if (el.classList.contains('remove-shift')) {
       el.addEventListener('click', () => {
-        schedulerWorkingPersona.shifts.splice(Number(el.dataset.shiftI), 1);
-        _renderShifts();
+        schedulerWorkingShow.shifts.splice(Number(el.dataset.shiftI), 1);
+        // Full re-render so the empty-shifts warning reappears once the last
+        // shift is gone.
+        _renderShowForm();
       });
     } else if (el.tagName === 'SPAN') {
       // Readout — no listeners needed.
     } else {
       const refreshReadout = () => {
         const i = Number(el.dataset.shiftI);
-        const s = schedulerWorkingPersona.shifts[i];
+        const s = schedulerWorkingShow.shifts[i];
         const readout = container.querySelector(`span.shift-readout[data-shift-i="${i}"]`);
         if (readout) readout.textContent = _fmtShiftRange(s.start_hour, s.end_hour);
       };
@@ -1491,7 +1680,7 @@ function _renderShifts() {
         const i = Number(el.dataset.shiftI);
         const field = el.dataset.field;
         const value = field === 'day' ? el.value : Number(el.value);
-        schedulerWorkingPersona.shifts[i][field] = value;
+        schedulerWorkingShow.shifts[i][field] = value;
         refreshReadout();
       });
       // Live-update on every keystroke too, not just on blur.
@@ -1499,70 +1688,49 @@ function _renderShifts() {
         const i = Number(el.dataset.shiftI);
         const field = el.dataset.field;
         const v = Number(el.value);
-        if (!Number.isNaN(v)) schedulerWorkingPersona.shifts[i][field] = v;
+        if (!Number.isNaN(v)) schedulerWorkingShow.shifts[i][field] = v;
         refreshReadout();
       });
     }
   });
 }
 
-function _readFormIntoWorkingPersona() {
-  const p = schedulerWorkingPersona;
-  p.name = document.getElementById('pf-handle').value.trim();
-  p.personality = document.getElementById('pf-personality').value.trim();
-  const v = document.getElementById('pf-voice').value;
-  p.voice = v || null;
-  const vi = document.getElementById('pf-voice-instructions').value.trim();
-  p.voice_instructions = vi || null;
-}
-
-async function _previewVoice(sampleText) {
-  _readFormIntoWorkingPersona();
-  const btn = document.getElementById('pf-preview-btn');
-  const status = document.getElementById('pf-preview-status');
-  btn.disabled = true;
-  status.textContent = 'Synthesizing preview…';
-  try {
-    const resp = await api('/tts/preview', {
-      method: 'POST',
-      body: JSON.stringify({
-        text: sampleText,
-        voice: schedulerWorkingPersona.voice,
-        voice_instructions: schedulerWorkingPersona.voice_instructions,
-      }),
-    });
-    // Play the preview clip via a plain HTMLAudioElement now that there's no
-    // per-voice trim to apply. The system's master volume + the on-page
-    // volume slider give the user enough control.
-    const audio = new Audio(resp.clip_url);
-    status.textContent = 'Playing…';
-    audio.onended = () => { status.textContent = ''; };
-    audio.onerror = () => { status.textContent = 'Playback failed.'; };
-    await audio.play();
-  } catch (err) {
-    status.textContent = `Preview failed: ${err.message}`;
-  } finally {
-    btn.disabled = false;
+function _readFormIntoWorkingShow() {
+  // The form inputs write through to schedulerWorkingShow on input/change, so
+  // by the time Save fires the state is already current. This is left as a
+  // helper for tests/code that want to force-sync without dispatching events.
+  const nameEl = document.getElementById('sf-name');
+  if (nameEl) {
+    const v = nameEl.value.trim();
+    schedulerWorkingShow.name = v || null;
+  }
+  const djEl = document.getElementById('sf-dj');
+  if (djEl && djEl.value !== '__new__') {
+    schedulerWorkingShow.dj_id = djEl.value || null;
   }
 }
 
-async function _savePersona(event) {
-  // Called as a button click handler now (not form submit), so there's no
-  // default to prevent — but keep the call so unit tests can pass a real
-  // Event if they want.
+async function _saveShow(event) {
   event?.preventDefault?.();
-  _readFormIntoWorkingPersona();
+  _readFormIntoWorkingShow();
   const status = document.getElementById('pf-preview-status');
 
   let config;
   try { config = await api('/config'); } catch (_) { return; }
   config.station = config.station || {};
-  config.station.dj_roster = config.station.dj_roster || [];
+  config.station.shows = config.station.shows || [];
 
-  if (schedulerEditing === -1) {
-    config.station.dj_roster.push(schedulerWorkingPersona);
+  if (schedulerEditing === '__new__') {
+    config.station.shows.push(schedulerWorkingShow);
   } else {
-    config.station.dj_roster[schedulerEditing] = schedulerWorkingPersona;
+    const idx = config.station.shows.findIndex(s => s.id === schedulerEditing);
+    if (idx === -1) {
+      // Edited Show was removed out from under us (concurrent edit elsewhere).
+      // Append rather than silently dropping the user's changes.
+      config.station.shows.push(schedulerWorkingShow);
+    } else {
+      config.station.shows[idx] = schedulerWorkingShow;
+    }
   }
 
   status.textContent = 'Saving…';
@@ -1576,13 +1744,18 @@ async function _savePersona(event) {
   }
 }
 
-async function _deletePersona() {
-  if (schedulerEditing === -1) return;
-  if (!confirm(`Delete persona "${schedulerWorkingPersona.name}"? This cannot be undone.`)) return;
+async function _deleteShow() {
+  if (schedulerEditing === '__new__') return;
+  const label = schedulerWorkingShow.name
+    ? `the show "${schedulerWorkingShow.name}"`
+    : 'this show';
+  if (!confirm(`Delete ${label}? The DJ identity stays in the roster.`)) return;
 
   let config;
   try { config = await api('/config'); } catch (_) { return; }
-  config.station.dj_roster.splice(schedulerEditing, 1);
+  const shows = config.station.shows || [];
+  const idx = shows.findIndex(s => s.id === schedulerEditing);
+  if (idx !== -1) shows.splice(idx, 1);
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(config) });
     _setSchedulerSubView('grid');
@@ -1946,7 +2119,7 @@ async function init() {
   document.getElementById('openSchedulerBtn')?.addEventListener('click', () => _setSchedulerMode(true));
   document.getElementById('closeSchedulerBtn')?.addEventListener('click', () => _setSchedulerMode(false));
   document.getElementById('backToGridBtn')?.addEventListener('click', () => _setSchedulerSubView('grid'));
-  document.getElementById('addPersonaBtn')?.addEventListener('click', () => _openPersonaEditor(-1));
+  document.getElementById('addShowBtn')?.addEventListener('click', () => _openShowEditor('__new__'));
 
   // Settings sidebar takeover.
   document.getElementById('openSettingsBtn')?.addEventListener('click', _openSettings);
