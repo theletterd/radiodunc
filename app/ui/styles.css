@@ -511,9 +511,13 @@ ul {
 .wrap[data-mode="scheduler"] {
   grid-template-columns: 780px 1fr;
 }
+.wrap[data-mode="settings"] {
+  grid-template-columns: 520px 1fr;
+}
 .sidebar-view { display: none; }
 .wrap[data-mode="default"]   .sidebar-default   { display: block; }
 .wrap[data-mode="scheduler"] .sidebar-scheduler { display: flex; flex-direction: column; }
+.wrap[data-mode="settings"]  .sidebar-settings  { display: flex; flex-direction: column; }
 
 /* ── Schedule trigger button in default sidebar ── */
 .sidebar-action {
@@ -750,5 +754,112 @@ ul {
   font-size: 0.75rem;
   color: var(--muted);
   margin-top: 4px;
+  min-height: 1.2em;
+}
+
+/* ── Station settings form ── */
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  /* Sidebar already manages the outer scroll, but cap so the action bar at
+     the bottom of the form stays visible without an extra scrollbar. */
+}
+.settings-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.settings-section > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-section > summary::-webkit-details-marker { display: none; }
+.settings-section > summary::after {
+  content: '▸';
+  color: var(--muted);
+  font-size: 0.7rem;
+  transition: transform 0.15s;
+}
+.settings-section[open] > summary::after { transform: rotate(90deg); }
+.settings-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+.settings-field label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.settings-field .field-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 4px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.settings-field input[type="text"],
+.settings-field input[type="number"],
+.settings-field textarea {
+  width: 100%;
+}
+.settings-field textarea {
+  min-height: 60px;
+  resize: vertical;
+}
+.settings-field-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-field-checkbox label {
+  margin: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.settings-actions .status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex: 1;
+  text-align: right;
   min-height: 1.2em;
 }

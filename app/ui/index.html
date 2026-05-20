@@ -23,6 +23,10 @@
           <span class="emoji">📅</span> The Schedule
         </button>
 
+        <button id="openSettingsBtn" class="sidebar-action">
+          <span class="emoji">⚙</span> Station Settings
+        </button>
+
         <details>
           <summary>Library Setup</summary>
           <div class="card">
@@ -65,6 +69,19 @@
           <div id="personaForm" class="persona-form" role="group"
                aria-label="Edit persona"></div>
         </div>
+      </div>
+
+      <!-- Station settings view (sidebar takeover, like the scheduler) -->
+      <div class="sidebar-view sidebar-settings">
+        <div class="scheduler-header">
+          <h2 class="scheduler-title">⚙ Station Settings</h2>
+          <button id="closeSettingsBtn" class="icon-button" title="Close settings">‹</button>
+        </div>
+        <!-- Form is rendered into here by _renderSettingsForm(). Same anti-LP
+             rationale as the persona form: a plain <div>, no <form> tag,
+             button-driven save wired up in JS. -->
+        <div id="settingsForm" class="settings-form" role="group"
+             aria-label="Station settings"></div>
       </div>
     </aside>
 

@@ -1,22 +1,21 @@
 # RadioDunc — Backlog
 
-## ☐ Move more settings into the UI
+## ✅ Move more settings into the UI
 
-Right now the schedule editor only exposes persona/DJ fields. Stuff still
-hidden in radio_config.json that users routinely want to tweak:
+Shipped: "⚙ Station Settings" sidebar takeover that parallels the
+schedule editor. Six collapsible sections (Station identity, Weather,
+News, Ads, Station IDs, AI). Save merges back onto the live config so
+fields the panel doesn't expose (dj_roster, voice pools) round-trip
+untouched.
 
-- `alerts.weather_location` / `weather_latitude` / `weather_longitude`
-- `alerts.weather.every_n_breaks`, `alerts.news.every_n_breaks`,
-  `alerts.ads.every_n_breaks` (segment cadences)
-- `alerts.news.rss_url`, `alerts.news.headline_count`
-- `alerts.ads.enabled` / `risque_chance` / `pool_size`
-- `alerts.station_id.enabled` / `phrase_count`
-- `station.name` / `tagline` / `format` / `description` / `era` / `genre_focus`
-- `openai_text_temperature`
-
-End state: a "Station settings" panel (probably another sidebar takeover
-like the schedule editor) with grouped forms. Each tweak hits PUT /config
-the same way persona edits do.
+Deliberately still json-only:
+- `alerts.news.voices` / `alerts.ads.voices` — arrays of voice+
+  instructions entries; need their own mini-editor (probably next
+  iteration).
+- `*.prompt_template` overrides — power-user knobs, easy to misuse.
+- `local_time_zone`, `tts_provider`, `openai_*_model`,
+  `playlist_artist_repeat_window`, `core_artists`, `music_folder` —
+  infrequent enough to leave in json.
 
 ## ☐ DJ roster with AI-generated icons
 

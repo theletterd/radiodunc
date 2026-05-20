@@ -1595,6 +1595,204 @@ async function _deletePersona() {
 function _escapeAttr(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 function _escapeText(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// ── Station settings sidebar ────────────────────────────────────────────────
+// Mirrors the scheduler takeover: sidebar expands, we render a grouped form
+// for the most-tweaked AppConfig fields. The form deliberately omits fields
+// already covered elsewhere (dj_roster — schedule editor) and the structured
+// voice pools (alerts.news.voices, alerts.ads.voices — those need their own
+// editor and are still json-only for now). All other top-level config values
+// pass through unchanged on save.
+
+// Read the form values back onto a (deep-cloned) copy of the live config and
+// PUT it. Kept as a free function so unit tests can exercise it without going
+// through the DOM-bound _saveSettings.
+function _applySettingsForm(config, formEl) {
+  const get   = (id) => formEl.querySelector(`#${id}`);
+  const text  = (id) => get(id).value.trim();
+  const opt   = (id) => text(id) || null;            // empty → null
+  const num   = (id) => { const v = Number(get(id).value); return Number.isFinite(v) ? v : null; };
+  const numOr = (id, fallback) => { const v = num(id); return v === null ? fallback : v; };
+  const check = (id) => get(id).checked;
+  const csv   = (id) => text(id).split(',').map(s => s.trim()).filter(Boolean);
+
+  const station = config.station = config.station || {};
+  station.name           = text('s-name') || station.name;
+  station.spoken_name    = opt('s-spoken-name');
+  station.tagline        = text('s-tagline') || station.tagline;
+  station.format         = text('s-format') || station.format;
+  station.description    = opt('s-description');
+  station.era            = opt('s-era');
+  station.genre_focus    = csv('s-genre-focus');
+
+  const alerts = config.alerts = config.alerts || {};
+  alerts.weather_location  = text('s-weather-location') || alerts.weather_location;
+  alerts.weather_latitude  = get('s-weather-lat').value === '' ? null : numOr('s-weather-lat', null);
+  alerts.weather_longitude = get('s-weather-lon').value === '' ? null : numOr('s-weather-lon', null);
+
+  alerts.weather = alerts.weather || {};
+  alerts.weather.enabled        = check('s-weather-enabled');
+  alerts.weather.every_n_breaks = numOr('s-weather-cadence', 0);
+
+  alerts.news = alerts.news || {};
+  alerts.news.enabled        = check('s-news-enabled');
+  alerts.news.rss_url        = text('s-news-rss') || alerts.news.rss_url;
+  alerts.news.headline_count = numOr('s-news-count', 3);
+  alerts.news.every_n_breaks = numOr('s-news-cadence', 0);
+
+  alerts.ads = alerts.ads || {};
+  alerts.ads.enabled        = check('s-ads-enabled');
+  alerts.ads.every_n_breaks = numOr('s-ads-cadence', 0);
+  alerts.ads.pool_size      = numOr('s-ads-pool', 100);
+  alerts.ads.risque_chance  = numOr('s-ads-risque', 0.1);
+
+  alerts.station_id = alerts.station_id || {};
+  alerts.station_id.enabled      = check('s-sid-enabled');
+  alerts.station_id.phrase_count = numOr('s-sid-count', 40);
+
+  config.openai_text_temperature = numOr('s-temperature', 1.2);
+  return config;
+}
+
+function _renderSettingsForm(config) {
+  const form = document.getElementById('settingsForm');
+  if (!form) return;
+  const s = config.station   || {};
+  const a = config.alerts    || {};
+  const w = a.weather        || {};
+  const n = a.news           || {};
+  const ad = a.ads           || {};
+  const sid = a.station_id   || {};
+
+  // Helpers to keep the template scannable.
+  const textField = (id, label, value, hint = '', { type = 'text', step, min, max } = {}) => `
+    <div class="settings-field">
+      <label for="${id}">${label}</label>
+      <input type="${type}" id="${id}" value="${_escapeAttr(value ?? '')}"
+             ${step != null ? `step="${step}"` : ''} ${min != null ? `min="${min}"` : ''} ${max != null ? `max="${max}"` : ''}
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true" />
+      ${hint ? `<div class="field-hint">${hint}</div>` : ''}
+    </div>`;
+  const numField = (id, label, value, hint = '', { step = 1, min, max } = {}) =>
+    textField(id, label, value, hint, { type: 'number', step, min, max });
+  const checkField = (id, label, checked, hint = '') => `
+    <div class="settings-field">
+      <div class="settings-field-checkbox">
+        <input type="checkbox" id="${id}" ${checked ? 'checked' : ''} />
+        <label for="${id}">${label}</label>
+      </div>
+      ${hint ? `<div class="field-hint">${hint}</div>` : ''}
+    </div>`;
+
+  form.innerHTML = `
+    <details class="settings-section" open>
+      <summary>Station identity</summary>
+      <div class="settings-section-body">
+        ${textField('s-name', 'Name', s.name, 'Shown on screen and in DJ banter.')}
+        ${textField('s-spoken-name', 'Spoken name', s.spoken_name, 'Phonetic form for TTS. Leave blank to use the name as-is. Example: "Radio Dunk, one oh seven point two F M".')}
+        ${textField('s-tagline', 'Tagline', s.tagline)}
+        ${textField('s-format', 'Format', s.format, 'e.g. "Eclectic", "Indie rock", "Late-night chill".')}
+        <div class="settings-field">
+          <label for="s-description">Description</label>
+          <textarea id="s-description" autocomplete="off" data-lpignore="true" data-1p-ignore="true">${_escapeText(s.description || '')}</textarea>
+        </div>
+        ${textField('s-era', 'Era', s.era, 'Optional. e.g. "90s", "2010s indie".')}
+        ${textField('s-genre-focus', 'Genre focus', (s.genre_focus || []).join(', '), 'Comma-separated.')}
+      </div>
+    </details>
+
+    <details class="settings-section">
+      <summary>Weather</summary>
+      <div class="settings-section-body">
+        ${checkField('s-weather-enabled', 'Enable weather reports', w.enabled !== false)}
+        ${textField('s-weather-location', 'Location name', a.weather_location, 'Spoken in the DJ&rsquo;s weather mention.')}
+        <div class="settings-row">
+          ${numField('s-weather-lat', 'Latitude', a.weather_latitude, '', { step: 0.0001 })}
+          ${numField('s-weather-lon', 'Longitude', a.weather_longitude, '', { step: 0.0001 })}
+        </div>
+        ${numField('s-weather-cadence', 'Every N breaks', w.every_n_breaks ?? 4, '0 = never. 1 = every break. 4 = roughly every 12–20 min.', { min: 0 })}
+      </div>
+    </details>
+
+    <details class="settings-section">
+      <summary>News</summary>
+      <div class="settings-section-body">
+        ${checkField('s-news-enabled', 'Enable news bulletins', n.enabled !== false)}
+        ${textField('s-news-rss', 'RSS feed URL', n.rss_url)}
+        ${numField('s-news-count', 'Headlines per bulletin', n.headline_count ?? 3, '', { min: 1, max: 10 })}
+        ${numField('s-news-cadence', 'Every N breaks', n.every_n_breaks ?? 5, '0 = never.', { min: 0 })}
+      </div>
+    </details>
+
+    <details class="settings-section">
+      <summary>Ad breaks</summary>
+      <div class="settings-section-body">
+        ${checkField('s-ads-enabled', 'Enable ad breaks', ad.enabled === true)}
+        ${numField('s-ads-cadence', 'Every N breaks', ad.every_n_breaks ?? 6, '0 = never. 1 = every break.', { min: 0 })}
+        ${numField('s-ads-pool', 'Clip pool size', ad.pool_size ?? 100, 'Once this many unique ad clips are cached, reuse them randomly.', { min: 1 })}
+        ${numField('s-ads-risque', 'Risqué chance', ad.risque_chance ?? 0.1, '0.0–1.0. Probability that the LLM is told to lean suggestive on this ad.', { step: 0.05, min: 0, max: 1 })}
+      </div>
+    </details>
+
+    <details class="settings-section">
+      <summary>Station IDs</summary>
+      <div class="settings-section-body">
+        ${checkField('s-sid-enabled', 'Enable station ID stingers', sid.enabled !== false)}
+        ${numField('s-sid-count', 'Phrase pool size', sid.phrase_count ?? 40, 'How many varied "This is RadioDunc…" stingers to generate per station name. Rounded up to a multiple of 5.', { min: 5, max: 100 })}
+      </div>
+    </details>
+
+    <details class="settings-section">
+      <summary>AI generation</summary>
+      <div class="settings-section-body">
+        ${numField('s-temperature', 'Text temperature', config.openai_text_temperature ?? 1.2, '0.0–2.0. Higher = more variety in DJ banter and stingers. News bulletins override this lower internally.', { step: 0.1, min: 0, max: 2 })}
+      </div>
+    </details>
+
+    <div class="settings-actions">
+      <button type="button" id="s-save" class="primary">Save changes</button>
+      <span class="status" id="s-status"></span>
+    </div>
+  `;
+
+  form.querySelector('#s-save').addEventListener('click', _saveSettings);
+}
+
+let _settingsLiveConfig = null;  // last-fetched config, mutated on save
+
+async function _openSettings() {
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  _settingsLiveConfig = config;
+  _renderSettingsForm(config);
+  _setSettingsMode(true);
+}
+
+function _setSettingsMode(on) {
+  const wrap = document.getElementById('wrap');
+  if (!wrap) return;
+  wrap.dataset.mode = on ? 'settings' : 'default';
+}
+
+async function _saveSettings() {
+  if (!_settingsLiveConfig) return;
+  const form = document.getElementById('settingsForm');
+  const status = document.getElementById('s-status');
+  // Deep-clone so a save failure doesn't leave the in-memory config half-mutated.
+  const next = JSON.parse(JSON.stringify(_settingsLiveConfig));
+  _applySettingsForm(next, form);
+  status.textContent = 'Saving…';
+  try {
+    const saved = await api('/config', { method: 'PUT', body: JSON.stringify(next) });
+    _settingsLiveConfig = saved;
+    status.textContent = 'Saved.';
+    // Refresh the top-of-page name/tagline if the station identity changed.
+    document.getElementById('stationName').textContent = saved.station?.name || 'RadioDunc';
+    document.getElementById('stationMeta').textContent = saved.station?.tagline || '';
+  } catch (err) {
+    status.textContent = `Save failed: ${err.message}`;
+  }
+}
+
 // ── Server state refresh ──────────────────────────────────────────────────────
 let refreshInFlight = null;
 async function refreshServerState() {
@@ -1750,14 +1948,22 @@ async function init() {
   document.getElementById('backToGridBtn')?.addEventListener('click', () => _setSchedulerSubView('grid'));
   document.getElementById('addPersonaBtn')?.addEventListener('click', () => _openPersonaEditor(-1));
 
-  // Esc closes the scheduler back to the default sidebar view.
+  // Settings sidebar takeover.
+  document.getElementById('openSettingsBtn')?.addEventListener('click', _openSettings);
+  document.getElementById('closeSettingsBtn')?.addEventListener('click', () => _setSettingsMode(false));
+
+  // Esc closes whichever sidebar takeover is active.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
-    if (document.getElementById('wrap')?.dataset.mode !== 'scheduler') return;
-    if (document.querySelector('.sidebar-scheduler')?.dataset.subView === 'edit') {
-      _setSchedulerSubView('grid');
-    } else {
-      _setSchedulerMode(false);
+    const mode = document.getElementById('wrap')?.dataset.mode;
+    if (mode === 'scheduler') {
+      if (document.querySelector('.sidebar-scheduler')?.dataset.subView === 'edit') {
+        _setSchedulerSubView('grid');
+      } else {
+        _setSchedulerMode(false);
+      }
+    } else if (mode === 'settings') {
+      _setSettingsMode(false);
     }
   });
 
