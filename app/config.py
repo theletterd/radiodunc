@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -298,6 +299,79 @@ class DJPersona(BaseModel):
         return stripped or None
 
 
+class DJ(BaseModel):
+    """A reusable DJ identity — name, personality, voice. No shifts; those live on Show."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="UUID4, generated on create, never changed")
+    name: str = Field(min_length=1)
+    personality: str = Field(
+        min_length=1,
+        description=(
+            "What this DJ SAYS — slang, attitude, what they'd talk about. "
+            "Separate from voice/voice_instructions which control HOW they sound."
+        ),
+    )
+    voice: str | None = None
+    voice_instructions: str | None = None
+    prompt_template: str | None = None
+
+    @field_validator("name", "personality", mode="before")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("voice", "prompt_template", "voice_instructions", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        return stripped or None
+
+
+class Show(BaseModel):
+    """Binds one DJ to a set of shifts. dj_id=None means the Default DJ hosts it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="UUID4")
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Optional human-readable show name (e.g. 'Late Night Sessions'). "
+            "Distinct from the DJ's name; lets one DJ host shows with different identities. "
+            "Falls back to the DJ's name in UI where unset. Soft cap ~50 chars for layout."
+        ),
+    )
+    dj_id: str | None = Field(
+        default=None,
+        description="ID of the DJ who hosts this show. None = play as the Default DJ.",
+    )
+    shifts: list[DJShift] = Field(
+        default_factory=list,
+        description="On-air slots. Empty = show never airs (soft warning in UI).",
+    )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("must be a string")
+        stripped = value.strip()
+        return stripped or None
+
+
 class StationConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -347,9 +421,19 @@ class StationConfig(BaseModel):
     dj_roster: list[DJPersona] = Field(
         default_factory=list,
         description=(
-            "Optional list of DJ personas with day/hour scheduling. When a persona's "
-            "days/hours match the current time, it overrides dj_name/personality/voice/"
-            "dj_prompt_template. Empty roster = always use the station's default DJ."
+            "Legacy DJ persona list. Kept for back-compat during the DJ-vs-Show migration. "
+            "On load, each entry is expanded into one DJ + one Show. After the first save "
+            "through the new UI this list will be empty and can be dropped in a later release."
+        ),
+    )
+    djs: list[DJ] = Field(
+        default_factory=list,
+        description="Reusable DJ identities. Each DJ can be referenced by many Shows.",
+    )
+    shows: list[Show] = Field(
+        default_factory=list,
+        description=(
+            "Show bindings — each Show links one DJ (or the Default DJ) to a set of shifts."
         ),
     )
 
@@ -371,6 +455,46 @@ class StationConfig(BaseModel):
         elif "dj_style" in data:
             data.pop("dj_style")
         return data
+
+    @model_validator(mode="after")
+    def migrate_dj_roster_to_djs_shows(self) -> "StationConfig":
+        """Expand legacy dj_roster entries into DJ + Show pairs.
+
+        Runs after field validation so DJPersona's own migration (days/start_hour/
+        end_hour → shifts, style → personality) has already normalised each persona
+        before we copy its data across. Idempotent: if djs is already populated, the
+        roster is left untouched so we don't clobber manual edits.
+        """
+        if not self.dj_roster or self.djs:
+            return self
+
+        new_djs: list[DJ] = []
+        new_shows: list[Show] = []
+        for persona in self.dj_roster:
+            dj_id = str(uuid.uuid4())
+            show_id = str(uuid.uuid4())
+            new_djs.append(DJ(
+                id=dj_id,
+                name=persona.name,
+                personality=persona.personality,
+                voice=persona.voice,
+                voice_instructions=persona.voice_instructions,
+                prompt_template=persona.prompt_template,
+            ))
+            new_shows.append(Show(
+                id=show_id,
+                name=None,
+                dj_id=dj_id,
+                shifts=list(persona.shifts),
+            ))
+
+        self.djs = new_djs
+        self.shows = new_shows
+        # dj_roster is intentionally kept in memory so the legacy resolver
+        # (pick_active_persona) continues to work until the slice-2 resolver
+        # swap lands. save_config zeroes it out in the serialised JSON so the
+        # next load uses djs/shows instead.
+        return self
 
     @field_validator("name", "tagline", "format", "dj_name", "personality", mode="before")
     @classmethod
@@ -535,6 +659,13 @@ def save_config(config: AppConfig) -> None:
     the new bytes — never silence."""
     serialized = config.model_dump()
     serialized.pop("openai_api_key", None)
+    # Once djs/shows are populated, clear the legacy dj_roster from the
+    # serialised JSON. The in-memory model keeps it for the legacy resolver
+    # (pick_active_persona) until the slice-2 resolver swap lands, but the
+    # written file should not re-populate the old list on next load.
+    station_data = serialized.get("station", {})
+    if station_data.get("djs"):
+        station_data["dj_roster"] = []
     payload = json.dumps(serialized, indent=2)
 
     tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
