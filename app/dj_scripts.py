@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import WEEKDAYS, AppConfig, DJ, DJPersona, DJShift, StationConfig
+from .config import WEEKDAYS, AppConfig, DJ, DJPersona, DJShift, Show, StationConfig
 from .models import Track
 from .news import fetch_random_headline, fetch_top_headlines
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
@@ -56,6 +56,19 @@ def _persona_matches(persona: DJPersona, now: datetime) -> bool:
     return any(_shift_covers(s, weekday_name, hour) for s in persona.shifts)
 
 
+def _pick_active_show(station: StationConfig, now: datetime) -> Show | None:
+    """Return the first Show whose shifts cover `now`, or None.
+
+    First-match-wins; empty-shifts Shows are skipped (per the design: empty
+    shifts mean the Show doesn't air — a soft-warning UI state, not a runtime
+    match). Shared between pick_active_persona (for DJ lookup) and the prompt
+    builder (for the {show_name} placeholder)."""
+    for show in station.shows:
+        if _shifts_match(show.shifts, now):
+            return show
+    return None
+
+
 def pick_active_persona(station: StationConfig, now: datetime) -> DJ | DJPersona | None:
     """Return the DJ for the first matching Show, or None.
 
@@ -69,20 +82,16 @@ def pick_active_persona(station: StationConfig, now: datetime) -> DJ | DJPersona
     release while installations migrate).
     """
     if station.shows:
-        djs_by_id = {dj.id: dj for dj in station.djs}
-        for show in station.shows:
-            if not _shifts_match(show.shifts, now):
-                continue
-            if show.dj_id is None:
-                return None  # explicit Default-DJ slot
-            dj = djs_by_id.get(show.dj_id)
-            if dj is not None:
-                return dj
-            # show.dj_id references a DJ that no longer exists; treat the
-            # slot as Default DJ. Slice 6's delete-DJ flow rewrites these
-            # references, so this is just a defensive belt-and-braces case.
+        show = _pick_active_show(station, now)
+        if show is None or show.dj_id is None:
+            # No match, or an explicit Default-DJ slot.
             return None
-        return None
+        djs_by_id = {dj.id: dj for dj in station.djs}
+        # If show.dj_id references a DJ that no longer exists, the lookup
+        # returns None and we fall through to the Default DJ. Slice 6's
+        # delete-DJ flow rewrites those references; this is the defensive
+        # belt-and-braces case.
+        return djs_by_id.get(show.dj_id)
 
     # Legacy fallback — only triggers when shows is empty.
     for persona in station.dj_roster:
@@ -133,7 +142,7 @@ DEFAULT_DJ_PROMPT_TEMPLATE = """\
 Write a {max_sentences}-sentence radio DJ transition for the station named '{station_name}'.
 DJ: {dj_name} ({personality}).
 Station format: {station_format}.{station_era}{station_genre_focus}{station_description}
-Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
+{show_block}Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
 Up next: {next_track}.
 {reason_block}{weather_block}{news_block}{ad_block}\
@@ -287,6 +296,18 @@ def _build_prompt(
     current_time = now.strftime("%-I:%M %p")
     current_weekday = WEEKDAYS[now.weekday()].capitalize()
 
+    # Show name surfaces when the active Show has been given a distinct name
+    # (different from the DJ's own name). The point is to enable the contrast
+    # angle — "Cheerful Morning Drive" hosted by "Ms. Jessica Danger" — so the
+    # LLM has a hook to play with. Empty when there's no active Show, or when
+    # the active Show has no name set.
+    active_show = _pick_active_show(station, now)
+    show_name = (active_show.name or "") if active_show else ""
+    show_block = (
+        f"Current show: '{show_name}' — if its vibe contrasts with your DJ persona, that's a hook to play with.\n"
+        if show_name else ""
+    )
+
     fields = {
         "max_sentences": payload.max_sentences,
         "station_name": station.name,
@@ -298,6 +319,8 @@ def _build_prompt(
         "personality": station.personality,
         # Alias so custom prompt_templates written before the rename still resolve.
         "dj_style": station.personality,
+        "show_name": show_name,
+        "show_block": show_block,
         "previous_track": _track_ref(previous_track),
         "next_track": _track_ref(next_track),
         "current_time": current_time,

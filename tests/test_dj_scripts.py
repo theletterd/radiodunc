@@ -374,6 +374,92 @@ def test_legacy_fallback_runs_only_when_shows_empty():
     assert result.name == "Legacy Larry"
 
 
+def _station_with_named_show(show_name: str | None, *, dj_name: str = "Default Dan", dj_personality: str = "plain"):
+    """Helper: a station with one active Show (covers Monday noon) whose name is `show_name`.
+    The DJ identity comes from a DJ row in djs."""
+    dj_id = str(uuid.uuid4())
+    dj = DJ(id=dj_id, name=dj_name, personality=dj_personality)
+    show = Show(
+        id=str(uuid.uuid4()),
+        name=show_name,
+        dj_id=dj_id,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    return StationConfig(djs=[dj], shows=[show], dj_roster=[], dj_name=dj_name, personality=dj_personality)
+
+
+def test_show_name_appears_in_default_prompt_when_active_show_has_name():
+    station = _station_with_named_show("The Neon Hour", dj_name="Ms. Jessica Danger", dj_personality="alt-goth")
+    cfg = AppConfig(station=station)
+    with patch("app.dj_scripts.datetime") as mock_dt:
+        mock_dt.now.return_value = MONDAY_NOON
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=2), None, None, cfg)
+    assert "The Neon Hour" in prompt
+    assert "contrast" in prompt  # the hint sentence asks the LLM to play with the contrast
+
+
+def test_show_block_is_empty_when_show_has_no_name():
+    """If the active Show has name=None, no show_block should land in the prompt."""
+    station = _station_with_named_show(None, dj_name="Sam", dj_personality="punny")
+    cfg = AppConfig(station=station)
+    with patch("app.dj_scripts.datetime") as mock_dt:
+        mock_dt.now.return_value = MONDAY_NOON
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=2), None, None, cfg)
+    assert "Current show:" not in prompt
+    assert "contrast" not in prompt
+
+
+def test_show_block_is_empty_when_no_active_show():
+    """No Shows defined at all — prompt should render cleanly with no show block."""
+    station = StationConfig(name="No Shows FM", dj_name="Dan", personality="plain")
+    cfg = AppConfig(station=station)
+    prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=2), None, None, cfg)
+    assert "Current show:" not in prompt
+
+
+def test_custom_template_can_reference_show_name_placeholder():
+    """Custom templates can use {show_name} as a raw string."""
+    station = _station_with_named_show("Drivetime Power Hour", dj_name="Owl", dj_personality="mellow")
+    station = station.model_copy(update={"dj_prompt_template": "On now: {show_name} with {dj_name}."})
+    cfg = AppConfig(station=station)
+    with patch("app.dj_scripts.datetime") as mock_dt:
+        mock_dt.now.return_value = MONDAY_NOON
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert prompt == "On now: Drivetime Power Hour with Owl."
+
+
+def test_custom_template_show_name_is_empty_string_when_unset():
+    """When no show is active, {show_name} resolves to an empty string (not a KeyError)."""
+    station = StationConfig(
+        name="Static FM", dj_name="Dan", personality="plain",
+        dj_prompt_template="[{show_name}] live on {station_name}.",
+    )
+    cfg = AppConfig(station=station)
+    prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert prompt == "[] live on Static FM."
+
+
+def test_show_block_skipped_when_matching_show_has_dj_id_none():
+    """A Default-DJ slot (dj_id=None) with a name set should still surface the show name,
+    even though no DJ override happens — the contrast hook still applies."""
+    show = Show(
+        id=str(uuid.uuid4()),
+        name="Default Drivetime",
+        dj_id=None,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    station = StationConfig(djs=[], shows=[show], dj_roster=[], dj_name="Dan", personality="plain")
+    cfg = AppConfig(station=station)
+    with patch("app.dj_scripts.datetime") as mock_dt:
+        mock_dt.now.return_value = MONDAY_NOON
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        prompt = _build_prompt(station, DJScriptGenerateRequest(max_sentences=1), None, None, cfg)
+    assert "Default Drivetime" in prompt
+
+
 def test_migration_expands_empty_shift_persona_to_full_week():
     """A legacy 'always on' persona (empty shifts) should migrate to a Show with
     every-hour-every-day shifts. Without this, the new resolver — which treats
