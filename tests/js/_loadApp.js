@@ -32,10 +32,12 @@ const EXPORTED_NAMES = [
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',
-  // persona form
-  '_openPersonaEditor', '_renderPersonaForm', '_renderShifts',
-  '_savePersona', '_deletePersona', '_previewVoice',
-  '_readFormIntoWorkingPersona',
+  // show editor form
+  '_openShowEditor', '_renderShowForm', '_renderShifts',
+  '_saveShow', '_deleteShow',
+  '_readFormIntoWorkingShow',
+  // inline DJ create modal
+  '_openDJCreateModal', '_closeDJCreateModal', '_saveDJCreate',
   // station settings
   '_openSettings', '_setSettingsMode', '_renderSettingsForm',
   '_saveSettings', '_applySettingsForm',
@@ -59,11 +61,16 @@ function _appSource() {
   if (_cachedAppSource === null) {
     const raw = readFileSync(APP_JS_PATH, 'utf-8');
     const exports = EXPORTED_NAMES.map(n => `globalThis.${n} = ${n};`).join('\n');
-    // Expose the `schedulerWorkingPersona` let-binding via an accessor because
+    // Expose the `schedulerWorkingShow` let-binding via an accessor because
     // let/const bindings can't be assigned to globalThis directly from outside
-    // the module scope. Tests call globalThis.__getSchedulerWorkingPersona()
+    // the module scope. Tests call globalThis.__getSchedulerWorkingShow()
     // to read the current mutable form state without going through the DOM.
-    const accessor = `globalThis.__getSchedulerWorkingPersona = () => schedulerWorkingPersona;`;
+    const accessor = `
+      globalThis.__getSchedulerWorkingShow = () => schedulerWorkingShow;
+      // Back-compat alias for older tests that still read the value under the
+      // legacy name; same object, different alias.
+      globalThis.__getSchedulerWorkingPersona = () => schedulerWorkingShow;
+    `;
     // Accessors for private let-bindings needed by player render tests.
     const playerAccessors = [
       `globalThis.__setServerState = (s) => { serverState = s; };`,

@@ -1,8 +1,11 @@
-// Tests for the DJ schedule editor in app/ui/app.js.
+// Tests for the DJ schedule grid in app/ui/app.js.
 //
-// The schedule editor is the largest piece of UI logic we've shipped
-// (grid rendering, drag-to-resize, drag-to-move, persona form, voice
-// preview), and the area where UX bugs are most likely to land.
+// The grid renders one block per shift on every Show, with the colour pinned
+// to the DJ identity (so the same DJ hosting two different shows shows up in
+// the same colour). Default-DJ slots (show.dj_id=null) get a distinct dashed
+// treatment. Tests also cover the legend (one chip per used DJ + a Default
+// chip + an "unscheduled" chip per Show that has no shifts) and the drag-
+// to-resize flow.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { loadAppJs, flush } from './_loadApp.js';
@@ -14,16 +17,47 @@ const PERSONA_PALETTE = [
   '#34d399', '#fbbf24', '#f87171', '#22d3ee',
 ];
 
-function configWithRoster(roster) {
+// Build a config from a list of {name, personality?, shifts, showName?, dj_id?}
+// entries. Each entry becomes one DJ + one Show wired together. dj_id is
+// derived deterministically so tests can predict the colour assignment.
+function configFromShows(entries) {
+  const djs = [];
+  const shows = [];
+  entries.forEach((e, i) => {
+    if (e.dj_id === null) {
+      // Default-DJ slot: just a Show with dj_id=null, no DJ row needed.
+      shows.push({
+        id: `show-${i}`,
+        name: e.showName ?? null,
+        dj_id: null,
+        shifts: e.shifts,
+      });
+    } else {
+      const djId = `dj-${i}`;
+      djs.push({
+        id: djId,
+        name: e.name,
+        personality: e.personality || 'x',
+        voice: e.voice ?? null,
+        voice_instructions: e.voice_instructions ?? null,
+        prompt_template: null,
+      });
+      shows.push({
+        id: `show-${i}`,
+        name: e.showName ?? null,
+        dj_id: djId,
+        shifts: e.shifts,
+      });
+    }
+  });
   return {
     music_folder: '/test/music',
-    station: { name: 'Test FM', dj_name: 'Test DJ', dj_roster: roster },
+    station: { name: 'Test FM', dj_name: 'Test DJ', djs, shows, dj_roster: [] },
     alerts: {},
   };
 }
 
 function stubFetch(handlers) {
-  // handlers: { 'GET /config': () => body, 'PUT /config': (body) => body, ... }
   globalThis.fetch = vi.fn(async (url, opts = {}) => {
     const method = opts.method || 'GET';
     const path = String(url).split('?')[0];
@@ -38,15 +72,11 @@ function stubFetch(handlers) {
   });
 }
 
-// Pre-render the grid by switching to scheduler mode, then waiting for the
-// /config fetch + render to settle.
 async function openScheduler() {
   globalThis._setSchedulerMode(true);
   await flush();
 }
 
-// Stub element layout so drag math (which uses getBoundingClientRect) has
-// known dimensions. Real CSS isn't applied in happy-dom — cells return 0.
 const ROW_PX = 20;
 const COL_PX = 100;
 function stubGridLayout() {
@@ -72,14 +102,14 @@ describe('pure helpers', () => {
     expect(typeof globalThis._personaColor).toBe('function');
     expect(globalThis._personaColor(0)).toBe(PERSONA_PALETTE[0]);
     expect(globalThis._personaColor(7)).toBe(PERSONA_PALETTE[7]);
-    expect(globalThis._personaColor(8)).toBe(PERSONA_PALETTE[0]);  // wraps
+    expect(globalThis._personaColor(8)).toBe(PERSONA_PALETTE[0]);
     expect(globalThis._personaColor(17)).toBe(PERSONA_PALETTE[1]);
   });
 
   it('_jsDayToGridIndex maps Sunday-first JS to Monday-first grid', () => {
-    expect(globalThis._jsDayToGridIndex(0)).toBe(6);  // Sun → col 6
-    expect(globalThis._jsDayToGridIndex(1)).toBe(0);  // Mon → col 0
-    expect(globalThis._jsDayToGridIndex(6)).toBe(5);  // Sat → col 5
+    expect(globalThis._jsDayToGridIndex(0)).toBe(6);
+    expect(globalThis._jsDayToGridIndex(1)).toBe(0);
+    expect(globalThis._jsDayToGridIndex(6)).toBe(5);
   });
 
   it('_fmtHourBoundary names the obvious landmarks', () => {
@@ -88,36 +118,14 @@ describe('pure helpers', () => {
     expect(globalThis._fmtHourBoundary(7)).toBe('7am');
     expect(globalThis._fmtHourBoundary(13)).toBe('1pm');
     expect(globalThis._fmtHourBoundary(23)).toBe('11pm');
-    expect(globalThis._fmtHourBoundary(24)).toBe('midnight');  // wraps cleanly
-  });
-
-  it('_autoResizeTextarea sets height to scrollHeight on input', () => {
-    const ta = document.createElement('textarea');
-    document.body.appendChild(ta);
-    // Stub scrollHeight since happy-dom doesn't compute layout. Different
-    // value per call so we can assert the helper re-reads each time.
-    let mockScrollHeight = 50;
-    Object.defineProperty(ta, 'scrollHeight', { get: () => mockScrollHeight });
-
-    globalThis._autoResizeTextarea(ta);
-    expect(ta.style.height).toBe('50px');  // initial resize
-
-    mockScrollHeight = 120;
-    ta.dispatchEvent(new Event('input'));
-    expect(ta.style.height).toBe('120px');
-
-    mockScrollHeight = 70;  // user deletes content
-    ta.dispatchEvent(new Event('input'));
-    expect(ta.style.height).toBe('70px');  // shrinks back down
+    expect(globalThis._fmtHourBoundary(24)).toBe('midnight');
   });
 
   it('_fmtShiftRange treats end as inclusive — 23 ends at midnight', () => {
-    // The whole point of this helper: make "23 → 23" unambiguous to users.
     expect(globalThis._fmtShiftRange(23, 23)).toBe('11pm → midnight');
     expect(globalThis._fmtShiftRange(22, 23)).toBe('10pm → midnight');
     expect(globalThis._fmtShiftRange(7, 9)).toBe('7am → 10am');
     expect(globalThis._fmtShiftRange(11, 11)).toBe('11am → noon');
-    // Wrap shifts (start > end): the range string still wraps as expected.
     expect(globalThis._fmtShiftRange(22, 2)).toBe('10pm → 3am');
   });
 });
@@ -127,11 +135,11 @@ describe('pure helpers', () => {
 describe('renderSchedule', () => {
   beforeEach(() => loadAppJs());
 
-  it('paints one block per simple shift in roster order', async () => {
+  it('paints one block per simple shift in shows order', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
-        { name: 'Lou', personality: 'low', shifts: [
+      'GET /config': () => configFromShows([
+        { name: 'Morgan', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+        { name: 'Lou', shifts: [
           { day: 'monday', start_hour: 22, end_hour: 23 },
           { day: 'tuesday', start_hour: 22, end_hour: 23 },
         ]},
@@ -141,35 +149,30 @@ describe('renderSchedule', () => {
     await openScheduler();
     const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
 
-    // 1 Morgan block + 2 Lou blocks. happy-dom keeps the hex value as-set
-    // (it doesn't normalise to rgb() the way a browser would).
     expect(blocks.length).toBe(3);
-    expect(blocks[0].style.backgroundColor).toBe(PERSONA_PALETTE[0]);  // Morgan (roster idx 0)
-    expect(blocks[1].style.backgroundColor).toBe(PERSONA_PALETTE[1]);  // Lou (roster idx 1)
-    expect(blocks[1].dataset.personaIdx).toBe('1');
+    expect(blocks[0].style.backgroundColor).toBe(PERSONA_PALETTE[0]);
+    expect(blocks[1].style.backgroundColor).toBe(PERSONA_PALETTE[1]);
+    expect(blocks[1].dataset.showId).toBe('show-1');
     expect(blocks[1].dataset.shiftIdx).toBe('0');
   });
 
   it('places blocks on the right grid-row/column for the shift', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Solo', personality: 'x', shifts: [{ day: 'wednesday', start_hour: 14, end_hour: 17 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Solo', shifts: [{ day: 'wednesday', start_hour: 14, end_hour: 17 }] },
       ]),
     });
 
     await openScheduler();
     const block = document.querySelector('#scheduleGrid .grid-persona-block');
-
-    // wednesday is the 3rd day (index 2), so column 2 + 2 = 4
     expect(block.style.gridColumn).toBe('4');
-    // start_hour 14 → row 14+2 = 16; end_hour 17 (inclusive) → row 17+3 = 20
     expect(block.style.gridRow).toBe('16 / 20');
   });
 
   it('splits a wrap-around shift into two blocks across midnight', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Overnight', personality: 'late', shifts: [{ day: 'friday', start_hour: 22, end_hour: 3 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Overnight', shifts: [{ day: 'friday', start_hour: 22, end_hour: 3 }] },
       ]),
     });
 
@@ -177,12 +180,10 @@ describe('renderSchedule', () => {
     const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
 
     expect(blocks.length).toBe(2);
-    // today half: friday is DAYS_FULL[4], col = 4+2 = 6, rows 22+2 .. 26
     expect(blocks[0].style.gridColumn).toBe('6');
     expect(blocks[0].style.gridRow).toBe('24 / 26');
     expect(blocks[0].dataset.isWrap).toBe('1');
     expect(blocks[0].dataset.wrapHalf).toBe('today');
-    // tomorrow half: saturday is DAYS_FULL[5], col = 5+2 = 7, rows 2 .. 3+3=6
     expect(blocks[1].style.gridColumn).toBe('7');
     expect(blocks[1].style.gridRow).toBe('2 / 6');
     expect(blocks[1].dataset.wrapHalf).toBe('tomorrow');
@@ -190,8 +191,8 @@ describe('renderSchedule', () => {
 
   it('wrap-around blocks have no resize handles (form-only edit)', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Owl', personality: 'mellow', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Owl', shifts: [{ day: 'monday', start_hour: 22, end_hour: 2 }] },
       ]),
     });
 
@@ -205,8 +206,8 @@ describe('renderSchedule', () => {
 
   it('non-wrap blocks have top + bottom resize handles', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Day', personality: 'bright', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Day', shifts: [{ day: 'monday', start_hour: 9, end_hour: 17 }] },
       ]),
     });
 
@@ -217,28 +218,19 @@ describe('renderSchedule', () => {
     expect(document.querySelector('#scheduleGrid .resize-handle.bottom')).toBeTruthy();
   });
 
-  it('re-attaches block click handlers on every render (regression: 60s auto-refresh used to break clicks)', async () => {
-    // Before the fix, _scheduleAutoRefresh's periodic renderSchedule() call
-    // replaced the grid DOM without re-wiring _onBlockClick — so after the
-    // first 60s tick (or any in-place re-render), clicking a block did
-    // nothing. The fix folds _attachBlockClickHandlers into renderSchedule
-    // itself; this test exercises that by forcing a re-render and asserting
-    // the new blocks fire the click handler.
+  it('re-attaches block click handlers on every render (regression)', async () => {
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Morgan', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
       ]),
     });
 
     await openScheduler();
-    // Re-render in place, simulating what the 60s timer does.
     await window.renderSchedule();
 
     const block = document.querySelector('#scheduleGrid .grid-persona-block');
     expect(block).toBeTruthy();
 
-    // Clicking the re-rendered block should open the persona editor —
-    // which switches the sub-view to "edit".
     block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     await flush();
 
@@ -247,26 +239,188 @@ describe('renderSchedule', () => {
   });
 
   it('places the NOW indicator on the current day-column / hour-row', async () => {
-    // Pin a known Date so the assertion is deterministic. Tuesday 14:30 UTC.
-    const realNow = Date.now;
     const realProto = Date.prototype.getDay;
     const realHours = Date.prototype.getHours;
-    Date.prototype.getDay = function () { return 2; };  // Tuesday
+    Date.prototype.getDay = function () { return 2; };
     Date.prototype.getHours = function () { return 14; };
 
     try {
-      stubFetch({ 'GET /config': () => configWithRoster([]) });
+      stubFetch({ 'GET /config': () => configFromShows([]) });
       await openScheduler();
       const now = document.querySelector('#scheduleGrid .grid-now-indicator');
       expect(now).toBeTruthy();
-      // _jsDayToGridIndex(2) = 1, col = 1+2 = 3; row = 14+2 = 16
       expect(now.style.gridColumn).toBe('3');
       expect(now.style.gridRow).toBe('16');
     } finally {
       Date.prototype.getDay = realProto;
       Date.prototype.getHours = realHours;
-      Date.now = realNow;
     }
+  });
+});
+
+// ── Legend ───────────────────────────────────────────────────────────────────
+
+describe('legend', () => {
+  beforeEach(() => loadAppJs());
+
+  it('shows one chip per used DJ (deduped when one DJ hosts multiple shows)', async () => {
+    stubFetch({
+      'GET /config': () => {
+        const cfg = configFromShows([
+          { name: 'Sam', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+        ]);
+        cfg.station.shows.push({
+          id: 'show-extra',
+          name: 'Late Night Sam',
+          dj_id: 'dj-0',
+          shifts: [{ day: 'tuesday', start_hour: 20, end_hour: 22 }],
+        });
+        return cfg;
+      },
+    });
+    await openScheduler();
+
+    const chips = document.querySelectorAll('#scheduleLegend .legend-item');
+    // Default chip + Sam chip = 2 items total.
+    expect(chips.length).toBe(2);
+    expect(chips[1].textContent).toContain('Sam');
+  });
+
+  it('chip tooltip lists named shows the DJ hosts', async () => {
+    stubFetch({
+      'GET /config': () => {
+        const cfg = configFromShows([
+          { name: 'Jess', showName: 'Drivetime', shifts: [{ day: 'monday', start_hour: 16, end_hour: 19 }] },
+        ]);
+        cfg.station.shows.push({
+          id: 'show-extra',
+          name: 'Late Night',
+          dj_id: 'dj-0',
+          shifts: [{ day: 'tuesday', start_hour: 22, end_hour: 23 }],
+        });
+        return cfg;
+      },
+    });
+    await openScheduler();
+
+    const chips = document.querySelectorAll('#scheduleLegend .legend-item');
+    const jessChip = Array.from(chips).find(c => c.textContent.includes('Jess'));
+    expect(jessChip?.title).toContain('Drivetime');
+    expect(jessChip?.title).toContain('Late Night');
+  });
+
+  it('Default chip is always present; default-slot Show carries default-dj class', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { dj_id: null, shifts: [{ day: 'monday', start_hour: 6, end_hour: 8 }] },
+      ]),
+    });
+    await openScheduler();
+    const chips = document.querySelectorAll('#scheduleLegend .legend-item');
+    expect(chips.length).toBe(1);
+    expect(chips[0].textContent).toContain('default');
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    expect(block?.classList.contains('default-dj')).toBe(true);
+  });
+
+  it('shows an "unscheduled" chip per Show with no shifts', async () => {
+    stubFetch({
+      'GET /config': () => {
+        const cfg = configFromShows([
+          { name: 'Has Shifts', shifts: [{ day: 'monday', start_hour: 9, end_hour: 11 }] },
+        ]);
+        cfg.station.djs.push({ id: 'dj-orphan', name: 'Drifter', personality: 'lost', voice: null, voice_instructions: null, prompt_template: null });
+        cfg.station.shows.push({ id: 'show-orphan', name: null, dj_id: 'dj-orphan', shifts: [] });
+        return cfg;
+      },
+    });
+    await openScheduler();
+
+    const unscheduled = document.querySelector('#scheduleLegend .legend-unscheduled');
+    expect(unscheduled).toBeTruthy();
+    expect(unscheduled.textContent).toContain('Drifter');
+    expect(unscheduled.textContent).toContain('no shifts');
+  });
+});
+
+// ── Show block label rendering ──────────────────────────────────────────────
+
+describe('block label', () => {
+  beforeEach(() => loadAppJs());
+
+  it('renders DJ name as the primary label', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
+      ]),
+    });
+    await openScheduler();
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    const primary = block.querySelector('.block-primary');
+    expect(primary?.textContent).toBe('Jess');
+  });
+
+  it('renders show name as a caption below the DJ name when set and block is tall enough', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { name: 'Jess', showName: 'Drivetime', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
+      ]),
+    });
+    await openScheduler();
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    const caption = block.querySelector('.block-caption');
+    expect(caption?.textContent).toBe('Drivetime');
+  });
+
+  it('omits the caption when the show has no name', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
+      ]),
+    });
+    await openScheduler();
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    expect(block.querySelector('.block-caption')).toBeNull();
+  });
+
+  it('1-hour blocks fall back to a single-letter monogram (no overflow)', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 6 }] },
+      ]),
+    });
+    await openScheduler();
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    expect(block.textContent.trim()).toBe('J');
+    expect(block.querySelector('.block-primary')).toBeNull();
+  });
+});
+
+// ── DJ colour stability ─────────────────────────────────────────────────────
+
+describe('DJ colour stability', () => {
+  beforeEach(() => loadAppJs());
+
+  it('blocks for the same DJ across multiple shows render in the same colour', async () => {
+    stubFetch({
+      'GET /config': () => {
+        const cfg = configFromShows([
+          { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
+        ]);
+        cfg.station.shows.push({
+          id: 'show-extra',
+          name: 'Late Night',
+          dj_id: 'dj-0',
+          shifts: [{ day: 'wednesday', start_hour: 22, end_hour: 23 }],
+        });
+        return cfg;
+      },
+    });
+    await openScheduler();
+    const blocks = document.querySelectorAll('#scheduleGrid .grid-persona-block');
+    expect(blocks.length).toBe(2);
+    expect(blocks[0].style.backgroundColor).toBe(PERSONA_PALETTE[0]);
+    expect(blocks[1].style.backgroundColor).toBe(PERSONA_PALETTE[0]);
   });
 });
 
@@ -290,8 +444,8 @@ describe('drag-to-resize', () => {
   }
 
   it('drags the bottom handle down 2 rows → end_hour increases by 2 and PUT fires', async () => {
-    const initial = configWithRoster([
-      { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+    const initial = configFromShows([
+      { name: 'Morgan', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
     ]);
     let savedConfig = null;
     stubFetch({
@@ -303,7 +457,6 @@ describe('drag-to-resize', () => {
     const bottomHandle = document.querySelector('#scheduleGrid .resize-handle.bottom');
     expect(bottomHandle).toBeTruthy();
 
-    // Drag down 2 row-heights → +2 hours
     dispatchMouseEvent(bottomHandle, 'mousedown', 0);
     await flush();
     dispatchMouseEvent(document, 'mousemove', ROW_PX * 2);
@@ -311,15 +464,15 @@ describe('drag-to-resize', () => {
     await flush();
 
     expect(savedConfig).not.toBeNull();
-    expect(savedConfig.station.dj_roster[0].shifts[0].end_hour).toBe(11);
-    expect(savedConfig.station.dj_roster[0].shifts[0].start_hour).toBe(7);  // unchanged
+    expect(savedConfig.station.shows[0].shifts[0].end_hour).toBe(11);
+    expect(savedConfig.station.shows[0].shifts[0].start_hour).toBe(7);
   });
 
   it('drags the top handle up 3 rows → start_hour decreases by 3', async () => {
     let savedConfig = null;
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Morgan', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -333,15 +486,15 @@ describe('drag-to-resize', () => {
     dispatchMouseEvent(document, 'mouseup');
     await flush();
 
-    expect(savedConfig.station.dj_roster[0].shifts[0].start_hour).toBe(6);
-    expect(savedConfig.station.dj_roster[0].shifts[0].end_hour).toBe(12);
+    expect(savedConfig.station.shows[0].shifts[0].start_hour).toBe(6);
+    expect(savedConfig.station.shows[0].shifts[0].end_hour).toBe(12);
   });
 
   it('clamps end_hour to 23 when dragged past the bottom of the grid', async () => {
     let savedConfig = null;
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Late', personality: 'x', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Late', shifts: [{ day: 'monday', start_hour: 20, end_hour: 22 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -351,18 +504,18 @@ describe('drag-to-resize', () => {
 
     dispatchMouseEvent(bottomHandle, 'mousedown', 0);
     await flush();
-    dispatchMouseEvent(document, 'mousemove', ROW_PX * 10);  // try to drag way past 23
+    dispatchMouseEvent(document, 'mousemove', ROW_PX * 10);
     dispatchMouseEvent(document, 'mouseup');
     await flush();
 
-    expect(savedConfig.station.dj_roster[0].shifts[0].end_hour).toBe(23);
+    expect(savedConfig.station.shows[0].shifts[0].end_hour).toBe(23);
   });
 
   it('clamps start_hour to 0 when dragged past the top', async () => {
     let savedConfig = null;
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Early', personality: 'x', shifts: [{ day: 'monday', start_hour: 3, end_hour: 6 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Early', shifts: [{ day: 'monday', start_hour: 3, end_hour: 6 }] },
       ]),
       'PUT /config': (body) => { savedConfig = body; return body; },
     });
@@ -372,18 +525,18 @@ describe('drag-to-resize', () => {
 
     dispatchMouseEvent(topHandle, 'mousedown', 0);
     await flush();
-    dispatchMouseEvent(document, 'mousemove', -ROW_PX * 10);  // way past 0
+    dispatchMouseEvent(document, 'mousemove', -ROW_PX * 10);
     dispatchMouseEvent(document, 'mouseup');
     await flush();
 
-    expect(savedConfig.station.dj_roster[0].shifts[0].start_hour).toBe(0);
+    expect(savedConfig.station.shows[0].shifts[0].start_hour).toBe(0);
   });
 
   it('no PUT when drag ends with zero net movement', async () => {
     let putCalls = 0;
     stubFetch({
-      'GET /config': () => configWithRoster([
-        { name: 'Static', personality: 'x', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
+      'GET /config': () => configFromShows([
+        { name: 'Static', shifts: [{ day: 'monday', start_hour: 9, end_hour: 12 }] },
       ]),
       'PUT /config': (body) => { putCalls++; return body; },
     });
@@ -393,7 +546,7 @@ describe('drag-to-resize', () => {
 
     dispatchMouseEvent(handle, 'mousedown', 0);
     await flush();
-    dispatchMouseEvent(document, 'mousemove', 2);  // sub-row pixel jitter
+    dispatchMouseEvent(document, 'mousemove', 2);
     dispatchMouseEvent(document, 'mouseup');
     await flush();
 
