@@ -36,6 +36,9 @@ const EXPORTED_NAMES = [
   '_openPersonaEditor', '_renderPersonaForm', '_renderShifts',
   '_savePersona', '_deletePersona', '_previewVoice',
   '_readFormIntoWorkingPersona',
+  // station settings
+  '_openSettings', '_setSettingsMode', '_renderSettingsForm',
+  '_saveSettings', '_applySettingsForm',
   // drag-to-resize
   '_startResizeDrag', '_onDragMove', '_onDragEnd',
   // drag-to-move
