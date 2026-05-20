@@ -16,8 +16,10 @@ from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
 from .models import DJClip, PlayerState, Track
 from .dj_scripts import (
+    DJ_AVATAR_DIR,
     active_station,
     generate_ad_script,
+    generate_dj_avatar,
     generate_dj_script,
     generate_news_script,
     get_station_id_phrases,
@@ -517,6 +519,56 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
     media_path = _safe_media_path(clip.audio_path, config)
     media_type = _AUDIO_MEDIA_TYPES.get(media_path.suffix.lower(), "application/octet-stream")
     return FileResponse(str(media_path), media_type=media_type, filename=media_path.name)
+
+
+# ── DJ avatars ──────────────────────────────────────────────────────────────
+# Stylised portrait images per DJ. Generation is manual (button in the DJ
+# editor) so cost is explicit and predictable — see generate_dj_avatar in
+# dj_scripts.py for the model details. Files live in generated_audio/dj_icons
+# keyed by the DJ's UUID so renames don't strand the image.
+
+@app.post("/djs/{dj_id}/avatar")
+def generate_dj_avatar_endpoint(dj_id: str):
+    """Generate (or regenerate) the avatar for a DJ.
+
+    Synchronous — the call typically returns in 5–15 s. Front-end shows a
+    "Generating…" status while the request is in flight. Returns the new
+    avatar URL plus a server-side timestamp so the caller can cache-bust
+    the <img> src.
+    """
+    config = load_config()
+    dj = next((d for d in config.station.djs if d.id == dj_id), None)
+    if dj is None:
+        raise HTTPException(status_code=404, detail="DJ not found")
+
+    path = generate_dj_avatar(dj, config)
+    if path is None:
+        # generate_dj_avatar logs the specific failure; the response stays
+        # generic so we don't leak whether it was a key, a quota, or a
+        # transient API error.
+        raise HTTPException(
+            status_code=502,
+            detail="Avatar generation failed — check server logs for details.",
+        )
+
+    return {
+        "url": f"/media/dj-icon/{dj_id}",
+        "generated_at": int(time.time()),
+    }
+
+
+@app.get("/media/dj-icon/{dj_id}")
+def media_dj_icon(dj_id: str):
+    """Serve a DJ's avatar PNG, or 404 if they don't have one yet.
+
+    No path traversal risk: dj_id comes from the path segment and is
+    appended to a fixed directory + ".png" suffix; FastAPI rejects
+    slashes in path params by default.
+    """
+    path = DJ_AVATAR_DIR / f"{dj_id}.png"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No avatar for this DJ")
+    return FileResponse(str(path), media_type="image/png")
 
 
 def _warm_caches_background(config: AppConfig) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import json
 import logging
@@ -707,3 +708,113 @@ def generate_dj_script(
         sentences=sentences,
         script_text=" ".join(sentences),
     )
+
+
+# ── DJ avatar generation ────────────────────────────────────────────────────
+# Stylised portrait images for each DJ, generated on demand via OpenAI's
+# gpt-image-1 model. Manual-only (triggered by a button in the DJ editor) —
+# we deliberately don't auto-regenerate on save so users have explicit cost
+# control. ~$0.011 per image at "low" quality, which is plenty for the
+# 32–120 px sizes the UI displays them at.
+
+DJ_AVATAR_DIR = Path("generated_audio/dj_icons")
+
+DJ_AVATAR_PROMPT_TEMPLATE = """\
+A small square portrait illustration of a fictional radio DJ named '{name}'.
+Personality: {personality}.
+{voice_block}\
+Style: stylised vector portrait, flat colours, clean lines, music/radio-themed background elements. \
+Centred head-and-shoulders composition. No text, no watermark, transparent background."""
+
+
+def generate_dj_avatar(dj: "DJ", config: "AppConfig") -> Path | None:
+    """Generate a stylised portrait via OpenAI gpt-image-1.
+
+    Saves to ``generated_audio/dj_icons/{dj_id}.png`` (overwriting any
+    previous avatar — each DJ has a single current image). Returns the
+    absolute path on success, ``None`` on failure (no API key, HTTP error,
+    timeout, malformed response).
+
+    Cost: low-quality 1024x1024 ≈ $0.011/call as of writing. We default to
+    low because the UI renders these at 32–120 px and higher quality is
+    invisible at that size.
+    """
+    if not config.openai_api_key:
+        logger.warning("Skipping DJ avatar generation: OPENAI_API_KEY missing")
+        return None
+
+    voice_block = (
+        f"Voice direction: {dj.voice_instructions}.\n" if dj.voice_instructions else ""
+    )
+    prompt = DJ_AVATAR_PROMPT_TEMPLATE.format(
+        name=dj.name,
+        personality=dj.personality,
+        voice_block=voice_block,
+    )
+
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/images/generations",
+        data=json.dumps({
+            "model": "gpt-image-1",
+            "prompt": prompt,
+            "size": "1024x1024",
+            "quality": "low",
+            "n": 1,
+            "background": "transparent",
+            "output_format": "png",
+        }).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.openai_api_key}",
+        },
+        method="POST",
+    )
+
+    t0 = time.perf_counter()
+    try:
+        # 60s timeout — image generation typically takes 5–15s but can spike.
+        with urllib.request.urlopen(req, timeout=60) as response:  # noqa: S310
+            data = json.loads(response.read().decode("utf-8"))
+        elapsed = round(time.perf_counter() - t0, 2)
+    except urllib.error.HTTPError as exc:
+        elapsed = round(time.perf_counter() - t0, 2)
+        logger.warning(
+            "DJ avatar generation HTTP error dj_id=%s status=%s elapsed_s=%s",
+            dj.id, exc.code, elapsed,
+        )
+        return None
+    except (urllib.error.URLError, TimeoutError) as exc:
+        elapsed = round(time.perf_counter() - t0, 2)
+        logger.warning(
+            "DJ avatar generation network error dj_id=%s err=%r elapsed_s=%s",
+            dj.id, exc, elapsed,
+        )
+        return None
+    except json.JSONDecodeError:
+        elapsed = round(time.perf_counter() - t0, 2)
+        logger.warning(
+            "DJ avatar response was not valid JSON dj_id=%s elapsed_s=%s",
+            dj.id, elapsed,
+        )
+        return None
+
+    items = data.get("data") or []
+    b64 = items[0].get("b64_json") if items else None
+    if not b64:
+        logger.warning("DJ avatar response had no image data dj_id=%s", dj.id)
+        return None
+
+    try:
+        png_bytes = base64.b64decode(b64)
+    except (ValueError, TypeError) as exc:
+        logger.warning("DJ avatar base64 decode failed dj_id=%s err=%r", dj.id, exc)
+        return None
+
+    DJ_AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = DJ_AVATAR_DIR / f"{dj.id}.png"
+    out_path.write_bytes(png_bytes)
+    logger.info(
+        "DJ avatar generated dj_id=%s name=%s elapsed_s=%s bytes=%d",
+        dj.id, dj.name, elapsed, len(png_bytes),
+    )
+    return out_path

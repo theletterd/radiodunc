@@ -17,23 +17,38 @@ Deliberately still json-only:
   `playlist_artist_repeat_window`, `core_artists`, `music_folder` —
   infrequent enough to leave in json.
 
-## ☐ DJ roster with AI-generated icons
+## ☐ DJ avatars — extra surfaces
 
-Each DJ gets a small avatar generated from their personality+voice
-description (DALL-E or similar). Shown:
-- as a chip in the schedule grid's legend
-- inside the persona block on the grid (small circle in the corner)
-- in the persona editor next to the name field
-- in the "On air with [DJ]" badge when that DJ is live
+Slice 1 shipped: manual "Regenerate avatar" button in the DJ editor,
+generated via `gpt-image-1` low quality (~$0.011/click), served from
+`generated_audio/dj_icons/{dj_id}.png`. Avatars show in the DJ Roster
+list rows + the editor itself; coloured-circle fallback when no avatar
+has been generated yet.
 
-Generation flow: on save, if the persona's personality changed, queue
-a background image-gen job. Cache the result keyed by personality hash
-in generated_audio/dj_icons/{hash}.png (or a new generated_dj_icons/
-subdir). Default to a coloured initial if no icon yet (matches the
-palette colour we already assign per persona). Backend serves the
-icon at /media/dj-icon/{persona_name_slug}.
+Still to do, whenever:
+- **Schedule grid blocks** — small avatar circle in the corner of each
+  block. Layout work to fit it cleanly alongside the
+  "<show> with <DJ>" label.
+- **"On air with [DJ]" badge** — avatar next to the DJ name in the main
+  player UI. User wants to think about the design first before this
+  one lands.
+- **Auto-regenerate trigger** — currently button-only. Could opt in to
+  auto-regen on personality changes ($0.011/save) if button-only turns
+  out to be friction.
 
-Cost: ~$0.04 per DJ icon at DALL-E pricing; small one-time per DJ.
+## ☐ Move per-segment audio gain into config
+
+Currently hardcoded as JS constants in `app/ui/app.js` (lines 13–16):
+`DJ_GAIN = 2.1`, `NEWS_GAIN = 1.7`, `AD_GAIN = 1.6`, `STINGER_GAIN = 2.0`.
+Music has no segment-level boost (effectively 1.0). The compressor flattens
+dynamic range afterwards, so audible differences are smaller than raw
+ratios suggest.
+
+Worth promoting to an `audio_levels` block under `AppConfig` (probably
+`audio_levels: {dj, news, ads, stingers}`) once we've settled on values
+we like — currently tweaking means a code edit + reload, which makes
+the constants feel more permanent than they are. Hot-reload via the
+existing `/config` change hook would also pick this up cleanly.
 
 ## ✅ Hot-reload config on PUT /config
 
@@ -70,39 +85,27 @@ dB, ratio 4:1, attack 5 ms, release 100 ms). Auto-flattens the loud/quiet
 gap between voices and between voices vs music. The per-voice trim plumbing
 was subsequently ripped out (PR #135) since the compressor handles it.
 
-## ☐ Separate DJ from show
+## ✅ Separate DJ from show
 
-Right now a "persona" entry conflates two concepts: the DJ as a character
-(name, personality, voice, voice_instructions, gain trim) AND the show they
-host (which day/hour slots they own). You can't have one DJ host multiple
-distinct shows without duplicating the DJ definition.
+Shipped across 7 PRs (#144 design doc, #145–#150 vertical slices, #151
+follow-up polish on the block label). End state matches the design doc:
 
-End state: a DJ is a reusable identity. A show binds a DJ to a slot:
-
-  djs:
-    - id: jessica_danger
-      name: "Ms. Jessica Danger"
-      personality: "sultry late-night intimacy"
-      voice: sage
-      voice_instructions: "..."
-      voice_gain_offset_db: -3
-
-  shows:
-    - dj: jessica_danger
-      shifts: [{day: friday, start_hour: 22, end_hour: 23}, ...]
-    - dj: jessica_danger        # same DJ, different show
-      shifts: [{day: monday, start_hour: 7, end_hour: 9}]
-    - dj: jessica_danger
-      shifts: [{day: saturday, start_hour: 10, end_hour: 12}]
-
-UI implication: the schedule editor's persona drawer splits into two
-tabs/panels — "DJ identity" (the character) and "Shows" (the slots that
-reference this DJ). The grid renders shows, click → edit the DJ behind it,
-"swap to different DJ" picker for power moves.
-
-Migration: the current dj_roster shape is one-to-one (each persona owns
-its own shifts). On load, expand each persona into one DJ + one show
-record. Old configs keep working without manual edits.
+- `StationConfig` has `djs[]` (reusable identities) + `shows[]`
+  (bindings that link a DJ to a set of shifts). The legacy `dj_roster`
+  field is gone from the schema; a `mode="before"` validator still
+  expands any legacy `dj_roster` it finds in raw JSON so old configs
+  load cleanly without manual edits.
+- Resolver (`pick_active_persona`) walks `shows[]` only; legacy fallback
+  removed.
+- `{show_name}` placeholder available in the DJ prompt template, plus a
+  pre-formatted `{show_block}` hint sentence that prompts the LLM to
+  riff on persona/show contrast (Raven Vale's "Velvet Hours" on Tuesday
+  afternoons is the sleeper feature).
+- Schedule grid renders Shows; DJ-stable colours; "<show> with <DJ>"
+  block label that wraps cleanly on narrow cells.
+- Show editor handles scheduling; DJ Roster takeover handles identity;
+  "+ Create new DJ…" inline modal keeps the Show flow uninterrupted;
+  Delete DJ reassigns Shows to Default rather than dropping them.
 
 ## ✅ Schedule grid unclickable after persona edit → back
 

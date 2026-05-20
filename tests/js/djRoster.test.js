@@ -413,3 +413,108 @@ describe('roster mode', () => {
     expect(document.querySelector('.sidebar-roster').dataset.subView).toBe('list');
   });
 });
+
+// ── DJ avatars ──────────────────────────────────────────────────────────────
+
+describe('DJ avatars', () => {
+  beforeEach(() => loadAppJs());
+
+  it('roster row renders the avatar circle with an <img> overlay', async () => {
+    stubFetch({ 'GET /config': () => makeConfig({ djs: [SAM] }) });
+    await openRoster();
+
+    const avatar = document.querySelector('#rosterList .dj-avatar');
+    expect(avatar).toBeTruthy();
+    expect(avatar.classList.contains('dj-avatar-sm')).toBe(true);
+    // Background colour is the DJ's palette colour (placeholder if the
+    // <img> fails to load).
+    expect(avatar.style.background).toBeTruthy();
+    const img = avatar.querySelector('img');
+    expect(img).toBeTruthy();
+    expect(img.getAttribute('src')).toContain('/media/dj-icon/dj-sam');
+    // Cache-bust query string so we don't serve stale browser-cached images.
+    expect(img.getAttribute('src')).toMatch(/\?v=\d+/);
+    // onerror self-removes the <img> so the coloured circle stays as the
+    // placeholder when no avatar has been generated yet.
+    expect(img.getAttribute('onerror')).toContain('this.remove()');
+  });
+
+  it('editor avatar shows the image + a Regenerate avatar button for existing DJs', async () => {
+    stubFetch({ 'GET /config': () => makeConfig({ djs: [SAM] }) });
+    await openEditor('dj-sam');
+
+    const avatar = document.querySelector('#djEditorForm .dj-avatar');
+    expect(avatar).toBeTruthy();
+    expect(avatar.classList.contains('dj-avatar-lg')).toBe(true);
+    expect(avatar.querySelector('img')).toBeTruthy();
+
+    const btn = document.getElementById('de-regen-avatar');
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Regenerate avatar');
+  });
+
+  it('editor avatar is just the coloured circle (no <img>) for new DJs, button disabled', async () => {
+    stubFetch({ 'GET /config': () => makeConfig({ djs: [SAM] }) });
+    await openEditor('__new__');
+
+    const avatar = document.querySelector('#djEditorForm .dj-avatar');
+    expect(avatar).toBeTruthy();
+    // No <img> on new DJs — they don't have a server-side id yet.
+    expect(avatar.querySelector('img')).toBeNull();
+
+    const btn = document.getElementById('de-regen-avatar');
+    expect(btn.disabled).toBe(true);
+    // Hint copy tells the user what's blocking them.
+    const hint = document.querySelector('.dj-editor-avatar-hint');
+    expect(hint.textContent).toContain('Save first');
+  });
+
+  it('clicking Regenerate POSTs to /djs/{id}/avatar and bumps the cache-bust', async () => {
+    let postPath = null;
+    stubFetch({
+      'GET /config': () => makeConfig({ djs: [SAM] }),
+      'POST /djs/dj-sam/avatar': () => {
+        postPath = '/djs/dj-sam/avatar';
+        return { url: '/media/dj-icon/dj-sam', generated_at: 99999 };
+      },
+    });
+    await openEditor('dj-sam');
+
+    const imgBefore = document.querySelector('#djEditorForm .dj-avatar img');
+    const srcBefore = imgBefore.getAttribute('src');
+
+    document.getElementById('de-regen-avatar').click();
+    await flush();
+
+    expect(postPath).toBe('/djs/dj-sam/avatar');
+    // The form re-rendered with the new cache-bust timestamp.
+    const imgAfter = document.querySelector('#djEditorForm .dj-avatar img');
+    expect(imgAfter.getAttribute('src')).toContain('?v=99999');
+    expect(imgAfter.getAttribute('src')).not.toBe(srcBefore);
+    // Status surfaces success to the user.
+    expect(document.getElementById('de-preview-status').textContent).toContain('Avatar updated');
+  });
+
+  it('regenerate failure surfaces the error inline and re-enables the button', async () => {
+    stubFetch({
+      'GET /config': () => makeConfig({ djs: [SAM] }),
+      'POST /djs/dj-sam/avatar': () => {
+        throw new Error('502 server failed');
+      },
+    });
+    await openEditor('dj-sam');
+
+    document.getElementById('de-regen-avatar').click();
+    await flush();
+
+    expect(document.getElementById('de-preview-status').textContent).toContain('Avatar generation failed');
+    // Button is re-enabled so the user can retry.
+    expect(document.getElementById('de-regen-avatar').disabled).toBe(false);
+  });
+
+  it('_djAvatarUrl includes a cache-bust query parameter on every call', () => {
+    const url = globalThis._djAvatarUrl('dj-anything');
+    expect(url).toMatch(/^\/media\/dj-icon\/dj-anything\?v=\d+$/);
+  });
+});

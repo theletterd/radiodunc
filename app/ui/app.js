@@ -1804,6 +1804,18 @@ function _escapeText(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/
 let rosterEditing = null;        // null = no form; '__new__' = new; otherwise dj.id
 let rosterWorkingDJ = null;      // mutable form state
 
+// DJ avatar cache-busting. The /media/dj-icon/{id} URL is stable across
+// regenerations (we always overwrite the same file), so without a query
+// string the browser would happily serve a stale image after regenerate.
+// Each page load gets a fresh baseline timestamp; regenerating a specific
+// DJ replaces just that DJ's entry so unrelated avatars don't refetch.
+const _DJ_AVATAR_PAGE_TS = Date.now();
+const _djAvatarTs = new Map();   // dj_id -> server-side generated_at (integer seconds)
+function _djAvatarUrl(djId) {
+  const ts = _djAvatarTs.get(djId) ?? _DJ_AVATAR_PAGE_TS;
+  return `/media/dj-icon/${djId}?v=${ts}`;
+}
+
 function _setRosterMode(on) {
   const wrap = document.getElementById('wrap');
   if (!wrap) return;
@@ -1867,8 +1879,15 @@ async function _renderRosterList() {
 
     const nameLine = document.createElement('div');
     nameLine.className = 'roster-row-name';
+    // Avatar = a coloured circle with the generated image layered on top via
+    // an <img>. If the image 404s (DJ never had one generated), the <img>
+    // self-removes via onerror and the coloured circle stays as the
+    // placeholder. The colour matches the DJ's schedule-grid blocks so the
+    // eye can stitch the two views together.
     nameLine.innerHTML =
-      `<span class="roster-row-swatch" style="background:${colourByIdx.get(dj.id)};"></span>` +
+      `<span class="dj-avatar dj-avatar-sm" style="background:${colourByIdx.get(dj.id)};">` +
+      `  <img src="${_djAvatarUrl(dj.id)}" alt="" onerror="this.remove()" />` +
+      `</span>` +
       `<span>${_escapeText(dj.name)}</span>`;
     row.appendChild(nameLine);
 
@@ -1932,7 +1951,28 @@ async function _renderDJEditorForm() {
     ? `Hi, you're listening to ${dj.name} on RadioDunc.`
     : `Hi, you're listening to RadioDunc.`;
 
+  // Avatar palette colour: pick by the DJ's index in the *original* djs[]
+  // ordering (same key the schedule grid + roster row use) so the placeholder
+  // circle visually agrees with everywhere else this DJ appears.
+  const djIdx = (config.station?.djs || []).findIndex(d => d.id === dj.id);
+  const avatarColour = djIdx >= 0 ? _personaColor(djIdx) : '#334155';
+
   form.innerHTML = `
+    <div class="dj-editor-avatar-row">
+      <span class="dj-avatar dj-avatar-lg" style="background:${avatarColour};">
+        ${isNew ? '' : `<img src="${_djAvatarUrl(dj.id)}" alt="" onerror="this.remove()" />`}
+      </span>
+      <div class="dj-editor-avatar-actions">
+        <button type="button" id="de-regen-avatar"${isNew ? ' disabled' : ''}>
+          ↻ Regenerate avatar
+        </button>
+        <div class="dj-editor-avatar-hint">
+          ${isNew
+            ? 'Save first, then come back to generate an avatar.'
+            : 'Stylised portrait, ~$0.01 per generation. Takes 5–15 s.'}
+        </div>
+      </div>
+    </div>
     <div>
       <label for="de-name">On-air handle <span class="muted" style="text-transform:none; font-weight:400;">— the name the DJ goes by</span></label>
       <input type="text" id="de-name" value="${_escapeAttr(dj.name)}" required
@@ -1990,6 +2030,33 @@ async function _renderDJEditorForm() {
   form.querySelector('#de-preview-btn').addEventListener('click', () => _previewDJVoice(previewSample));
   form.querySelector('#de-save').addEventListener('click', _saveDJEdit);
   if (!isNew) form.querySelector('#de-delete').addEventListener('click', _deleteDJ);
+  if (!isNew) form.querySelector('#de-regen-avatar').addEventListener('click', _regenerateDJAvatar);
+}
+
+async function _regenerateDJAvatar() {
+  if (rosterEditing === '__new__' || !rosterWorkingDJ) return;
+  const btn = document.getElementById('de-regen-avatar');
+  const status = document.getElementById('de-preview-status');
+  btn.disabled = true;
+  status.textContent = 'Generating avatar… (5–15 s)';
+  try {
+    const resp = await api(`/djs/${rosterWorkingDJ.id}/avatar`, { method: 'POST' });
+    // Update the cache-bust key so the next render of THIS DJ's avatar URL
+    // pulls the freshly-written file instead of any browser-cached copy at
+    // the previous URL. Other DJs' avatars keep their existing cache key
+    // (no avoidable refetches).
+    _djAvatarTs.set(rosterWorkingDJ.id, resp.generated_at);
+    // Re-render the form so the new <img> uses the fresh URL. The Roster
+    // list will pick up the new URL the next time it re-renders (e.g. on
+    // Cancel back to list, or after Save). The re-render replaces the
+    // status element wholesale, so set the success message AFTER it.
+    await _renderDJEditorForm();
+    document.getElementById('de-preview-status').textContent = 'Avatar updated.';
+  } catch (err) {
+    status.textContent = `Avatar generation failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function _readFormIntoWorkingDJ() {
