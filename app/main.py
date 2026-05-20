@@ -166,9 +166,92 @@ def get_config():
     return load_config()
 
 
+# Config fields whose values feed into a *generated* DJ/news/ad/stinger clip
+# (script wording, TTS voice, model, key). When any of these changes, every
+# in-memory artefact built against the old values is stale and must be
+# rebuilt. Used by _on_config_changed below.
+_GENERATION_TOPLEVEL_FIELDS = (
+    "tts_provider",
+    "script_provider",
+    "openai_text_model",
+    "openai_text_temperature",
+    "openai_tts_model",
+    "openai_tts_voice",
+)
+
+
+def _on_config_changed(old: AppConfig, new: AppConfig) -> None:
+    """Invalidate caches whose contents derive from config.
+
+    Called from update_config AFTER save_config succeeds. Comparisons are done
+    on the dumped pydantic dicts so nested submodels diff cleanly. Each cache
+    is keyed off the narrowest possible field set so tweaking risque_chance
+    doesn't drop the news bulletin etc.
+
+    Only the in-memory caches that bake config values into their contents are
+    handled here — disk-backed caches (station-ID stinger phrases) and
+    TTL-bounded caches (weather summary, 30 min) are intentionally left to
+    expire naturally, since the cost of an extra LLM/HTTP round-trip is
+    small and the eviction logic isn't worth the surface area.
+
+    Failures here are logged and swallowed — a botched cache flush must NOT
+    make the PUT /config call fail (the new config is already on disk).
+    """
+    try:
+        old_d = old.model_dump()
+        new_d = new.model_dump()
+        old_station = old_d.get("station", {})
+        new_station = new_d.get("station", {})
+        old_alerts = old_d.get("alerts", {})
+        new_alerts = new_d.get("alerts", {})
+
+        generation_changed = any(
+            old_d.get(f) != new_d.get(f) for f in _GENERATION_TOPLEVEL_FIELDS
+        )
+
+        # ── DJ-clip prefetch ─────────────────────────────────────────────
+        # The prefetched clip was synthesised against the OLD station persona,
+        # cadence settings, and TTS voice. Any change to station, alerts, or
+        # generation knobs makes it stale.
+        prefetch_inputs_changed = (
+            generation_changed
+            or old_station != new_station
+            or old_alerts != new_alerts
+        )
+        if prefetch_inputs_changed:
+            with _prefetch_lock:
+                _prefetch_cache.clear()
+            _log_event("config.cache.invalidated", cache="prefetch")
+
+        # ── News bulletin cache ──────────────────────────────────────────
+        # Renaming the station can leave the cached bulletin saying "the OLD
+        # station name" in its intro/outro. Newsreader voices, RSS source,
+        # headline count, prompt template, and any text/TTS generation knob
+        # all change what the next bulletin sounds like.
+        news_relevant_old = {
+            "name": old_station.get("name"),
+            "spoken_name": old_station.get("spoken_name"),
+            "news": old_alerts.get("news"),
+        }
+        news_relevant_new = {
+            "name": new_station.get("name"),
+            "spoken_name": new_station.get("spoken_name"),
+            "news": new_alerts.get("news"),
+        }
+        if generation_changed or news_relevant_old != news_relevant_new:
+            global _news_cache
+            with _news_cache_lock:
+                _news_cache = None
+            _log_event("config.cache.invalidated", cache="news")
+    except Exception:  # noqa: BLE001
+        logger.exception("Config-change cache invalidation hook raised; ignoring")
+
+
 @app.put("/config", response_model=AppConfig)
 def update_config(config: AppConfig):
+    old_config = load_config()
     save_config(config)
+    _on_config_changed(old_config, config)
     return config
 
 
