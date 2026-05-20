@@ -141,8 +141,21 @@ function musicVolume()    { return Math.max(0, Math.min(1, savedVolume() / 100))
 // bugs (e.g. unprompted playback after laptop wake) from a console transcript
 // — the bug's repro is rare so we want full context every time anything
 // playback-shaped fires.
+//
+// Wall-clock timestamps in the prefix (HH:MM:SS.mmm) so post-mortem console
+// scrolls make it obvious which log lines are from "right now" vs left over
+// from earlier in the session. Devtools' built-in timestamp setting works
+// too but isn't reliable across browser sessions or copy/paste — baking it
+// into the line itself is friction-free.
+function _ts() {
+  const d = new Date();
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const pad3 = (n) => String(n).padStart(3, '0');
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${pad3(d.getMilliseconds())}`;
+}
+
 function _logPlayback(event, fields = {}) {
-  console.log(`[playback] ${event}`, {
+  console.log(`[playback ${_ts()}] ${event}`, {
     serverIsPlaying: serverState?.is_playing,
     paused, transitioning, hasCtx: !!ctx, onAirMode,
     ...fields,
@@ -377,7 +390,7 @@ async function triggerTransition(reason) {
   // path snuck through) — log loudly and bail rather than starting playback
   // the user didn't ask for. Suspected source of the lid-wake bug.
   if (!serverState?.is_playing) {
-    console.warn('[playback] triggerTransition blocked — serverState says not playing', { reason });
+    console.warn(`[playback ${_ts()}] triggerTransition blocked — serverState says not playing`, { reason });
     return;
   }
   transitioning = true;
