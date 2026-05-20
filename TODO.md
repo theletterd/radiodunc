@@ -35,24 +35,33 @@ icon at /media/dj-icon/{persona_name_slug}.
 
 Cost: ~$0.04 per DJ icon at DALL-E pricing; small one-time per DJ.
 
-## ☐ Hot-reload config on PUT /config
+## ✅ Hot-reload config on PUT /config
 
-Today `load_config()` reads from disk every call (no cache), so saved
-changes ARE picked up by subsequent requests — BUT the cache layers
-that derive things from config (news cache, station-ID phrase cache,
-weather cache) won't notice a config change. e.g. renaming the station
-won't trigger a station-ID phrase regen. Add a config-change hook that
-invalidates the relevant caches.
+Shipped. `update_config` loads the old config before save, then calls
+`_on_config_changed(old, new)` (in `app/main.py`) which selectively flushes
+the two in-memory caches that bake config values into their contents:
 
-Suspects to invalidate when station.name changes:
-- station_id phrase cache (already keyed by name, but the IN-MEMORY
-  copy doesn't know to refresh)
-- news bulletin cache (might reference the station name)
-- any prefetched DJ clips (different prompt context)
+- **DJ-clip prefetch cache** (`_prefetch_cache`) — cleared on any change to
+  `station`, `alerts`, or the text/TTS generation knobs
+  (`tts_provider`, `script_provider`, `openai_text_model`/`_temperature`,
+  `openai_tts_model`/`_voice`). The prefetched audio was synthesised
+  against the old persona/cadence/voice.
+- **News bulletin cache** (`_news_cache`) — cleared when `station.name`,
+  `station.spoken_name`, the entire `alerts.news` subtree, or any
+  generation knob changes. Tweaking `alerts.ads.risque_chance` does NOT
+  drop the news (verified by test).
 
-Probably implement as a `_on_config_changed(old, new)` hook called
-from `update_config` that compares old vs new and clears caches
-selectively.
+Intentionally left to expire naturally:
+- **Weather summary cache** — 30-min TTL handles it. The cost of one
+  extra HTTP fetch on save is small enough that an explicit invalidator
+  isn't worth the code.
+- **Station-ID stinger phrases** (disk file) — file is keyed by station
+  name and regenerated lazily when needed. An explicit eviction shaves
+  one LLM round-trip on the next stinger pull; not worth the surface.
+
+Hook failures are logged and swallowed so a botched cache flush never
+500s the PUT — the new config is already on disk by then. Tests live in
+`tests/test_main.py` (the `test_config_change_*` block).
 
 ## ✅ Front-end audio compression
 Shipped in PR #134. `DynamicsCompressorNode` sits between `masterGain` and

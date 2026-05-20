@@ -1563,3 +1563,95 @@ def test_tts_preview_raises_502_when_provider_fails(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         tts_preview(TTSPreviewRequest(text="x"), _make_db_session())
     assert exc.value.status_code == 502
+
+
+# ── PUT /config cache-invalidation hook ───────────────────────────────────────
+#
+# update_config calls _on_config_changed(old, new) after save_config. The hook
+# clears in-memory derived caches selectively — these tests pin down WHICH
+# field changes trigger WHICH invalidations.
+
+
+def _wire_update_config(monkeypatch, old_cfg: AppConfig):
+    """Stub load_config to return old_cfg and capture save_config calls."""
+    saved: dict = {}
+    monkeypatch.setattr("app.main.load_config", lambda: old_cfg)
+    monkeypatch.setattr("app.main.save_config", lambda c: saved.setdefault("config", c))
+    return saved
+
+
+def test_config_change_station_name_clears_news_and_prefetch(monkeypatch):
+    import app.main as m
+
+    old = AppConfig(station=StationConfig(name="Old FM"))
+    new = old.model_copy(update={"station": StationConfig(name="New FM")})
+
+    _wire_update_config(monkeypatch, old)
+    m._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
+    m._prefetch_cache[5] = {"script_text": "stale", "clip_hash": "h"}
+
+    update_config(new)
+
+    assert m._news_cache is None
+    assert m._prefetch_cache == {}
+
+
+def test_config_change_no_change_invalidates_nothing(monkeypatch):
+    """Saving the same config back (e.g. a no-op PUT from the settings UI)
+    should be a complete no-op for every cache."""
+    import app.main as m
+
+    cfg = AppConfig()
+    _wire_update_config(monkeypatch, cfg)
+    cached_news = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
+    m._news_cache = cached_news
+    m._prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
+
+    update_config(cfg.model_copy(deep=True))
+
+    assert m._news_cache is cached_news
+    assert m._prefetch_cache == {1: {"script_text": "x", "clip_hash": "h"}}
+    # cleanup
+    m._news_cache = None
+    m._prefetch_cache.clear()
+
+
+def test_config_change_tts_voice_invalidates_news_and_prefetch(monkeypatch):
+    """Switching openai_tts_voice changes how every generated clip SOUNDS, so
+    any pre-synthesised audio in memory is stale."""
+    import app.main as m
+
+    old = AppConfig(openai_tts_voice="verse")
+    new = old.model_copy(update={"openai_tts_voice": "sage"})
+
+    _wire_update_config(monkeypatch, old)
+    m._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
+    m._prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
+
+    update_config(new)
+
+    assert m._news_cache is None
+    assert m._prefetch_cache == {}
+
+
+def test_config_change_hook_failure_does_not_break_put(monkeypatch):
+    """If the cache-invalidation hook raises, the PUT still returns the new config —
+    the on-disk save already succeeded and we must not 500 over a cache flush."""
+    import app.main as m
+
+    old = AppConfig()
+    new = old.model_copy(update={"openai_tts_voice": "sage"})
+    _wire_update_config(monkeypatch, old)
+
+    # Trip the hook by making one of its internal calls raise. _log_event runs
+    # after each cache invalidation inside the try-block, so this guarantees an
+    # exception lands in the handler.
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr("app.main._log_event", boom)
+
+    result = update_config(new)
+    assert result.openai_tts_voice == "sage"
+    # cleanup
+    m._news_cache = None
+    m._prefetch_cache.clear()
