@@ -412,9 +412,14 @@ class StationConfig(BaseModel):
             "Optional override for the DJ transition prompt. Supports placeholders: "
             "{max_sentences}, {station_name}, {station_format}, {station_description}, "
             "{station_era}, {station_genre_focus}, {dj_name}, {personality}, "
+            "{show_name}, {show_block}, "
             "{previous_track}, {next_track}, {current_time}, {current_weekday}, "
             "{weather_block}, {news_block}, {ad_block}, {reason_block}. "
             "({dj_style} is kept as an alias for {personality} for backwards compatibility.) "
+            "{show_name} is the raw active show name (empty string when no Show matches "
+            "or the matching Show has no name). {show_block} is a pre-formatted hint "
+            "sentence that includes the show name and prompts the LLM to play with the "
+            "contrast against the DJ persona — empty when no show is active. "
             "Leave null to use the built-in default."
         ),
     )
