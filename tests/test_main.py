@@ -28,6 +28,8 @@ from app.main import (
     delete_queue_item,
     media_track,
     media_dj_clip,
+    media_dj_icon,
+    generate_dj_avatar_endpoint,
 )
 from app.models import DJClip, PlayerState, Track
 from app.schemas import (
@@ -329,6 +331,73 @@ def test_media_dj_clip_not_found_raises_404():
     with pytest.raises(HTTPException) as exc:
         media_dj_clip("nosuchhash", db)
     assert exc.value.status_code == 404
+
+
+# ── DJ avatars ──────────────────────────────────────────────────────────────
+
+def _make_config_with_dj(dj_id: str, name: str = "Sam"):
+    from app.config import DJ, StationConfig
+    dj = DJ(id=dj_id, name=name, personality="warm and witty")
+    return AppConfig(station=StationConfig(djs=[dj]))
+
+
+def test_media_dj_icon_serves_file(monkeypatch, tmp_path):
+    """A DJ with a generated avatar gets the PNG bytes back."""
+    icon_dir = tmp_path / "dj_icons"
+    icon_dir.mkdir()
+    (icon_dir / "dj-123.png").write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
+    monkeypatch.setattr("app.main.DJ_AVATAR_DIR", icon_dir)
+
+    resp = media_dj_icon("dj-123")
+    assert resp.path == str(icon_dir / "dj-123.png")
+    assert resp.media_type == "image/png"
+
+
+def test_media_dj_icon_missing_raises_404(monkeypatch, tmp_path):
+    """A DJ with no generated avatar yet returns 404 (so the front-end
+    falls back to the coloured-initial placeholder)."""
+    monkeypatch.setattr("app.main.DJ_AVATAR_DIR", tmp_path)
+    with pytest.raises(HTTPException) as exc:
+        media_dj_icon("never-generated")
+    assert exc.value.status_code == 404
+
+
+def test_generate_dj_avatar_endpoint_unknown_dj_returns_404(monkeypatch):
+    """POSTing to /djs/<id>/avatar for a dj_id not in config raises 404."""
+    monkeypatch.setattr("app.main.load_config", lambda: _make_config_with_dj("dj-real"))
+    with pytest.raises(HTTPException) as exc:
+        generate_dj_avatar_endpoint("dj-imaginary")
+    assert exc.value.status_code == 404
+
+
+def test_generate_dj_avatar_endpoint_success(monkeypatch, tmp_path):
+    """Happy path: endpoint finds the DJ, calls the generator, returns a
+    URL + timestamp. Generator is stubbed so the test doesn't hit OpenAI."""
+    cfg = _make_config_with_dj("dj-abc", name="Avatar Andy")
+    monkeypatch.setattr("app.main.load_config", lambda: cfg)
+    # Pretend the generator succeeded and wrote a file.
+    written = []
+    def fake_gen(dj, config):
+        written.append(dj.id)
+        return tmp_path / f"{dj.id}.png"
+    monkeypatch.setattr("app.main.generate_dj_avatar", fake_gen)
+
+    result = generate_dj_avatar_endpoint("dj-abc")
+    assert result["url"] == "/media/dj-icon/dj-abc"
+    assert isinstance(result["generated_at"], int)
+    assert written == ["dj-abc"]
+
+
+def test_generate_dj_avatar_endpoint_failure_returns_502(monkeypatch):
+    """When the generator returns None (e.g. no API key, OpenAI hiccup), the
+    endpoint surfaces a 502 rather than swallowing the failure silently."""
+    cfg = _make_config_with_dj("dj-xyz")
+    monkeypatch.setattr("app.main.load_config", lambda: cfg)
+    monkeypatch.setattr("app.main.generate_dj_avatar", lambda dj, config: None)
+
+    with pytest.raises(HTTPException) as exc:
+        generate_dj_avatar_endpoint("dj-xyz")
+    assert exc.value.status_code == 502
 
 
 def _make_queue_state(db, queue, index=0):

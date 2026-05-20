@@ -1030,3 +1030,92 @@ def test_station_config_silently_drops_legacy_voice_gain_offset_db():
 def test_dj_persona_silently_drops_legacy_voice_gain_offset_db():
     p = DJPersona(name="P", personality="x", voice_gain_offset_db=-3.0)
     assert not hasattr(p, "voice_gain_offset_db")
+
+
+# ── DJ avatar generation ────────────────────────────────────────────────────
+
+def test_generate_dj_avatar_writes_png_on_success(monkeypatch, tmp_path):
+    """Happy path: OpenAI returns base64 PNG bytes, we decode and write to
+    generated_audio/dj_icons/{dj_id}.png."""
+    import base64 as _b64
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    fake_png = b"\x89PNG\r\n\x1a\nsome-pixels"
+    fake_response = {"data": [{"b64_json": _b64.b64encode(fake_png).decode()}]}
+    captured = {}
+
+    class FakeResp:
+        def read(self): return json.dumps(fake_response).encode()
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    def fake_urlopen(req, timeout=60):
+        captured["body"] = json.loads(req.data.decode())
+        captured["url"] = req.full_url
+        return FakeResp()
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", fake_urlopen)
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-test", name="Test Sam", personality="warm and witty",
+            voice_instructions="slow and low")
+    out = generate_dj_avatar(dj, cfg)
+
+    assert out == tmp_path / "dj-test.png"
+    assert out.read_bytes() == fake_png
+    # Prompt was assembled with name + personality + voice instructions.
+    assert "Test Sam" in captured["body"]["prompt"]
+    assert "warm and witty" in captured["body"]["prompt"]
+    assert "slow and low" in captured["body"]["prompt"]
+    # And we hit the right endpoint with the right model.
+    assert captured["url"] == "https://api.openai.com/v1/images/generations"
+    assert captured["body"]["model"] == "gpt-image-1"
+
+
+def test_generate_dj_avatar_returns_none_when_api_key_missing(monkeypatch, tmp_path):
+    """No API key → log a warning and bail without touching the network."""
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    def explode(*a, **kw):  # would error if reached
+        raise AssertionError("urlopen should not be called when API key is missing")
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", explode)
+
+    cfg = AppConfig(openai_api_key=None)
+    dj = DJ(id="dj-no-key", name="Anon", personality="quiet")
+    assert generate_dj_avatar(dj, cfg) is None
+    # No file written.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_dj_avatar_returns_none_on_http_error(monkeypatch, tmp_path):
+    """HTTP errors (rate limit, quota, etc.) surface as None so the caller
+    can return a clean 502 — no half-written files left behind."""
+    import urllib.error
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    def fake_urlopen(req, timeout=60):
+        raise urllib.error.HTTPError(req.full_url, 429, "Rate limited", {}, None)
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", fake_urlopen)
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-rate-limit", name="Sam", personality="x")
+    assert generate_dj_avatar(dj, cfg) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_dj_avatar_returns_none_on_empty_response(monkeypatch, tmp_path):
+    """Defensive: a malformed response (no b64_json) is treated like a failure."""
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    class FakeResp:
+        def read(self): return b'{"data": []}'
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", lambda req, timeout=60: FakeResp())
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-empty", name="Sam", personality="x")
+    assert generate_dj_avatar(dj, cfg) is None

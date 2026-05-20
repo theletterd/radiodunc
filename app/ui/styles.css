@@ -1063,3 +1063,51 @@ ul {
   gap: 8px;
   margin-top: 14px;
 }
+
+/* ── DJ avatars ─────────────────────────────────────────────────────────── */
+
+/* A DJ avatar is always a coloured circle (the DJ's schedule-grid colour),
+   optionally overlaid by a generated <img>. The <img> uses onerror="this.remove()"
+   so a 404 (no avatar generated yet) leaves the coloured circle as the
+   placeholder. Sizes: -sm (32px) for roster list rows, -lg (96px) for the
+   DJ editor header. */
+.dj-avatar {
+  display: inline-block;
+  position: relative;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.dj-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dj-avatar-sm { width: 28px; height: 28px; }
+.dj-avatar-lg { width: 96px; height: 96px; }
+
+/* DJ editor: avatar header row sits above the form fields. */
+.dj-editor-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 14px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.dj-editor-avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.dj-editor-avatar-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
