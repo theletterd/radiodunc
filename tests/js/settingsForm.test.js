@@ -25,10 +25,16 @@ function makeConfig(overrides = {}) {
       era: '90s',
       genre_focus: ['indie rock', 'post-punk'],
       dj_name: 'Test DJ',
-      dj_roster: [
-        // The settings panel must preserve dj_roster untouched — it's edited
-        // through the scheduler, not here.
-        { name: 'Untouched', personality: 'x', shifts: [] },
+      djs: [
+        // The settings panel must preserve djs/shows untouched — they're edited
+        // via the DJ Roster + Schedule takeovers, not here. Keeping a populated
+        // entry in the fixture lets the round-trip test catch any accidental
+        // drop of these top-level station fields.
+        { id: 'dj-untouched', name: 'Untouched', personality: 'x',
+          voice: null, voice_instructions: null, prompt_template: null },
+      ],
+      shows: [
+        { id: 'show-untouched', name: null, dj_id: 'dj-untouched', shifts: [] },
       ],
     },
     alerts: {
@@ -198,7 +204,7 @@ describe('_applySettingsForm round-trip', () => {
 describe('save flow', () => {
   beforeEach(() => loadAppJs());
 
-  it('PUTs the merged config, preserving dj_roster and voice pools', async () => {
+  it('PUTs the merged config, preserving djs/shows and voice pools', async () => {
     const cfg = makeConfig();
     let savedBody = null;
     stubFetch({
@@ -219,7 +225,8 @@ describe('save flow', () => {
     // Fields the panel doesn't expose are preserved verbatim from the
     // fetched config (this is the main thing keeping the panel safe to
     // ship before we have a voices-pool editor).
-    expect(savedBody.station.dj_roster).toEqual(cfg.station.dj_roster);
+    expect(savedBody.station.djs).toEqual(cfg.station.djs);
+    expect(savedBody.station.shows).toEqual(cfg.station.shows);
     expect(savedBody.alerts.news.voices).toEqual(cfg.alerts.news.voices);
     expect(savedBody.alerts.ads.voices).toEqual(cfg.alerts.ads.voices);
     // Status surfaces success to the user.

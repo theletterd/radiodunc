@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import WEEKDAYS, AppConfig, DJ, DJPersona, DJShift, Show, StationConfig
+from .config import WEEKDAYS, AppConfig, DJ, DJShift, Show, StationConfig
 from .models import Track
 from .news import fetch_random_headline, fetch_top_headlines
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
@@ -36,24 +36,13 @@ def _shifts_match(shifts: list[DJShift], now: datetime) -> bool:
 
     Per the DJ-vs-Show design, an empty shift list means the Show never airs
     (it's a transient "I just deleted everything to re-enter it" state, with
-    a soft warning in the UI). This is intentionally different from the
-    legacy DJPersona behaviour where empty shifts meant "always on".
+    a soft warning in the UI).
     """
     if not shifts:
         return False
     weekday_name = WEEKDAYS[now.weekday()]
     hour = now.hour
     return any(_shift_covers(s, weekday_name, hour) for s in shifts)
-
-
-def _persona_matches(persona: DJPersona, now: datetime) -> bool:
-    """Legacy resolver: True if any of the persona's shifts covers `now`.
-    Empty shifts → always on. Used only for the dj_roster fallback path below."""
-    if not persona.shifts:
-        return True
-    weekday_name = WEEKDAYS[now.weekday()]
-    hour = now.hour
-    return any(_shift_covers(s, weekday_name, hour) for s in persona.shifts)
 
 
 def _pick_active_show(station: StationConfig, now: datetime) -> Show | None:
@@ -69,40 +58,26 @@ def _pick_active_show(station: StationConfig, now: datetime) -> Show | None:
     return None
 
 
-def pick_active_persona(station: StationConfig, now: datetime) -> DJ | DJPersona | None:
+def pick_active_persona(station: StationConfig, now: datetime) -> DJ | None:
     """Return the DJ for the first matching Show, or None.
 
     None means "no override — caller falls through to station defaults". This
     happens when no Show matches the current time, or when the matching Show
     has dj_id=None (an explicit Default DJ slot in the schedule).
-
-    Walks `station.shows` first. Falls back to the legacy `station.dj_roster`
-    walk only when `shows` is empty — this preserves behaviour for configs
-    that haven't been touched by the new model yet (back-compat for one
-    release while installations migrate).
     """
-    if station.shows:
-        show = _pick_active_show(station, now)
-        if show is None or show.dj_id is None:
-            # No match, or an explicit Default-DJ slot.
-            return None
-        djs_by_id = {dj.id: dj for dj in station.djs}
-        # If show.dj_id references a DJ that no longer exists, the lookup
-        # returns None and we fall through to the Default DJ. Slice 6's
-        # delete-DJ flow rewrites those references; this is the defensive
-        # belt-and-braces case.
-        return djs_by_id.get(show.dj_id)
-
-    # Legacy fallback — only triggers when shows is empty.
-    for persona in station.dj_roster:
-        if _persona_matches(persona, now):
-            return persona
-    return None
+    show = _pick_active_show(station, now)
+    if show is None or show.dj_id is None:
+        return None
+    djs_by_id = {dj.id: dj for dj in station.djs}
+    # If show.dj_id references a DJ that no longer exists, the lookup returns
+    # None and we fall through to the Default DJ. Slice 6's delete-DJ flow
+    # rewrites those references; this is the defensive belt-and-braces case.
+    return djs_by_id.get(show.dj_id)
 
 
 def active_station(station: StationConfig, config: AppConfig, now: datetime | None = None) -> StationConfig:
     """Return station with DJ fields overridden by any matching Show's DJ."""
-    if not station.shows and not station.dj_roster:
+    if not station.shows:
         return station
     if now is None:
         try:
