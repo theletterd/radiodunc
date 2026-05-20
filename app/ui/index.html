@@ -23,6 +23,10 @@
           <span class="emoji">📅</span> The Schedule
         </button>
 
+        <button id="openRosterBtn" class="sidebar-action">
+          <span class="emoji">🎙</span> DJ Roster
+        </button>
+
         <button id="openSettingsBtn" class="sidebar-action">
           <span class="emoji">⚙</span> Station Settings
         </button>
@@ -78,6 +82,31 @@
              needed to keep the Show flow moving. -->
         <div id="djCreateModal" class="dj-create-modal" role="dialog"
              aria-label="Create new DJ" aria-modal="true"></div>
+      </div>
+
+      <!-- DJ Roster view (sidebar takeover, parallel to the scheduler) -->
+      <div class="sidebar-view sidebar-roster" data-sub-view="list">
+        <div class="scheduler-header">
+          <h2 class="scheduler-title">🎙 DJ Roster</h2>
+          <button id="closeRosterBtn" class="icon-button" title="Close roster">‹</button>
+        </div>
+
+        <!-- List sub-view: one row per DJ + "+ New DJ" -->
+        <div class="roster-list-view">
+          <div id="rosterList" class="roster-list"></div>
+          <div class="row" style="margin-top:14px;">
+            <button id="addDjBtn" class="primary">+ New DJ</button>
+          </div>
+        </div>
+
+        <!-- Edit sub-view: the DJ editor form -->
+        <div class="roster-edit-view">
+          <button id="backToRosterBtn" class="icon-button" style="margin-bottom:12px;">← Back</button>
+          <!-- No <form> tag for the same anti-LastPass reason the show form
+               carries; save is wired up in JS via click, not submit. -->
+          <div id="djEditorForm" class="persona-form" role="group"
+               aria-label="Edit DJ"></div>
+        </div>
       </div>
 
       <!-- Station settings view (sidebar takeover, like the scheduler) -->

@@ -38,6 +38,11 @@ const EXPORTED_NAMES = [
   '_readFormIntoWorkingShow',
   // inline DJ create modal
   '_openDJCreateModal', '_closeDJCreateModal', '_saveDJCreate',
+  // DJ roster sidebar takeover
+  '_openRoster', '_setRosterMode', '_setRosterSubView',
+  '_renderRosterList', '_openDJEditor', '_renderDJEditorForm',
+  '_saveDJEdit', '_deleteDJ', '_previewDJVoice',
+  '_readFormIntoWorkingDJ', '_fmtShiftReadable',
   // station settings
   '_openSettings', '_setSettingsMode', '_renderSettingsForm',
   '_saveSettings', '_applySettingsForm',
@@ -70,6 +75,9 @@ function _appSource() {
       // Back-compat alias for older tests that still read the value under the
       // legacy name; same object, different alias.
       globalThis.__getSchedulerWorkingPersona = () => schedulerWorkingShow;
+      // DJ Roster working state — same shape as schedulerWorkingShow but for
+      // the DJ editor in the Roster takeover.
+      globalThis.__getRosterWorkingDJ = () => rosterWorkingDJ;
     `;
     // Accessors for private let-bindings needed by player render tests.
     const playerAccessors = [
