@@ -1768,6 +1768,320 @@ async function _deleteShow() {
 function _escapeAttr(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 function _escapeText(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// ── DJ Roster sidebar takeover ──────────────────────────────────────────────
+// Parallel to the Schedule and Settings views: a sidebar mode dedicated to
+// editing DJ identities (name, personality, voice, instructions). The Show
+// editor handles scheduling; this view handles "who is the DJ". A DJ can be
+// referenced by many Shows, so editing identity here is the one place that
+// reflects everywhere.
+
+let rosterEditing = null;        // null = no form; '__new__' = new; otherwise dj.id
+let rosterWorkingDJ = null;      // mutable form state
+
+function _setRosterMode(on) {
+  const wrap = document.getElementById('wrap');
+  if (!wrap) return;
+  wrap.dataset.mode = on ? 'roster' : 'default';
+  if (on) {
+    _setRosterSubView('list');
+    _renderRosterList();
+  }
+}
+
+function _setRosterSubView(name) {
+  const panel = document.querySelector('.sidebar-roster');
+  if (panel) panel.dataset.subView = name;
+}
+
+async function _openRoster() {
+  _setRosterMode(true);
+}
+
+// Format a single shift as "Monday 9am – noon" for editor/delete-confirmation
+// readouts. Re-uses _fmtShiftRange so the formatting matches the schedule's.
+function _fmtShiftReadable(shift) {
+  const raw = String(shift.day || '');
+  const day = raw.charAt(0).toUpperCase() + raw.slice(1);
+  return `${day} ${_fmtShiftRange(Number(shift.start_hour), Number(shift.end_hour))}`;
+}
+
+async function _renderRosterList() {
+  const container = document.getElementById('rosterList');
+  if (!container) return;
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const djs   = config.station?.djs   || [];
+  const shows = config.station?.shows || [];
+
+  container.innerHTML = '';
+
+  if (djs.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.style.fontSize = '0.85rem';
+    empty.textContent = 'No DJs yet. Click "+ New DJ" to add one — they\'ll show up here and become pickable in the Show editor.';
+    container.appendChild(empty);
+    return;
+  }
+
+  // Each DJ's row is colour-coded by its position in the *original* djs[]
+  // ordering — the same key the schedule grid uses to colour blocks — so the
+  // chip-on-the-row matches the block colour at a glance.
+  const colourByIdx = new Map(djs.map((d, i) => [d.id, _personaColor(i)]));
+  // Display order: alphabetical. Predictable as the roster grows.
+  const sorted = djs.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+  sorted.forEach((dj) => {
+    const hosted = shows.filter(s => s.dj_id === dj.id);
+    const orphan = hosted.length === 0;
+    const row = document.createElement('div');
+    row.className = 'roster-row';
+    row.dataset.djId = dj.id;
+
+    const nameLine = document.createElement('div');
+    nameLine.className = 'roster-row-name';
+    nameLine.innerHTML =
+      `<span class="roster-row-swatch" style="background:${colourByIdx.get(dj.id)};"></span>` +
+      `<span>${_escapeText(dj.name)}</span>`;
+    row.appendChild(nameLine);
+
+    if (dj.personality) {
+      const p = document.createElement('div');
+      p.className = 'roster-row-personality';
+      p.textContent = dj.personality;
+      row.appendChild(p);
+    }
+
+    const meta = document.createElement('div');
+    meta.className = 'roster-row-meta';
+    const usesLabel = hosted.length === 1 ? '1 show' : `${hosted.length} shows`;
+    meta.innerHTML =
+      `<span>${dj.voice ? `Voice: ${_escapeText(dj.voice)}` : 'Voice: (default)'}</span>` +
+      `<span>Used in ${usesLabel}</span>` +
+      (orphan ? `<span class="orphan">⚠ not in any show</span>` : '');
+    row.appendChild(meta);
+
+    row.addEventListener('click', () => _openDJEditor(dj.id));
+    container.appendChild(row);
+  });
+}
+
+async function _openDJEditor(djId) {
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const djs = config.station?.djs || [];
+
+  if (djId === '__new__') {
+    rosterWorkingDJ = {
+      id: (globalThis.crypto?.randomUUID?.() ?? `tmp-${Math.random().toString(36).slice(2)}`),
+      name: '',
+      personality: '',
+      voice: null,
+      voice_instructions: null,
+      prompt_template: null,
+    };
+    rosterEditing = '__new__';
+  } else {
+    const found = djs.find(d => d.id === djId);
+    if (!found) return;
+    rosterWorkingDJ = JSON.parse(JSON.stringify(found));
+    rosterEditing = djId;
+  }
+  _setRosterSubView('edit');
+  await _renderDJEditorForm();
+}
+
+async function _renderDJEditorForm() {
+  const form = document.getElementById('djEditorForm');
+  if (!form || !rosterWorkingDJ) return;
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const shows = config.station?.shows || [];
+  const dj = rosterWorkingDJ;
+  const isNew = rosterEditing === '__new__';
+  const hosted = isNew ? [] : shows.filter(s => s.dj_id === dj.id);
+  const previewSample = dj.name
+    ? `Hi, you're listening to ${dj.name} on RadioDunc.`
+    : `Hi, you're listening to RadioDunc.`;
+
+  form.innerHTML = `
+    <div>
+      <label for="de-name">On-air handle <span class="muted" style="text-transform:none; font-weight:400;">— the name the DJ goes by</span></label>
+      <input type="text" id="de-name" value="${_escapeAttr(dj.name)}" required
+             autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+             aria-autocomplete="none" />
+    </div>
+    <div>
+      <label for="de-personality">Personality <span class="muted" style="text-transform:none; font-weight:400;">— what they SAY: attitude, slang, vibe</span></label>
+      <textarea id="de-personality" required autocomplete="off"
+                data-lpignore="true" data-1p-ignore="true">${_escapeText(dj.personality)}</textarea>
+    </div>
+    <div>
+      <label for="de-voice">Voice</label>
+      <div class="voice-row">
+        <select id="de-voice" autocomplete="off" data-lpignore="true" data-1p-ignore="true">
+          <option value="">(use station default)</option>
+          ${OPENAI_VOICES.map(v => `<option value="${v}"${dj.voice === v ? ' selected' : ''}>${v}</option>`).join('')}
+        </select>
+        <button type="button" class="preview-btn" id="de-preview-btn">▶ Preview</button>
+      </div>
+    </div>
+    <div>
+      <label for="de-vi">Voice instructions <span class="muted" style="text-transform:none; font-weight:400;">— how they should sound (pacing, tone, accent…)</span></label>
+      <textarea id="de-vi" autocomplete="off"
+                data-lpignore="true" data-1p-ignore="true">${_escapeText(dj.voice_instructions || '')}</textarea>
+    </div>
+    <div class="preview-status" id="de-preview-status"></div>
+    <div class="persona-form-actions">
+      <div class="left-group">
+        <button type="button" id="de-save" class="primary">${isNew ? 'Create DJ' : 'Save changes'}</button>
+        <button type="button" id="de-cancel">Cancel</button>
+      </div>
+      ${isNew ? '' : '<button type="button" class="delete-btn" id="de-delete">Delete</button>'}
+    </div>
+    ${isNew ? '' : `
+    <div class="dj-editor-uses">
+      <h4>Used in ${hosted.length === 1 ? '1 show' : `${hosted.length} shows`}</h4>
+      ${hosted.length === 0
+        ? '<p class="no-uses">⚠ Not currently in any show — go to the schedule to put them on the air.</p>'
+        : `<ul>${hosted.map(s => {
+            const name = s.name ? `<span class="show-name">${_escapeText(s.name)}</span> — ` : '';
+            const ranges = (s.shifts || []).length
+              ? (s.shifts || []).map(_fmtShiftReadable).join('; ')
+              : '<span style="color:#fbbf24;">no shifts</span>';
+            return `<li>${name}${ranges}</li>`;
+          }).join('')}</ul>`
+      }
+    </div>`}
+  `;
+
+  _autoResizeTextarea(form.querySelector('#de-personality'));
+  _autoResizeTextarea(form.querySelector('#de-vi'));
+
+  form.querySelector('#de-cancel').addEventListener('click', () => _setRosterSubView('list'));
+  form.querySelector('#de-preview-btn').addEventListener('click', () => _previewDJVoice(previewSample));
+  form.querySelector('#de-save').addEventListener('click', _saveDJEdit);
+  if (!isNew) form.querySelector('#de-delete').addEventListener('click', _deleteDJ);
+}
+
+function _readFormIntoWorkingDJ() {
+  const dj = rosterWorkingDJ;
+  dj.name = document.getElementById('de-name').value.trim();
+  dj.personality = document.getElementById('de-personality').value.trim();
+  const v = document.getElementById('de-voice').value;
+  dj.voice = v || null;
+  const vi = document.getElementById('de-vi').value.trim();
+  dj.voice_instructions = vi || null;
+}
+
+async function _previewDJVoice(sampleText) {
+  _readFormIntoWorkingDJ();
+  const btn = document.getElementById('de-preview-btn');
+  const status = document.getElementById('de-preview-status');
+  btn.disabled = true;
+  status.textContent = 'Synthesizing preview…';
+  try {
+    const resp = await api('/tts/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        text: sampleText,
+        voice: rosterWorkingDJ.voice,
+        voice_instructions: rosterWorkingDJ.voice_instructions,
+      }),
+    });
+    const audio = new Audio(resp.clip_url);
+    status.textContent = 'Playing…';
+    audio.onended = () => { status.textContent = ''; };
+    audio.onerror = () => { status.textContent = 'Playback failed.'; };
+    await audio.play();
+  } catch (err) {
+    status.textContent = `Preview failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function _saveDJEdit(event) {
+  event?.preventDefault?.();
+  _readFormIntoWorkingDJ();
+  const status = document.getElementById('de-preview-status');
+
+  if (!rosterWorkingDJ.name || !rosterWorkingDJ.personality) {
+    status.textContent = 'Name and personality are required.';
+    return;
+  }
+
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  config.station = config.station || {};
+  config.station.djs = config.station.djs || [];
+
+  if (rosterEditing === '__new__') {
+    config.station.djs.push(rosterWorkingDJ);
+  } else {
+    const idx = config.station.djs.findIndex(d => d.id === rosterEditing);
+    if (idx === -1) {
+      // Defensive: DJ was deleted out from under us. Append rather than
+      // silently dropping the user's edits.
+      config.station.djs.push(rosterWorkingDJ);
+    } else {
+      config.station.djs[idx] = rosterWorkingDJ;
+    }
+  }
+
+  status.textContent = 'Saving…';
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    status.textContent = '';
+    _setRosterSubView('list');
+    await _renderRosterList();
+  } catch (err) {
+    status.textContent = `Save failed: ${err.message}`;
+  }
+}
+
+async function _deleteDJ() {
+  if (rosterEditing === '__new__') return;
+  let config;
+  try { config = await api('/config'); } catch (_) { return; }
+  const djs   = config.station?.djs   || [];
+  const shows = config.station?.shows || [];
+  const dj = djs.find(d => d.id === rosterEditing);
+  if (!dj) return;
+  const affected = shows.filter(s => s.dj_id === dj.id);
+
+  // Confirmation lists shows that'll be reassigned. We don't auto-delete
+  // those Shows — they fall through to the Default DJ slot (dj_id=null), so
+  // the listener still gets a broadcast in those slots, just hosted by the
+  // station's own DJ instead of the deleted one.
+  let promptText = `Delete DJ "${dj.name}"?`;
+  if (affected.length) {
+    const list = affected.map(s => {
+      const label = s.name ? `${s.name}` : '(unnamed show)';
+      const ranges = (s.shifts || []).map(_fmtShiftReadable).join('; ') || 'no shifts';
+      return `  • ${label} — ${ranges}`;
+    }).join('\n');
+    promptText = `Delete DJ "${dj.name}"?\n\n` +
+                 `${affected.length === 1 ? 'This show is' : `These ${affected.length} shows are`} hosted by them — they'll be reassigned to the Default DJ:\n${list}`;
+  }
+  if (!confirm(promptText)) return;
+
+  // Reassign shows to Default DJ, then drop the DJ row.
+  affected.forEach(s => { s.dj_id = null; });
+  const idx = djs.findIndex(d => d.id === dj.id);
+  if (idx !== -1) djs.splice(idx, 1);
+
+  try {
+    await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    _setRosterSubView('list');
+    await _renderRosterList();
+  } catch (err) {
+    alert(`Delete failed: ${err.message}`);
+  }
+}
+
 // ── Station settings sidebar ────────────────────────────────────────────────
 // Mirrors the scheduler takeover: sidebar expands, we render a grouped form
 // for the most-tweaked AppConfig fields. The form deliberately omits fields
@@ -2125,6 +2439,12 @@ async function init() {
   document.getElementById('openSettingsBtn')?.addEventListener('click', _openSettings);
   document.getElementById('closeSettingsBtn')?.addEventListener('click', () => _setSettingsMode(false));
 
+  // DJ Roster sidebar takeover.
+  document.getElementById('openRosterBtn')?.addEventListener('click', _openRoster);
+  document.getElementById('closeRosterBtn')?.addEventListener('click', () => _setRosterMode(false));
+  document.getElementById('backToRosterBtn')?.addEventListener('click', () => _setRosterSubView('list'));
+  document.getElementById('addDjBtn')?.addEventListener('click', () => _openDJEditor('__new__'));
+
   // Esc closes whichever sidebar takeover is active.
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
@@ -2137,6 +2457,12 @@ async function init() {
       }
     } else if (mode === 'settings') {
       _setSettingsMode(false);
+    } else if (mode === 'roster') {
+      if (document.querySelector('.sidebar-roster')?.dataset.subView === 'edit') {
+        _setRosterSubView('list');
+      } else {
+        _setRosterMode(false);
+      }
     }
   });
 

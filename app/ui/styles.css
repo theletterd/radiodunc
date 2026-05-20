@@ -555,10 +555,14 @@ ul {
 .wrap[data-mode="settings"] {
   grid-template-columns: 520px 1fr;
 }
+.wrap[data-mode="roster"] {
+  grid-template-columns: 520px 1fr;
+}
 .sidebar-view { display: none; }
 .wrap[data-mode="default"]   .sidebar-default   { display: block; }
 .wrap[data-mode="scheduler"] .sidebar-scheduler { display: flex; flex-direction: column; }
 .wrap[data-mode="settings"]  .sidebar-settings  { display: flex; flex-direction: column; }
+.wrap[data-mode="roster"]    .sidebar-roster    { display: flex; flex-direction: column; }
 
 /* ── Schedule trigger button in default sidebar ── */
 .sidebar-action {
@@ -632,6 +636,97 @@ ul {
 .scheduler-grid-view, .scheduler-edit-view { display: none; }
 .sidebar-scheduler[data-sub-view="grid"] .scheduler-grid-view { display: block; }
 .sidebar-scheduler[data-sub-view="edit"] .scheduler-edit-view { display: block; }
+
+/* ── DJ Roster sub-views ── */
+.roster-list-view, .roster-edit-view { display: none; }
+.sidebar-roster[data-sub-view="list"] .roster-list-view { display: block; }
+.sidebar-roster[data-sub-view="edit"] .roster-edit-view { display: block; }
+
+/* ── DJ Roster list rows ── */
+.roster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.roster-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.roster-row:hover {
+  background: #1e293b;
+  border-color: var(--pink);
+}
+.roster-row-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.roster-row-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.roster-row-personality {
+  font-size: 0.78rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.roster-row-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.roster-row-meta .orphan {
+  color: #fbbf24;  /* amber — soft nudge */
+}
+
+/* DJ editor: "Used in N show(s)" footer */
+.dj-editor-uses {
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+}
+.dj-editor-uses h4 {
+  margin: 0 0 6px 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dj-editor-uses ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dj-editor-uses li {
+  color: var(--text);
+}
+.dj-editor-uses li .show-name {
+  color: var(--pink);
+}
+.dj-editor-uses .no-uses {
+  color: #fbbf24;
+}
 
 /* ── Persona form ── */
 .persona-form {
