@@ -96,6 +96,21 @@ Migration: the current dj_roster shape is one-to-one (each persona owns
 its own shifts). On load, expand each persona into one DJ + one show
 record. Old configs keep working without manual edits.
 
+## ✅ Schedule grid unclickable after persona edit → back
+
+Not actually a persona-edit bug — it was the 60-second auto-refresh
+(`_scheduleAutoRefresh`) calling `renderSchedule()` without re-running
+`_attachBlockClickHandlers()`. Every other caller did the pair correctly;
+the interval timer was the one forgotten path. Symptom showed up most
+often after persona editing because that's when the user lingers in
+scheduler mode long enough for the timer to fire.
+
+Fix: folded `_attachBlockClickHandlers()` into `renderSchedule` itself
+so it can't be forgotten again. Removed the now-redundant explicit calls
+from the six other call sites. Regression test in
+`tests/js/schedule.test.js` re-renders in place and asserts that a click
+on the new block still opens the editor.
+
 ## ☐ Spurious unprompted playback after lid-close / wake
 
 Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started
@@ -124,6 +139,12 @@ generation token, or have the autoTrigger callback re-check
 Shipped in PR #118. `get_news_clip` never blocks on regeneration anymore;
 cache miss = skip the segment + queue a refresh. The warmup on `player_play`
 keeps the cache warm in normal use, so the skip path almost never fires.
+
+**Follow-up (May 2026):** with sparse news cadence (every_n_breaks ≥ 10),
+the skip path WAS firing in practice — when the 30-min cache expires between
+cadence hits, news disappears for an entire extra cycle. `_attach_news` now
+waits up to `NEWS_BLOCK_ON_MISS_S` (8 s) on the just-spawned refresh before
+falling back to skip. `get_news_clip`'s contract is unchanged.
 
 ## ✅ Persona definition refactor — split personality from voice
 Shipped in PR #120. `dj_style` → `personality` on both `StationConfig`

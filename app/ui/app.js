@@ -991,6 +991,12 @@ async function renderSchedule() {
   const nowCol = _jsDayToGridIndex(now.getDay()) + 2;
   const nowRow = now.getHours() + 2;
   _appendCell(grid, '', 'grid-now-indicator', nowCol, nowRow);
+
+  // The grid's DOM is fully replaced on every render, taking the previous
+  // blocks' click/mousedown listeners with it. Re-wire here so callers can't
+  // forget — the 60-second auto-refresh used to leave the grid unresponsive
+  // until the drawer was closed and reopened.
+  _attachBlockClickHandlers();
 }
 
 // Refresh the NOW indicator + roster view periodically. 60s is the natural
@@ -1011,7 +1017,7 @@ function _setSchedulerMode(on) {
   wrap.dataset.mode = on ? 'scheduler' : 'default';
   if (on) {
     _setSchedulerSubView('grid');
-    renderSchedule().then(_attachBlockClickHandlers);
+    renderSchedule();
   }
 }
 
@@ -1182,11 +1188,9 @@ async function _onDragEnd() {
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(configToSave) });
     await renderSchedule();
-    _attachBlockClickHandlers();
   } catch (err) {
     console.warn('[schedule] save after resize failed:', err);
     await renderSchedule();
-    _attachBlockClickHandlers();
   }
 }
 
@@ -1312,11 +1316,9 @@ async function _onMoveDragEnd(e) {
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(configToSave) });
     await renderSchedule();
-    _attachBlockClickHandlers();
   } catch (err) {
     console.warn('[schedule] save after move failed:', err);
     await renderSchedule();
-    _attachBlockClickHandlers();
   }
 }
 
@@ -1569,7 +1571,6 @@ async function _savePersona(event) {
     status.textContent = '';
     _setSchedulerSubView('grid');
     await renderSchedule();
-    _attachBlockClickHandlers();
   } catch (err) {
     status.textContent = `Save failed: ${err.message}`;
   }
@@ -1586,7 +1587,6 @@ async function _deletePersona() {
     await api('/config', { method: 'PUT', body: JSON.stringify(config) });
     _setSchedulerSubView('grid');
     await renderSchedule();
-    _attachBlockClickHandlers();
   } catch (err) {
     alert(`Delete failed: ${err.message}`);
   }

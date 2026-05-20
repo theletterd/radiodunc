@@ -806,6 +806,70 @@ def test_news_cache_expired_returns_none_and_queues_refresh(monkeypatch, _reset_
     assert m._news_cache is fresh
 
 
+def test_attach_news_blocks_on_miss_and_uses_fresh_entry(monkeypatch, _reset_news_cache):
+    """On cache miss, _attach_news waits briefly on the just-spawned refresh
+    rather than skipping immediately. Here the refresh runs synchronously via
+    the fake Thread, so the wait returns instantly with a fresh entry."""
+    import app.main as m
+
+    fresh = _news_entry(_time_mod.time(), "freshly-built")
+    monkeypatch.setattr("app.main._build_news_clip", lambda config: fresh)
+    _ImmediateThread.instances = []
+    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
+
+    cfg = _news_config()
+    cfg.alerts.news.rss_url = "https://example.test/rss"
+    clip_url, script_text = m._attach_news(cfg)
+
+    assert clip_url == f"/media/dj-clip/{fresh['clip_hash']}"
+    assert script_text == fresh["script_text"]
+    assert m._news_cache is fresh
+
+
+def test_attach_news_returns_none_when_refresh_yields_nothing(monkeypatch, _reset_news_cache):
+    """RSS down / build fails — refresh completes with no entry. _attach_news
+    should bail out (None, None) without waiting the full timeout."""
+    import app.main as m
+
+    monkeypatch.setattr("app.main._build_news_clip", lambda config: None)
+    _ImmediateThread.instances = []
+    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
+
+    cfg = _news_config()
+    cfg.alerts.news.rss_url = "https://example.test/rss"
+
+    t0 = _time_mod.time()
+    clip_url, script_text = m._attach_news(cfg)
+    elapsed = _time_mod.time() - t0
+
+    assert (clip_url, script_text) == (None, None)
+    # Should return ~immediately (the in-flight flag clears synchronously via
+    # the fake thread); definitely not the full NEWS_BLOCK_ON_MISS_S window.
+    assert elapsed < 1.0
+
+
+def test_attach_news_block_on_miss_respects_timeout(monkeypatch, _reset_news_cache):
+    """If no refresh ever signals done, _wait_for_fresh_news must give up at
+    the deadline rather than hanging the request forever."""
+    import app.main as m
+
+    # Pretend a refresh is already in flight (so _attach_news won't spawn a
+    # new one) and the done event stays clear. The wait should hit timeout.
+    m._news_refresh_in_flight = True
+    m._news_refresh_done.clear()
+    monkeypatch.setattr("app.main.NEWS_BLOCK_ON_MISS_S", 0.05)
+
+    cfg = _news_config()
+    cfg.alerts.news.rss_url = "https://example.test/rss"
+
+    t0 = _time_mod.time()
+    clip_url, script_text = m._attach_news(cfg)
+    elapsed = _time_mod.time() - t0
+
+    assert (clip_url, script_text) == (None, None)
+    assert 0.05 <= elapsed < 1.0
+
+
 def test_news_cache_expired_when_refresh_already_in_flight(monkeypatch, _reset_news_cache):
     """Don't pile up parallel refreshes when one is already running."""
     import app.main as m

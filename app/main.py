@@ -623,17 +623,28 @@ def _take_prefetched(target_idx: int) -> dict | None:
 # News bulletins are expensive to produce (LLM + TTS, ~5 s). We keep one ready
 # at all times: hand back the cached clip immediately, and refresh in the
 # background once it crosses the "stale" threshold so the next request still
-# gets something recent without paying the latency. get_news_clip never
-# blocks on regeneration — if we don't have a usable cached clip we skip the
-# news segment for this transition and queue a background refresh, so the
-# NEXT news-cadence hit has fresh material. The warmup that fires on
-# player_play seeds the cache before the user reaches their first cadence.
+# gets something recent without paying the latency. get_news_clip itself never
+# blocks — on miss it returns None and queues a refresh. The caller
+# (_attach_news) is where we trade latency for delivery: it waits up to
+# NEWS_BLOCK_ON_MISS_S on the just-spawned refresh before skipping, so
+# sparse-cadence stations don't go ages without news whenever the cache
+# expires between hits. The warmup that fires on player_play still seeds
+# the cache so the typical fast path hits the fresh branch.
 NEWS_STALE_AFTER_S  = 20 * 60   # spawn background refresh after this
 NEWS_EXPIRE_AFTER_S = 30 * 60   # past this, the cached clip is too old to serve
+# When a cadence hit finds the cache empty/expired, _attach_news will briefly
+# block waiting on the just-spawned refresh rather than skipping outright.
+# Capped tight: this runs inside an API request, and the alternative (skip)
+# is already acceptable. 8 s comfortably covers a ~5 s build with margin.
+NEWS_BLOCK_ON_MISS_S = 8.0
 
 _news_cache: dict | None = None
 _news_cache_lock = threading.Lock()
 _news_refresh_in_flight = False
+# Cleared when a refresh starts, set when it finishes (success OR failure).
+# _attach_news uses this to wait briefly on an in-flight refresh before giving up.
+_news_refresh_done = threading.Event()
+_news_refresh_done.set()  # no refresh running at startup
 
 
 def _build_news_clip(config: AppConfig) -> dict | None:
@@ -690,6 +701,7 @@ def _refresh_news_background(config: AppConfig) -> None:
     finally:
         with _news_cache_lock:
             _news_refresh_in_flight = False
+        _news_refresh_done.set()
 
 
 def _spawn_news_refresh(config: AppConfig, reason: str, age_s: int | None = None) -> None:
@@ -704,6 +716,7 @@ def _spawn_news_refresh(config: AppConfig, reason: str, age_s: int | None = None
         if not _news_refresh_in_flight:
             _news_refresh_in_flight = True
             should_spawn = True
+            _news_refresh_done.clear()
     if should_spawn:
         threading.Thread(
             target=_refresh_news_background, args=(config,), daemon=True,
@@ -755,13 +768,53 @@ def get_news_clip(config: AppConfig) -> dict | None:
 
 
 def _attach_news(config: AppConfig) -> tuple[str | None, str | None]:
-    """Return (clip_url, script_text) for the news segment, or (None, None)."""
+    """Return (clip_url, script_text) for the news segment, or (None, None).
+
+    On cache miss, get_news_clip has already spawned a refresh. We give that
+    refresh a bounded window to finish (NEWS_BLOCK_ON_MISS_S) before falling
+    back to skipping the segment. This avoids the failure mode where sparse
+    news cadence + an expired cache = no news for a long stretch.
+    """
     entry = get_news_clip(config)
     if not entry:
-        return None, None
+        entry = _wait_for_fresh_news(NEWS_BLOCK_ON_MISS_S)
+        if not entry:
+            return None, None
+        _log_event("news.cache.block_on_miss.satisfied", age_s=round(time.time() - entry["generated_at"]))
     age_s = round(time.time() - entry["generated_at"])
     _log_event("player.next.news_attached", level=logging.DEBUG, source=config.alerts.news.rss_url, age_s=age_s)
     return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"]
+
+
+def _wait_for_fresh_news(timeout_s: float) -> dict | None:
+    """Block up to `timeout_s` for an in-flight news refresh to finish.
+
+    Returns the cache entry if it lands fresh (not expired) within the
+    timeout, otherwise None. Callers should only invoke this after a
+    get_news_clip miss, which guarantees a refresh has been spawned (or one
+    was already running) — so the wait actually has something to wait on.
+    """
+    deadline = time.time() + timeout_s
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            _log_event("news.cache.block_on_miss.timeout", timeout_s=timeout_s)
+            return None
+        _news_refresh_done.wait(timeout=remaining)
+        with _news_cache_lock:
+            cached = _news_cache
+            in_flight = _news_refresh_in_flight
+        if cached:
+            age = time.time() - cached["generated_at"]
+            if age <= NEWS_EXPIRE_AFTER_S:
+                return cached
+        if not in_flight:
+            # Refresh completed but yielded nothing usable (RSS down, build
+            # failed). No point waiting further — the done event has been set
+            # and no other thread will reset it without our spawning a new
+            # refresh, which we shouldn't do from here.
+            _log_event("news.cache.block_on_miss.empty_after_refresh")
+            return None
 
 
 def _attach_ad(

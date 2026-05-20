@@ -217,6 +217,35 @@ describe('renderSchedule', () => {
     expect(document.querySelector('#scheduleGrid .resize-handle.bottom')).toBeTruthy();
   });
 
+  it('re-attaches block click handlers on every render (regression: 60s auto-refresh used to break clicks)', async () => {
+    // Before the fix, _scheduleAutoRefresh's periodic renderSchedule() call
+    // replaced the grid DOM without re-wiring _onBlockClick — so after the
+    // first 60s tick (or any in-place re-render), clicking a block did
+    // nothing. The fix folds _attachBlockClickHandlers into renderSchedule
+    // itself; this test exercises that by forcing a re-render and asserting
+    // the new blocks fire the click handler.
+    stubFetch({
+      'GET /config': () => configWithRoster([
+        { name: 'Morgan', personality: 'cheerful', shifts: [{ day: 'monday', start_hour: 7, end_hour: 9 }] },
+      ]),
+    });
+
+    await openScheduler();
+    // Re-render in place, simulating what the 60s timer does.
+    await window.renderSchedule();
+
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    expect(block).toBeTruthy();
+
+    // Clicking the re-rendered block should open the persona editor —
+    // which switches the sub-view to "edit".
+    block.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await flush();
+
+    const panel = document.querySelector('.sidebar-scheduler');
+    expect(panel?.dataset.subView).toBe('edit');
+  });
+
   it('places the NOW indicator on the current day-column / hour-row', async () => {
     // Pin a known Date so the assertion is deterministic. Tuesday 14:30 UTC.
     const realNow = Date.now;
