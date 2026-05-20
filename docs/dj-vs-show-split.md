@@ -117,7 +117,7 @@ those references. They fall through to the Default DJ at runtime.
 
 ```python
 class DJ(BaseModel):
-    id: str                         # stable, slug-from-name on create
+    id: str                         # uuid4, generated on create, never changed
     name: str
     personality: str
     voice: str | None
@@ -125,8 +125,9 @@ class DJ(BaseModel):
     prompt_template: str | None     # carries over from DJPersona
 
 class Show(BaseModel):
-    id: str                         # stable; uuid or slug, TBD
-    dj_id: str | None               # None = play as Default DJ
+    id: str                         # uuid4
+    name: str | None = None         # optional; falls back to DJ name in UI
+    dj_id: str | None = None        # None = play as Default DJ
     shifts: list[DJShift]           # reuses existing DJShift model
 
 class StationConfig:
@@ -135,6 +136,11 @@ class StationConfig:
     shows: list[Show] = []
     dj_roster: list[DJPersona] = []  # KEPT for back-compat during migration
 ```
+
+UUIDs (not slugs) because the long-term plan is for config to move into
+a database, with `radio_config.json` becoming a seed file for fresh
+clones. UUIDs are the right primary-key shape for that future and let
+us avoid a second migration when we get there.
 
 `dj_roster` stays alongside the new fields during migration. On load,
 each legacy persona expands into one `DJ` + one `Show` pointing at it.
@@ -149,7 +155,7 @@ The shape transform on load:
 ```
 For each persona in dj_roster:
   dj = DJ(
-    id = slug(persona.name),
+    id = uuid4(),
     name = persona.name,
     personality = persona.personality,
     voice = persona.voice,
@@ -157,7 +163,8 @@ For each persona in dj_roster:
     prompt_template = persona.prompt_template,
   )
   show = Show(
-    id = uuid_or_slug(),
+    id = uuid4(),
+    name = None,                 # legacy personas had no separate show name
     dj_id = dj.id,
     shifts = persona.shifts,
   )
@@ -189,66 +196,98 @@ Shape changes inside the function; callers (everything in
 existing signatures by re-using the DJ shape (it has the same
 identity fields).
 
-## What this doc does NOT settle
+## Resolved (post-design-discussion)
 
-Four open questions. See the discussion thread at the bottom of the
-parent conversation; this section will be updated as we resolve them.
+### IDs — UUIDs
 
-### 1. DJ IDs — slug, uuid, or name?
+DJ and Show both use `uuid4`. Decision tiebreaker: the long-term plan
+is for config to migrate into a database, with `radio_config.json`
+becoming a seed file for fresh clones. UUIDs are the right primary-key
+shape for that future and avoid a second migration when we get there.
 
-Stable IDs are required (Show.dj_id refers to a DJ). Options:
+Trade-off accepted: JSON readability takes a small hit (no more
+`grep saturday-night-sam` to find a DJ's references). Mitigation:
+`name` is right next to `id` in every row, so visual scanning still
+works.
 
-- **Slug from name (auto on create, never changed on rename)** —
-  readable in JSON, predictable, collision handling = append `-2`.
-  Tradeoff: a DJ named "Sam" is `sam` even after rename to "Samuel",
-  which is fine but might surprise on first encounter.
-- **UUID** — bombproof, ugly in JSON, no human meaning.
-- **Just use the name** — simplest, breaks on rename without an
-  explicit "rename and update references" flow.
+### "+ Create new DJ" inside the Show picker — inline modal
 
-Current lean: **slug from name**.
+When the user picks "+ Create new DJ" from the Show editor's DJ
+dropdown, a small modal pops over the Show editor with the minimal DJ
+fields (name, personality, voice, voice_instructions). Save creates
+the DJ, closes the modal, and pre-selects it in the picker. The
+in-progress Show edits are preserved throughout.
 
-### 2. Where does "+ Create new DJ" inside the Show picker dispatch to?
+Implementation: the DJ Roster's full editor drawer already exists by
+the time we wire this up. The modal version is a slimmer subset
+reusing the same form helpers.
 
-- **Inline modal over the Show editor** — preserves Show context,
-  small extra implementation (a stack of two drawers / a sub-modal).
-- **Navigate to DJ Roster** — loses unsaved Show edits, friction.
+### Empty-shifts Show — allow + soft warning
 
-Current lean: **inline modal**.
+A Show with `shifts: []` saves cleanly but renders with a
+"⚠ no shifts — this show won't air" badge in the schedule view.
+The runtime resolver skips it (no shifts = no match), so nothing
+breaks.
 
-### 3. Empty-shifts Show — error or warning?
+This makes "delete all shifts to re-enter them" a legitimate transient
+state instead of a save error.
 
-A Show with zero shifts can't air. Today this would be a validation
-error. After the split: should saving a no-shifts Show be allowed
-(with a soft "this show won't air" badge) or rejected at save?
+### Show.name — yes, optional
 
-Current lean: **allow + soft badge**, easier on the user during edits
-("delete all shifts, then re-add"). Doesn't break anything at runtime
-because the resolver just skips it.
+A `Show` carries an optional human-readable name distinct from its
+DJ's name. The point of the DJ-vs-Show split is exactly that the same
+DJ can host different shows — and a name lets the user lean into the
+contrast ("Why is the late-night alt-goth host doing the drivetime
+segment?").
 
-### 4. Does a Show have a name field?
+**Where it surfaces:**
 
-The legacy persona's `name` was really the DJ's name. After the split
-the Show is unnamed — referred to in the UI by its DJ + shifts ("Sam,
-Fri/Sat 8pm–midnight"). Adding `Show.name` would let users tag shows
-("Late Night Sessions") but adds a field with no clear use case today.
+| Surface | Behaviour |
+|---|---|
+| Schedule grid block | DJ name (primary); show name as a small caption below when set |
+| Legend | Per-DJ chip; show names listed in tooltip |
+| On-air badge | "On air: [DJ name]" + " — [Show name]" when set |
+| Show editor drawer | "Show name" field at the top, optional, placeholder hints at the contrast use case |
+| DJ prompt template | New `{show_name}` placeholder available; empty string when unset |
 
-Current lean: **no name field**.
+**Field semantics:**
+- Optional (`None` = unnamed; UI falls back to DJ-name-only displays).
+- No uniqueness constraint — two Shows can both be "Late Night
+  Sessions" if you want.
+- Soft length cap (~50 chars) for layout sanity in grid captions.
+
+**The sleeper feature:** passing `{show_name}` into the DJ prompt
+template lets the LLM acknowledge the mismatch directly. With "Cheerful
+Morning Drive" hosted by "Ms. Jessica Danger," the model has a hook
+to riff on the tension — the contrast becomes part of the broadcast,
+not just the schedule view. This is the strongest argument for the
+field.
 
 ## Implementation order
 
-Once the open questions are resolved, the plan is a series of vertical
-slices, each landing as its own PR:
+The plan is a series of vertical slices, each landing as its own PR:
 
-1. Schema + migration + tests (the new models live in `app/config.py`
-   alongside `DJPersona`; load-time migration; round-trips cleanly).
-2. Backend resolver swap (`pick_active_persona` reads `djs` + `shows`;
-   `dj_roster` path kept for one release).
-3. Schedule grid renders Shows; legend deduplicates by DJ.
-4. Show editor drawer (with DJ picker + inline create modal).
-5. DJ Roster takeover view + DJ editor drawer.
-6. Drop the `dj_roster` field entirely once configs are written in
-   the new shape.
+1. **Schema + migration + tests.** New `DJ` and `Show` models in
+   `app/config.py` alongside `DJPersona`. Load-time migration expands
+   each legacy persona into one `DJ` + one `Show` (UUIDs generated,
+   `Show.name = None`). Round-trips cleanly through save.
+2. **Backend resolver swap.** `pick_active_persona` reads `djs` +
+   `shows`; legacy `dj_roster` path kept as a fallback for one
+   release.
+3. **`{show_name}` in the DJ prompt template.** Adds the placeholder
+   to the default template + docs. Lands with #2 so the resolver can
+   pass it through.
+4. **Schedule grid renders Shows.** Block label = DJ name (primary)
+   + show name (caption when set). Legend deduplicates by DJ. Tooltip
+   on chip lists the DJ's shows by name.
+5. **Show editor drawer.** DJ picker (with "+ Create new DJ…" inline
+   modal), shifts list, optional Show name field at top. Empty-shifts
+   badge.
+6. **DJ Roster takeover view + DJ editor drawer.** "Used in N show(s)"
+   footer with shift previews. Delete-DJ confirmation that lists
+   affected shows.
+7. **Drop the `dj_roster` field entirely** once we're confident every
+   user's config has been rewritten through the new UI.
 
-DJ icons (the avatar feature on the TODO list) layer on top of #5 —
+DJ icons (the avatar feature on the TODO list) layer on top of #6 —
 the avatar attaches to the DJ identity, not the Show.
