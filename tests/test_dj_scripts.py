@@ -358,22 +358,6 @@ def test_active_station_default_dj_slot_does_not_override():
     assert eff.personality == "plain"
 
 
-def test_legacy_fallback_runs_only_when_shows_empty():
-    """If shows is empty but dj_roster has entries, the legacy walk still works
-    (back-compat safety net for one release while configs migrate)."""
-    # Build the station directly bypassing the migration validator: simulate a
-    # config that somehow still has dj_roster populated without shows.
-    station = StationConfig.model_construct(
-        dj_roster=[DJPersona(name="Legacy Larry", style="dusty", days=["monday"])],
-        shows=[],
-        djs=[],
-    )
-    # Use the populated dj_roster directly via the legacy fallback path.
-    result = pick_active_persona(station, MONDAY_NOON)
-    assert result is not None
-    assert result.name == "Legacy Larry"
-
-
 def _station_with_named_show(show_name: str | None, *, dj_name: str = "Default Dan", dj_personality: str = "plain"):
     """Helper: a station with one active Show (covers Monday noon) whose name is `show_name`.
     The DJ identity comes from a DJ row in djs."""
@@ -801,27 +785,6 @@ def test_legacy_hours_only_migrates_to_every_day_shifts():
 def test_persona_with_no_schedule_keeps_empty_shifts():
     p = DJPersona(name="Always on", style="floating")
     assert p.shifts == []
-
-
-def test_persona_with_per_day_hour_shifts():
-    """The new shape lets a single persona have different hours on different days."""
-    from app.config import DJShift
-    p = DJPersona(
-        name="Variable Vince", style="flexible",
-        shifts=[
-            DJShift(day="friday", start_hour=20, end_hour=23),
-            DJShift(day="saturday", start_hour=19, end_hour=1),  # wraps past midnight
-        ],
-    )
-    fri_2200 = datetime(2026, 5, 22, 22, 0)  # Friday
-    sat_2300 = datetime(2026, 5, 23, 23, 0)  # Saturday
-    sat_0030 = datetime(2026, 5, 23, 0, 30)  # Saturday (early morning)
-    sat_0200 = datetime(2026, 5, 23, 2, 0)   # Saturday — outside Sat shift
-    from app.dj_scripts import _persona_matches
-    assert _persona_matches(p, fri_2200) is True
-    assert _persona_matches(p, sat_2300) is True
-    assert _persona_matches(p, sat_0030) is True  # wrap-around
-    assert _persona_matches(p, sat_0200) is False
 
 
 def DJShift_for(day, start, end):

@@ -178,10 +178,9 @@ def test_migration_creates_one_dj_and_one_show():
     station = _station_with_persona()
     assert len(station.djs) == 1
     assert len(station.shows) == 1
-    # dj_roster is kept in-memory so the legacy resolver (pick_active_persona)
-    # keeps working until the slice-2 resolver swap. save_config zeroes it out
-    # in the written JSON so the next load finds djs/shows directly.
-    assert len(station.dj_roster) == 1
+    # dj_roster is no longer a model field; the mode="before" validator pops
+    # it from the raw dict during migration. The model has no .dj_roster attr.
+    assert not hasattr(station, "dj_roster")
 
 
 def test_migration_dj_fields_match_persona():
@@ -253,8 +252,9 @@ def test_migration_is_idempotent_when_djs_already_populated():
     # The djs/shows from the dict should survive untouched.
     assert len(station.djs) == 1
     assert station.djs[0].name == "Existing DJ"
-    # dj_roster was NOT cleared — the condition skipped migration.
-    assert len(station.dj_roster) == 1
+    # dj_roster was popped from the raw dict and (because djs was non-empty)
+    # discarded — Legacy Sam doesn't sneak in alongside Existing DJ.
+    assert not any(d.name == "Legacy Sam" for d in station.djs)
 
 
 def test_migration_no_op_when_roster_empty():
@@ -316,7 +316,8 @@ def test_round_trip_djs_and_shows_survive_save_load(tmp_path, monkeypatch):
 
 
 def test_migrated_config_saves_without_dj_roster(tmp_path, monkeypatch):
-    """After migration, save_config should write dj_roster: [] (not the old entries)."""
+    """After migration, save_config writes djs/shows and the legacy dj_roster
+    key is absent from the JSON entirely (it's no longer part of the schema)."""
     config_path = tmp_path / "radio_config.json"
     monkeypatch.setattr("app.config.CONFIG_PATH", config_path)
     monkeypatch.setattr("app.config.EXAMPLE_CONFIG_PATH", tmp_path / "example-radio_config.json")
@@ -336,8 +337,8 @@ def test_migrated_config_saves_without_dj_roster(tmp_path, monkeypatch):
 
     save_config(loaded)
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    # The legacy list should be empty in the saved file.
-    assert saved["station"]["dj_roster"] == []
-    # The new fields should be present.
+    # The legacy key is gone entirely from the saved JSON.
+    assert "dj_roster" not in saved["station"]
+    # The new fields are present.
     assert len(saved["station"]["djs"]) == 1
     assert saved["station"]["djs"][0]["name"] == "Old Sam"

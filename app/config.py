@@ -423,14 +423,6 @@ class StationConfig(BaseModel):
             "Leave null to use the built-in default."
         ),
     )
-    dj_roster: list[DJPersona] = Field(
-        default_factory=list,
-        description=(
-            "Legacy DJ persona list. Kept for back-compat during the DJ-vs-Show migration. "
-            "On load, each entry is expanded into one DJ + one Show. After the first save "
-            "through the new UI this list will be empty and can be dropped in a later release."
-        ),
-    )
     djs: list[DJ] = Field(
         default_factory=list,
         description="Reusable DJ identities. Each DJ can be referenced by many Shows.",
@@ -445,70 +437,74 @@ class StationConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_fields(cls, data):
-        """Migrate legacy shapes on load. Keeps existing radio_config.json files
-        working without manual edits:
+        """Migrate legacy shapes on load. Keeps pre-DJ-vs-Show radio_config.json
+        files working without manual edits:
 
         - dj_style → personality (rename)
         - voice_gain_offset_db: silently dropped (per-voice trim was superseded
           by the audio chain's DynamicsCompressor)
+        - dj_roster: pre-DJ-vs-Show persona list (each entry had its own
+          schedule). Popped from the raw dict and expanded into djs + shows.
+          The field is no longer part of the schema; this validator is the
+          only thing keeping legacy configs loadable. Idempotent — if djs is
+          already populated we treat dj_roster as stale and discard it.
         """
         if not isinstance(data, dict):
             return data
+
         data.pop("voice_gain_offset_db", None)
         if "personality" not in data and "dj_style" in data:
             data["personality"] = data.pop("dj_style")
         elif "dj_style" in data:
             data.pop("dj_style")
+
+        legacy_roster = data.pop("dj_roster", None)
+        if legacy_roster and not data.get("djs"):
+            new_djs: list[dict] = list(data.get("djs") or [])
+            new_shows: list[dict] = list(data.get("shows") or [])
+            for raw_persona in legacy_roster:
+                # Normalise via DJPersona to re-use its own field migrations
+                # (days/start_hour/end_hour → shifts, style → personality,
+                # voice_gain_offset_db drop). DJPersona stays around as a
+                # private migration helper; it isn't a config field any more.
+                # Accept both raw dicts (from JSON load) and DJPersona
+                # instances (from tests / programmatic construction).
+                if isinstance(raw_persona, DJPersona):
+                    persona = raw_persona
+                elif isinstance(raw_persona, dict):
+                    persona = DJPersona.model_validate(raw_persona)
+                else:
+                    continue
+                dj_id = str(uuid.uuid4())
+                show_id = str(uuid.uuid4())
+                new_djs.append({
+                    "id": dj_id,
+                    "name": persona.name,
+                    "personality": persona.personality,
+                    "voice": persona.voice,
+                    "voice_instructions": persona.voice_instructions,
+                    "prompt_template": persona.prompt_template,
+                })
+                # Preserve the legacy "empty shifts = always on" semantic: a
+                # persona with no schedule used to be on the air whenever
+                # nothing else matched. The new resolver treats an empty
+                # shifts list on a Show as "never airs", so a straight copy
+                # would silently retire those personas. Expand to every hour
+                # of every day so the upgrade is seamless.
+                shifts = (
+                    [s.model_dump() for s in persona.shifts] if persona.shifts
+                    else [{"day": d, "start_hour": 0, "end_hour": 23} for d in WEEKDAYS]
+                )
+                new_shows.append({
+                    "id": show_id,
+                    "name": None,
+                    "dj_id": dj_id,
+                    "shifts": shifts,
+                })
+            data["djs"] = new_djs
+            data["shows"] = new_shows
+
         return data
-
-    @model_validator(mode="after")
-    def migrate_dj_roster_to_djs_shows(self) -> "StationConfig":
-        """Expand legacy dj_roster entries into DJ + Show pairs.
-
-        Runs after field validation so DJPersona's own migration (days/start_hour/
-        end_hour → shifts, style → personality) has already normalised each persona
-        before we copy its data across. Idempotent: if djs is already populated, the
-        roster is left untouched so we don't clobber manual edits.
-        """
-        if not self.dj_roster or self.djs:
-            return self
-
-        new_djs: list[DJ] = []
-        new_shows: list[Show] = []
-        for persona in self.dj_roster:
-            dj_id = str(uuid.uuid4())
-            show_id = str(uuid.uuid4())
-            new_djs.append(DJ(
-                id=dj_id,
-                name=persona.name,
-                personality=persona.personality,
-                voice=persona.voice,
-                voice_instructions=persona.voice_instructions,
-                prompt_template=persona.prompt_template,
-            ))
-            # Preserve legacy "empty shifts = always on" semantics across the
-            # migration. The new model intentionally treats empty-shift Shows
-            # as "doesn't air" (it's a soft-warning transient state in the
-            # UI), so a straight copy would silently retire any DJ that was
-            # previously unscheduled-but-always-on. Expand to every hour of
-            # every day so the upgrade is seamless.
-            shifts = list(persona.shifts)
-            if not shifts:
-                shifts = [DJShift(day=day, start_hour=0, end_hour=23) for day in WEEKDAYS]
-            new_shows.append(Show(
-                id=show_id,
-                name=None,
-                dj_id=dj_id,
-                shifts=shifts,
-            ))
-
-        self.djs = new_djs
-        self.shows = new_shows
-        # dj_roster is intentionally kept in memory so the legacy resolver
-        # (pick_active_persona) continues to work until the slice-2 resolver
-        # swap lands. save_config zeroes it out in the serialised JSON so the
-        # next load uses djs/shows instead.
-        return self
 
     @field_validator("name", "tagline", "format", "dj_name", "personality", mode="before")
     @classmethod
@@ -673,13 +669,6 @@ def save_config(config: AppConfig) -> None:
     the new bytes — never silence."""
     serialized = config.model_dump()
     serialized.pop("openai_api_key", None)
-    # Once djs/shows are populated, clear the legacy dj_roster from the
-    # serialised JSON. The in-memory model keeps it for the legacy resolver
-    # (pick_active_persona) until the slice-2 resolver swap lands, but the
-    # written file should not re-populate the old list on next load.
-    station_data = serialized.get("station", {})
-    if station_data.get("djs"):
-        station_data["dj_roster"] = []
     payload = json.dumps(serialized, indent=2)
 
     tmp = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
