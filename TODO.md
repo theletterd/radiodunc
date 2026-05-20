@@ -119,6 +119,29 @@ from the six other call sites. Regression test in
 `tests/js/schedule.test.js` re-renders in place and asserts that a click
 on the new block still opens the editor.
 
+## ☐ Chunked scan commits
+
+`scan_library` in `app/scanner.py` currently `db.add(track)`s every new file
+and does a single `db.commit()` at the end. On large libraries (10k+
+files) this means:
+
+- The whole new-track set sits in the session's identity map until commit
+  → memory grows with library size.
+- One huge transaction → if the scan crashes or the user kills it
+  partway through, NOTHING was written. Forces a fresh start instead of
+  resuming where it left off.
+- The user sees nothing in the UI's "track count" until the entire scan
+  finishes.
+
+Fix: flush + commit every N tracks (probably N=200 or so — small enough
+to bound memory, large enough that commit overhead doesn't dominate).
+The `existing` duplicate check stays correct because committed rows are
+still visible to subsequent queries in the same session.
+
+Stretch: a `/library/scan/progress` endpoint or websocket so the UI can
+show a live counter ("imported 2,340 of ~8,000…") instead of staring
+at "Scanning…" for a minute.
+
 ## ☐ Spurious unprompted playback after lid-close / wake
 
 Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started

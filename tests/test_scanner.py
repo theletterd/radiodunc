@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models import Track
-from app.scanner import MAX_TRACKS_PER_SCAN, scan_library
+from app.scanner import scan_library
 
 
 def _make_db_session():
@@ -15,10 +15,14 @@ def _make_db_session():
     return testing_session_local()
 
 
-def test_scan_library_limits_imports(monkeypatch, tmp_path):
+def test_scan_library_imports_every_file_no_cap(monkeypatch, tmp_path):
+    """The old MAX_TRACKS_PER_SCAN cap was a placeholder safety net from
+    development; real libraries routinely exceed it. Scans now run to
+    completion regardless of size."""
     db = _make_db_session()
 
-    for idx in range(MAX_TRACKS_PER_SCAN + 5):
+    file_count = 1500  # comfortably past the old 1000 cap
+    for idx in range(file_count):
         (tmp_path / f"song-{idx}.mp3").write_bytes(b"mock")
 
     monkeypatch.setattr(
@@ -28,7 +32,10 @@ def test_scan_library_limits_imports(monkeypatch, tmp_path):
 
     result = scan_library(str(tmp_path), db)
 
-    assert result["imported"] == MAX_TRACKS_PER_SCAN
-    assert result["limit_reached"] is True
-    assert result["max_tracks_per_scan"] == MAX_TRACKS_PER_SCAN
-    assert db.query(Track).count() == MAX_TRACKS_PER_SCAN
+    assert result["imported"] == file_count
+    assert result["scanned"] == file_count
+    assert db.query(Track).count() == file_count
+    # The old result fields are gone — keep this assertion so a future revert
+    # of the cap-removal would loudly fail this test.
+    assert "limit_reached" not in result
+    assert "max_tracks_per_scan" not in result
