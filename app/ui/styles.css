@@ -470,23 +470,25 @@ ul {
   border: 1px dashed #94a3b8;
   color: #cbd5e1;
 }
-/* Two-line block layout: DJ name primary, show name caption underneath. */
-.grid-persona-block .block-primary {
-  font-weight: 600;
-  line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Block label: "<show name> with <DJ name>" (or just the DJ name when the
+   Show has no name). Wraps to multiple lines on narrow cells so long
+   combinations stay readable instead of getting truncated to "Peak Hou…".
+   The block itself stays `overflow: hidden` to prevent text bleeding out
+   the edges, but `white-space: normal` lets internal wrapping happen first. */
+.grid-persona-block .block-label {
+  line-height: 1.15;
+  white-space: normal;
+  overflow-wrap: anywhere;  /* break mid-word on really narrow cells rather than overflowing */
+  hyphens: auto;
+  flex: 1;
+  min-width: 0;             /* let flex children shrink below intrinsic width so wrap kicks in */
 }
-.grid-persona-block .block-caption {
+.grid-persona-block .block-label-lead {
+  font-weight: 600;
+}
+.grid-persona-block .block-label-tail {
   font-weight: 400;
-  font-size: 0.62rem;
-  opacity: 0.85;
-  line-height: 1.1;
-  margin-top: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  opacity: 0.78;
 }
 .grid-persona-block:hover {
   filter: brightness(1.15);

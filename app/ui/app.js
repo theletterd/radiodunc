@@ -930,23 +930,36 @@ function _appendShowBlock(grid, show, display, col, rowStart, rowEndExclusive, m
   if (display.dj?.personality) tooltipParts.push(display.dj.personality);
   block.title = tooltipParts.join(' — ');
 
-  // Two-line layout when there's room: DJ name primary, show name caption
-  // below. Tight blocks (1 hour) fall back to a single-letter monogram so the
-  // grid stays readable.
+  // Label layout: show name leads ("<showName> with <djName>") when set;
+  // DJ name alone otherwise. Wraps naturally to multiple lines on narrow
+  // cells so long combinations like "The Morning Stumble with Taco Steve"
+  // stay readable instead of getting truncated to "The Mor…".
+  // 1-hour blocks fall back to a single-letter monogram (of the show name if
+  // present, else the DJ name) so the grid doesn't get visually crowded.
   const height = rowEndExclusive - rowStart;
   if (height >= 2) {
-    const primary = document.createElement('div');
-    primary.className = 'block-primary';
-    primary.textContent = display.djName;
-    block.appendChild(primary);
-    if (display.showName && height >= 3) {
-      const caption = document.createElement('div');
-      caption.className = 'block-caption';
-      caption.textContent = display.showName;
-      block.appendChild(caption);
+    const label = document.createElement('div');
+    label.className = 'block-label';
+    if (display.showName) {
+      // Two spans so CSS can dim the "with <DJ>" tail and let the show name
+      // read as the primary line.
+      const lead = document.createElement('span');
+      lead.className = 'block-label-lead';
+      lead.textContent = display.showName;
+      const tail = document.createElement('span');
+      tail.className = 'block-label-tail';
+      tail.textContent = ` with ${display.djName}`;
+      label.appendChild(lead);
+      label.appendChild(tail);
+    } else {
+      label.textContent = display.djName;
     }
+    block.appendChild(label);
   } else {
-    block.textContent = display.djName.slice(0, 1);
+    // 1-hour blocks: monogram. Prefer the show name's initial when set
+    // (matches the lead in the longer-block layout).
+    const monoSource = display.showName || display.djName;
+    block.textContent = monoSource.slice(0, 1);
   }
 
   // Tag with the show id (stable across renders, even if list order changes)

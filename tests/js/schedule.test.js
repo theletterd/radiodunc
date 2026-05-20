@@ -348,7 +348,7 @@ describe('legend', () => {
 describe('block label', () => {
   beforeEach(() => loadAppJs());
 
-  it('renders DJ name as the primary label', async () => {
+  it('renders just the DJ name when the show has no name', async () => {
     stubFetch({
       'GET /config': () => configFromShows([
         { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
@@ -356,11 +356,14 @@ describe('block label', () => {
     });
     await openScheduler();
     const block = document.querySelector('#scheduleGrid .grid-persona-block');
-    const primary = block.querySelector('.block-primary');
-    expect(primary?.textContent).toBe('Jess');
+    const label = block.querySelector('.block-label');
+    expect(label?.textContent).toBe('Jess');
+    // No lead/tail split when there's no show name to call out.
+    expect(label.querySelector('.block-label-lead')).toBeNull();
+    expect(label.querySelector('.block-label-tail')).toBeNull();
   });
 
-  it('renders show name as a caption below the DJ name when set and block is tall enough', async () => {
+  it('renders "<show> with <dj>" when the show has a name', async () => {
     stubFetch({
       'GET /config': () => configFromShows([
         { name: 'Jess', showName: 'Drivetime', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
@@ -368,19 +371,32 @@ describe('block label', () => {
     });
     await openScheduler();
     const block = document.querySelector('#scheduleGrid .grid-persona-block');
-    const caption = block.querySelector('.block-caption');
-    expect(caption?.textContent).toBe('Drivetime');
+    const label = block.querySelector('.block-label');
+    expect(label?.textContent).toBe('Drivetime with Jess');
+    // Lead carries the show name; tail carries the " with <DJ>" suffix
+    // (styled lighter via CSS so the show name reads as the primary line).
+    expect(label.querySelector('.block-label-lead').textContent).toBe('Drivetime');
+    expect(label.querySelector('.block-label-tail').textContent).toBe(' with Jess');
   });
 
-  it('omits the caption when the show has no name', async () => {
+  it('block label wraps instead of truncating with an ellipsis', async () => {
+    // happy-dom doesn't apply CSS layout, so we can't measure wrapped lines —
+    // but we can assert the JS doesn't apply nowrap inline AND that the label
+    // gets the .block-label class that the CSS targets for wrap behaviour.
     stubFetch({
       'GET /config': () => configFromShows([
-        { name: 'Jess', shifts: [{ day: 'monday', start_hour: 6, end_hour: 10 }] },
+        { name: 'Saturday Night Sam', showName: 'Peak Hours',
+          shifts: [{ day: 'saturday', start_hour: 18, end_hour: 23 }] },
       ]),
     });
     await openScheduler();
-    const block = document.querySelector('#scheduleGrid .grid-persona-block');
-    expect(block.querySelector('.block-caption')).toBeNull();
+    const label = document.querySelector('#scheduleGrid .grid-persona-block .block-label');
+    expect(label).toBeTruthy();
+    // No inline white-space: nowrap (which the old block-primary/caption used).
+    expect(label.style.whiteSpace).toBe('');
+    // Text is the full combined string, not truncated with an ellipsis.
+    expect(label.textContent).toContain('Peak Hours');
+    expect(label.textContent).toContain('Saturday Night Sam');
   });
 
   it('1-hour blocks fall back to a single-letter monogram (no overflow)', async () => {
@@ -392,7 +408,19 @@ describe('block label', () => {
     await openScheduler();
     const block = document.querySelector('#scheduleGrid .grid-persona-block');
     expect(block.textContent.trim()).toBe('J');
-    expect(block.querySelector('.block-primary')).toBeNull();
+    expect(block.querySelector('.block-label')).toBeNull();
+  });
+
+  it('1-hour monogram prefers the show name initial when set', async () => {
+    stubFetch({
+      'GET /config': () => configFromShows([
+        { name: 'Jess', showName: 'Drivetime',
+          shifts: [{ day: 'monday', start_hour: 6, end_hour: 6 }] },
+      ]),
+    });
+    await openScheduler();
+    const block = document.querySelector('#scheduleGrid .grid-persona-block');
+    expect(block.textContent.trim()).toBe('D');
   });
 });
 
