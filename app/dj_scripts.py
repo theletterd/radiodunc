@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import WEEKDAYS, AppConfig, DJPersona, StationConfig
+from .config import WEEKDAYS, AppConfig, DJ, DJPersona, DJShift, StationConfig
 from .models import Track
 from .news import fetch_random_headline, fetch_top_headlines
 from .schemas import DJScriptGenerateRequest, DJScriptResponse
@@ -21,27 +21,70 @@ from .weather import fetch_weather_summary
 logger = logging.getLogger(__name__)
 
 
+def _shift_covers(shift: DJShift, weekday_name: str, hour: int) -> bool:
+    """True if a single shift covers (weekday_name, hour). Handles wrapping
+    windows (e.g. 22..3 covers 22, 23, 0, 1, 2, 3)."""
+    if shift.day != weekday_name:
+        return False
+    if shift.start_hour <= shift.end_hour:
+        return shift.start_hour <= hour <= shift.end_hour
+    return hour >= shift.start_hour or hour <= shift.end_hour
+
+
+def _shifts_match(shifts: list[DJShift], now: datetime) -> bool:
+    """True if any shift in the list covers `now`.
+
+    Per the DJ-vs-Show design, an empty shift list means the Show never airs
+    (it's a transient "I just deleted everything to re-enter it" state, with
+    a soft warning in the UI). This is intentionally different from the
+    legacy DJPersona behaviour where empty shifts meant "always on".
+    """
+    if not shifts:
+        return False
+    weekday_name = WEEKDAYS[now.weekday()]
+    hour = now.hour
+    return any(_shift_covers(s, weekday_name, hour) for s in shifts)
+
+
 def _persona_matches(persona: DJPersona, now: datetime) -> bool:
-    """True if any of the persona's shifts covers `now`. Empty shifts → always on."""
+    """Legacy resolver: True if any of the persona's shifts covers `now`.
+    Empty shifts → always on. Used only for the dj_roster fallback path below."""
     if not persona.shifts:
         return True
     weekday_name = WEEKDAYS[now.weekday()]
     hour = now.hour
-    for shift in persona.shifts:
-        if shift.day != weekday_name:
-            continue
-        if shift.start_hour <= shift.end_hour:
-            if shift.start_hour <= hour <= shift.end_hour:
-                return True
-        else:
-            # Wrapping window, e.g. 22..3 covers 22, 23, 0, 1, 2, 3
-            if hour >= shift.start_hour or hour <= shift.end_hour:
-                return True
-    return False
+    return any(_shift_covers(s, weekday_name, hour) for s in persona.shifts)
 
 
-def pick_active_persona(station: StationConfig, now: datetime) -> DJPersona | None:
-    """Return the first roster persona whose schedule matches now, or None."""
+def pick_active_persona(station: StationConfig, now: datetime) -> DJ | DJPersona | None:
+    """Return the DJ for the first matching Show, or None.
+
+    None means "no override — caller falls through to station defaults". This
+    happens when no Show matches the current time, or when the matching Show
+    has dj_id=None (an explicit Default DJ slot in the schedule).
+
+    Walks `station.shows` first. Falls back to the legacy `station.dj_roster`
+    walk only when `shows` is empty — this preserves behaviour for configs
+    that haven't been touched by the new model yet (back-compat for one
+    release while installations migrate).
+    """
+    if station.shows:
+        djs_by_id = {dj.id: dj for dj in station.djs}
+        for show in station.shows:
+            if not _shifts_match(show.shifts, now):
+                continue
+            if show.dj_id is None:
+                return None  # explicit Default-DJ slot
+            dj = djs_by_id.get(show.dj_id)
+            if dj is not None:
+                return dj
+            # show.dj_id references a DJ that no longer exists; treat the
+            # slot as Default DJ. Slice 6's delete-DJ flow rewrites these
+            # references, so this is just a defensive belt-and-braces case.
+            return None
+        return None
+
+    # Legacy fallback — only triggers when shows is empty.
     for persona in station.dj_roster:
         if _persona_matches(persona, now):
             return persona
@@ -49,8 +92,8 @@ def pick_active_persona(station: StationConfig, now: datetime) -> DJPersona | No
 
 
 def active_station(station: StationConfig, config: AppConfig, now: datetime | None = None) -> StationConfig:
-    """Return station with DJ fields overridden by any matching roster persona."""
-    if not station.dj_roster:
+    """Return station with DJ fields overridden by any matching Show's DJ."""
+    if not station.shows and not station.dj_roster:
         return station
     if now is None:
         try:

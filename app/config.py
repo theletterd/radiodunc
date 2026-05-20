@@ -481,11 +481,20 @@ class StationConfig(BaseModel):
                 voice_instructions=persona.voice_instructions,
                 prompt_template=persona.prompt_template,
             ))
+            # Preserve legacy "empty shifts = always on" semantics across the
+            # migration. The new model intentionally treats empty-shift Shows
+            # as "doesn't air" (it's a soft-warning transient state in the
+            # UI), so a straight copy would silently retire any DJ that was
+            # previously unscheduled-but-always-on. Expand to every hour of
+            # every day so the upgrade is seamless.
+            shifts = list(persona.shifts)
+            if not shifts:
+                shifts = [DJShift(day=day, start_hour=0, end_hour=23) for day in WEEKDAYS]
             new_shows.append(Show(
                 id=show_id,
                 name=None,
                 dj_id=dj_id,
-                shifts=list(persona.shifts),
+                shifts=shifts,
             ))
 
         self.djs = new_djs

@@ -3,11 +3,16 @@ from unittest.mock import patch
 
 import json
 
+import uuid
+
 from app.config import (
     AppConfig,
     AdBreakPreferences,
+    DJ,
     DJPersona,
+    DJShift,
     NewsPreferences,
+    Show,
     StationConfig,
     StationIDPreferences,
 )
@@ -204,6 +209,183 @@ def test_active_station_falls_back_when_no_match():
     cfg = AppConfig(station=station)
     eff = active_station(station, cfg, now=MONDAY_NOON)  # Monday, persona only Sunday
     assert eff.dj_name == "Default Dan"
+
+
+# ── Slice 2: resolver reads djs + shows directly ─────────────────────────────
+
+def _station_with_shows(djs: list[DJ], shows: list[Show], **kwargs) -> StationConfig:
+    """Build a StationConfig with djs/shows populated AND dj_roster empty so the
+    new resolver path runs cleanly (no legacy fallback)."""
+    return StationConfig(djs=djs, shows=shows, dj_roster=[], **kwargs)
+
+
+def test_resolver_picks_dj_from_matching_show():
+    dj_id = str(uuid.uuid4())
+    dj = DJ(id=dj_id, name="Show Sam", personality="punny")
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=dj_id,
+        shifts=[DJShift(day="monday", start_hour=10, end_hour=14)],
+    )
+    station = _station_with_shows([dj], [show])
+    assert pick_active_persona(station, MONDAY_NOON).name == "Show Sam"
+
+
+def test_resolver_returns_none_when_show_has_no_dj_id():
+    """A Show with dj_id=None is an explicit 'Default DJ hosts this slot' — the
+    resolver returns None so the caller falls through to station defaults."""
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=None,
+        shifts=[DJShift(day="monday", start_hour=10, end_hour=14)],
+    )
+    station = _station_with_shows([], [show])
+    assert pick_active_persona(station, MONDAY_NOON) is None
+
+
+def test_resolver_returns_none_when_no_show_matches():
+    dj_id = str(uuid.uuid4())
+    dj = DJ(id=dj_id, name="Sunday Only", personality="lazy")
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=dj_id,
+        shifts=[DJShift(day="sunday", start_hour=10, end_hour=14)],
+    )
+    station = _station_with_shows([dj], [show])
+    assert pick_active_persona(station, MONDAY_NOON) is None
+
+
+def test_resolver_skips_empty_shifts_show():
+    """Per the design, an empty-shifts Show never airs (it's a transient UI state)."""
+    dj_id = str(uuid.uuid4())
+    dj = DJ(id=dj_id, name="Unscheduled", personality="lost")
+    empty_show = Show(id=str(uuid.uuid4()), dj_id=dj_id, shifts=[])
+    matching_show_dj_id = str(uuid.uuid4())
+    matching_dj = DJ(id=matching_show_dj_id, name="Actually Working", personality="present")
+    matching_show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=matching_show_dj_id,
+        shifts=[DJShift(day="monday", start_hour=10, end_hour=14)],
+    )
+    station = _station_with_shows([dj, matching_dj], [empty_show, matching_show])
+    # The empty-shifts Show is skipped; the next Show wins.
+    assert pick_active_persona(station, MONDAY_NOON).name == "Actually Working"
+
+
+def test_resolver_returns_none_when_show_references_missing_dj():
+    """Defensive: if a Show points at a dj_id that no longer exists, treat the
+    slot as Default DJ rather than crashing or skipping."""
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=str(uuid.uuid4()),  # not in djs
+        shifts=[DJShift(day="monday", start_hour=10, end_hour=14)],
+    )
+    station = _station_with_shows([], [show])
+    assert pick_active_persona(station, MONDAY_NOON) is None
+
+
+def test_resolver_picks_first_matching_show_when_multiple_overlap():
+    """Order in station.shows determines precedence — first match wins."""
+    dj_a = DJ(id=str(uuid.uuid4()), name="First Match", personality="a")
+    dj_b = DJ(id=str(uuid.uuid4()), name="Second Match", personality="b")
+    shifts = [DJShift(day="monday", start_hour=0, end_hour=23)]
+    show_a = Show(id=str(uuid.uuid4()), dj_id=dj_a.id, shifts=list(shifts))
+    show_b = Show(id=str(uuid.uuid4()), dj_id=dj_b.id, shifts=list(shifts))
+    station = _station_with_shows([dj_a, dj_b], [show_a, show_b])
+    assert pick_active_persona(station, MONDAY_NOON).name == "First Match"
+
+
+def test_resolver_handles_wrapping_hour_range_on_show():
+    dj = DJ(id=str(uuid.uuid4()), name="Owl", personality="mellow")
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=dj.id,
+        shifts=[DJShift(day="monday", start_hour=22, end_hour=3)],
+    )
+    station = _station_with_shows([dj], [show])
+    midnight = datetime(2026, 5, 18, 0, 30)
+    early = datetime(2026, 5, 18, 4, 0)
+    assert pick_active_persona(station, midnight).name == "Owl"
+    assert pick_active_persona(station, early) is None
+
+
+def test_active_station_overrides_via_show_path():
+    """End-to-end: a Show binding overrides station DJ fields just like the
+    legacy persona path did."""
+    dj_id = str(uuid.uuid4())
+    dj = DJ(
+        id=dj_id,
+        name="Override Olive",
+        personality="dramatic",
+        voice="echo",
+        prompt_template="custom {dj_name}",
+    )
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=dj_id,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    station = _station_with_shows(
+        [dj], [show],
+        dj_name="Default Dan",
+        personality="plain",
+        voice="alloy",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg, now=MONDAY_NOON)
+    assert eff.dj_name == "Override Olive"
+    assert eff.personality == "dramatic"
+    assert eff.voice == "echo"
+    assert eff.dj_prompt_template == "custom {dj_name}"
+
+
+def test_active_station_default_dj_slot_does_not_override():
+    """A Show with dj_id=None means 'Default DJ hosts this slot' — the station's
+    own dj_name/personality/voice are returned unchanged."""
+    show = Show(
+        id=str(uuid.uuid4()),
+        dj_id=None,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    station = _station_with_shows(
+        [], [show],
+        dj_name="Default Dan",
+        personality="plain",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg, now=MONDAY_NOON)
+    assert eff.dj_name == "Default Dan"
+    assert eff.personality == "plain"
+
+
+def test_legacy_fallback_runs_only_when_shows_empty():
+    """If shows is empty but dj_roster has entries, the legacy walk still works
+    (back-compat safety net for one release while configs migrate)."""
+    # Build the station directly bypassing the migration validator: simulate a
+    # config that somehow still has dj_roster populated without shows.
+    station = StationConfig.model_construct(
+        dj_roster=[DJPersona(name="Legacy Larry", style="dusty", days=["monday"])],
+        shows=[],
+        djs=[],
+    )
+    # Use the populated dj_roster directly via the legacy fallback path.
+    result = pick_active_persona(station, MONDAY_NOON)
+    assert result is not None
+    assert result.name == "Legacy Larry"
+
+
+def test_migration_expands_empty_shift_persona_to_full_week():
+    """A legacy 'always on' persona (empty shifts) should migrate to a Show with
+    every-hour-every-day shifts. Without this, the new resolver — which treats
+    empty-shifts Shows as 'never airs' — would silently retire the DJ."""
+    station = StationConfig(dj_roster=[DJPersona(name="Always", style="here")])
+    show = station.shows[0]
+    assert len(show.shifts) == 7  # one per weekday
+    days_covered = {s.day for s in show.shifts}
+    assert days_covered == {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+    assert all(s.start_hour == 0 and s.end_hour == 23 for s in show.shifts)
+    # And it should resolve via the new path.
+    assert pick_active_persona(station, MONDAY_NOON).name == "Always"
 
 
 # ── Ad script generation ──────────────────────────────────────────────────────
