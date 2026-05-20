@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from .models import Track
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg"}
-MAX_TRACKS_PER_SCAN = 1000
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +53,14 @@ def scan_library(folder_path: str, db: Session) -> dict:
     imported = 0
     skipped_duplicates = 0
     errors: list[dict] = []
-    limit_reached = False
 
-    logger.info("library.scan.started", extra={"folder": str(root), "max_tracks_per_scan": MAX_TRACKS_PER_SCAN})
+    logger.info("library.scan.started", extra={"folder": str(root)})
 
+    # NOTE: every new Track is added to the session and we commit once at the
+    # end. On very large libraries (10k+ files) this holds the full set in
+    # memory and produces one huge transaction. See TODO.md ("Chunked scan
+    # commits") for the follow-up — flush + commit every N tracks so memory
+    # stays bounded and partial progress survives a crash.
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
@@ -68,14 +71,6 @@ def scan_library(folder_path: str, db: Session) -> dict:
         if existing:
             skipped_duplicates += 1
             continue
-
-        if imported >= MAX_TRACKS_PER_SCAN:
-            limit_reached = True
-            logger.info(
-                "library.scan.limit_reached",
-                extra={"folder": str(root), "max_tracks_per_scan": MAX_TRACKS_PER_SCAN, "scanned": scanned, "imported": imported},
-            )
-            break
 
         try:
             metadata = _extract_track_metadata(path)
@@ -94,7 +89,6 @@ def scan_library(folder_path: str, db: Session) -> dict:
             "imported": imported,
             "skipped_duplicates": skipped_duplicates,
             "errors": len(errors),
-            "limit_reached": limit_reached,
         },
     )
     return {
@@ -102,6 +96,4 @@ def scan_library(folder_path: str, db: Session) -> dict:
         "imported": imported,
         "skipped_duplicates": skipped_duplicates,
         "errors": errors,
-        "limit_reached": limit_reached,
-        "max_tracks_per_scan": MAX_TRACKS_PER_SCAN,
     }
