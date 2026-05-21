@@ -1222,3 +1222,104 @@ def test_generate_dj_avatar_returns_none_on_empty_response(monkeypatch, tmp_path
     cfg = AppConfig(openai_api_key="sk-fake")
     dj = DJ(id="dj-empty", name="Sam", personality="x")
     assert generate_dj_avatar(dj, cfg) is None
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", lambda req, timeout=60: FakeResp())
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-empty", name="Sam", personality="x")
+    assert generate_dj_avatar(dj, cfg) is None
+
+
+# ── Self-ID directive (DJ + show name on ~1 in 3 transitions) ──────────────
+
+def _build_prompt_with_show(*, dj_name="Sam", show_name=None, personality="warm"):
+    """Helper: build the prompt with an optional active Show.name. Shifts
+    cover every day so the test isn't sensitive to which weekday it runs on
+    — _build_prompt internally re-reads wall-clock time for the active-show
+    lookup, so a single-day shift would silently fail on any other day."""
+    from app.config import DJ, DJShift, Show, StationConfig, WEEKDAYS
+    djx = DJ(id="dj-1", name=dj_name, personality=personality)
+    show = Show(
+        id="show-1", dj_id=djx.id, name=show_name,
+        shifts=[DJShift(day=d, start_hour=0, end_hour=23) for d in WEEKDAYS],
+    )
+    station = StationConfig(
+        djs=[djx], shows=[show], dj_roster=[],
+        dj_name="Default Dan", personality="plain",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg)
+    return _build_prompt(
+        eff, DJScriptGenerateRequest(max_sentences=2), None, None, cfg,
+    )
+
+
+def test_self_id_block_fires_with_show_name_when_roll_hits(monkeypatch):
+    """When the self-ID roll passes AND the active Show has a name, the
+    injected directive references both the DJ name and the show name —
+    classic 'You're listening to <show>, with <dj>' patter."""
+    # 0.05 < 1/3 → roll triggers
+    monkeypatch.setattr("random.random", lambda: 0.05)
+    prompt = _build_prompt_with_show(
+        dj_name="Ms. Jessica Danger", show_name="After Hours",
+    )
+    assert "Self-ID this round" in prompt
+    assert "After Hours" in prompt
+    assert "Ms. Jessica Danger" in prompt
+    # Sample patter phrases land in the prompt as guidance to the LLM.
+    assert "You're listening to" in prompt or "yours truly" in prompt
+
+
+def test_self_id_block_fires_without_show_name_when_roll_hits(monkeypatch):
+    """No active Show name → directive falls back to DJ name only, classic
+    'This is <dj>' patter. Doesn't try to fabricate a show name."""
+    monkeypatch.setattr("random.random", lambda: 0.05)
+    prompt = _build_prompt_with_show(dj_name="Taco Steve", show_name=None)
+    assert "Self-ID this round" in prompt
+    assert "Taco Steve" in prompt
+    # Show-name patter shouldn't show up — there's no show name to use.
+    assert "yours truly" in prompt  # generic patter sample is still there
+
+
+def test_self_id_block_absent_when_roll_misses(monkeypatch):
+    """On the other ~2/3 of transitions the directive doesn't fire, so the
+    DJ doesn't sound like they're constantly announcing themselves."""
+    # 0.99 >= 1/3 → roll fails
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    prompt = _build_prompt_with_show(
+        dj_name="Ms. Jessica Danger", show_name="After Hours",
+    )
+    assert "Self-ID this round" not in prompt
+
+
+def test_self_id_chance_is_a_module_constant(monkeypatch):
+    """The roll probability is set as a module-level constant so it's easy
+    to find and tweak. Tweaking it to 0 should disable self-ID entirely."""
+    monkeypatch.setattr("app.dj_scripts._SELF_ID_CHANCE", 0.0)
+    monkeypatch.setattr("random.random", lambda: 0.0)  # would normally trigger
+    prompt = _build_prompt_with_show(dj_name="Sam", show_name="Drivetime")
+    assert "Self-ID this round" not in prompt
+
+
+def test_custom_template_can_reference_self_id_block_placeholder(monkeypatch):
+    """Custom dj_prompt_template overrides can use {self_id_block} too.
+    Default-template tests above cover the literal text; this one locks in
+    that the placeholder is exposed to overrides."""
+    monkeypatch.setattr("random.random", lambda: 0.05)
+    from app.config import DJ, DJShift, Show, StationConfig, WEEKDAYS
+    dj = DJ(id="dj-1", name="Sam", personality="warm")
+    show = Show(
+        id="show-1", dj_id=dj.id, name="Drivetime",
+        shifts=[DJShift(day=d, start_hour=0, end_hour=23) for d in WEEKDAYS],
+    )
+    station = StationConfig(
+        djs=[dj], shows=[show], dj_roster=[],
+        dj_name="Default Dan", personality="plain",
+        dj_prompt_template="START {self_id_block}END",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg)
+    prompt = _build_prompt(
+        eff, DJScriptGenerateRequest(max_sentences=2), None, None, cfg,
+    )
+    assert prompt.startswith("START ")
+    assert prompt.endswith("END")
+    assert "Self-ID this round" in prompt

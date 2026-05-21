@@ -131,6 +131,12 @@ def substitute_station_placeholder(script: str, config: AppConfig) -> str:
     spoken = config.station.spoken_name or config.station.name
     return script.replace(STATION_PLACEHOLDER, spoken)
 
+# How often _build_prompt injects the self-ID directive ("name yourself
+# and the show this round"). Roughly every 3rd transition feels like a
+# DJ habit; constant self-ID gets grating; never doing it leaves the
+# listener wondering who they're hearing. Tweak here if it ever feels off.
+_SELF_ID_CHANCE = 1 / 3
+
 DEFAULT_DJ_PROMPT_TEMPLATE = """\
 Write a {max_sentences}-sentence radio DJ transition for the station named '{station_name}'.
 DJ: {dj_name} ({personality}).
@@ -138,7 +144,7 @@ Station format: {station_format}.{station_era}{station_genre_focus}{station_desc
 {show_block}Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
 Up next: {next_track}.
-{reason_block}{weather_block}{news_block}{ad_block}\
+{reason_block}{weather_block}{news_block}{ad_block}{self_id_block}\
 Return plain text only — no headings, no markdown.
 When you would mention the station by name, write the literal placeholder [[STATION]] (with the double square brackets) — the radio software substitutes the correct spoken pronunciation before audio is generated. Never write the station name out as digits or abbreviations yourself."""
 
@@ -301,6 +307,30 @@ def _build_prompt(
         if show_name else ""
     )
 
+    # Self-ID roll. Real radio DJs identify themselves and the show every few
+    # transitions, not every one (constant self-ID gets grating; never doing it
+    # leaves the listener wondering who they're hearing). LLMs are stateless
+    # across calls so "every few" needs to be enforced from out here: roll a
+    # die and inject a directive when it hits. Probability picked so it lands
+    # roughly every 3rd transition on average — feels like a habit rather than
+    # an announcement.
+    import random as _random
+    self_id_block = ""
+    if _random.random() < _SELF_ID_CHANCE:
+        if show_name:
+            self_id_block = (
+                f"Self-ID this round: weave in your name AND the show name naturally. "
+                f"Classic radio patter — \"You're listening to {show_name}, with yours "
+                f"truly, {station.dj_name}\", \"This is {station.dj_name} on {show_name}, "
+                f"and coming up next…\", that kind of feel. A habit, not an announcement.\n"
+            )
+        else:
+            self_id_block = (
+                f"Self-ID this round: drop your own name into the patter naturally. "
+                f"Classic radio — \"This is {station.dj_name}\", \"yours truly, "
+                f"{station.dj_name}\", that feel. A habit, not an announcement.\n"
+            )
+
     fields = {
         "max_sentences": payload.max_sentences,
         "station_name": station.name,
@@ -322,6 +352,7 @@ def _build_prompt(
         "news_block": news_block,
         "ad_block": ad_block,
         "reason_block": reason_block,
+        "self_id_block": self_id_block,
     }
     template = station.dj_prompt_template or DEFAULT_DJ_PROMPT_TEMPLATE
     try:
