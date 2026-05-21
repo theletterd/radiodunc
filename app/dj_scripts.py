@@ -137,6 +137,27 @@ def substitute_station_placeholder(script: str, config: AppConfig) -> str:
 # listener wondering who they're hearing. Tweak here if it ever feels off.
 _SELF_ID_CHANCE = 1 / 3
 
+
+# Module-level memory of the last (dj_id, show_id) tuple we built a prompt
+# for. When the next prompt's tuple differs, we know a show/DJ change just
+# happened on air and inject a handoff directive ("you just took the mic
+# from <prev>") so the new DJ reacts to the takeover instead of opening
+# cold mid-shift. Resets on process restart — first prompt after a restart
+# is a bootstrap and never fires handoff (we can't ask the DJ to react to
+# a takeover we don't actually know happened). Single-station deployment
+# is assumed; if that ever changes, key this by station id.
+#
+# Keys: "dj_id" (str | None), "show_id" (str | None), "dj_name" (str | None).
+# The sentinel "uninitialised" state is an empty dict; once populated, the
+# keys are always present (with None values when there's no active show /
+# the Ghost is on air).
+_last_handoff_state: dict[str, str | None] = {}
+
+
+def _reset_handoff_state() -> None:
+    """Test-only helper to clear the module-level handoff memory."""
+    _last_handoff_state.clear()
+
 DEFAULT_DJ_PROMPT_TEMPLATE = """\
 Write a {max_sentences}-sentence radio DJ transition for the station named '{station_name}'.
 DJ: {dj_name} ({personality}).
@@ -144,7 +165,7 @@ Station format: {station_format}.{station_era}{station_genre_focus}{station_desc
 {show_block}Local time right now: {current_time} on {current_weekday}. Mention the time only if it fits naturally (top of the hour, late night, morning, etc.) — don't force it.
 We just heard: {previous_track}.
 Up next: {next_track}.
-{reason_block}{weather_block}{news_block}{ad_block}{self_id_block}\
+{reason_block}{weather_block}{news_block}{ad_block}{handoff_block}{self_id_block}\
 Return plain text only — no headings, no markdown.
 When you would mention the station by name, write the literal placeholder [[STATION]] (with the double square brackets) — the radio software substitutes the correct spoken pronunciation before audio is generated. Never write the station name out as digits or abbreviations yourself."""
 
@@ -307,6 +328,66 @@ def _build_prompt(
         if show_name else ""
     )
 
+    # Show-takeover detection. If the (dj_id, show_id) tuple changed since
+    # the last prompt we built, a handoff just happened on air — inject a
+    # directive so the new DJ opens with a takeover line ("just taking the
+    # mic from <prev>, this is <you> on <show>…") instead of starting cold
+    # mid-shift. First prompt after process start is bootstrap-only: we
+    # store the current state but don't fire, because we genuinely don't
+    # know whether a takeover happened (the previous DJ ran in a process
+    # that no longer exists). Suppresses self_id_block when it fires —
+    # takeovers already self-ID, doubling up would be redundant.
+    current_show_id = active_show.id if active_show else None
+    current_dj = pick_active_persona(station, now)
+    current_dj_id = current_dj.id if current_dj else None
+    handoff_block = ""
+    if _last_handoff_state:
+        prev_dj_id = _last_handoff_state.get("dj_id")
+        prev_show_id = _last_handoff_state.get("show_id")
+        if (current_dj_id, current_show_id) != (prev_dj_id, prev_show_id):
+            prev_dj_name = _last_handoff_state.get("dj_name")
+            # Two flavours: warm handoff when we know the outgoing DJ's name
+            # ("thanks <prev>, you've got <you> now"), and cold takeover
+            # when we don't (process churn, Ghost-from-nowhere, or the
+            # outgoing DJ was the same person — rare but possible if a Show
+            # ID changes mid-shift via config edit).
+            if prev_dj_name and prev_dj_name != station.dj_name:
+                handoff_block = (
+                    f"Show takeover this round: you've JUST taken the mic from "
+                    f"{prev_dj_name}. Open with a live-radio handoff that's TRUE TO "
+                    f"YOUR personality — real DJs have opinions about each other and "
+                    f"about the show they're following. Pick whichever fits {station.dj_name}'s "
+                    f"vibe: warm and gracious if you'd genuinely thank them; gushing "
+                    f"fan-mode if their show rules; mock-shady or playfully catty if "
+                    f"their style grates on yours; dryly relieved (\"finally\") if "
+                    f"you're glad it's over; affectionate piss-take between friends; "
+                    f"or just brisk and professional if that's who you are. "
+                    f"Self-ID in the same beat — \"…you're with {station.dj_name} now"
+                    + (f" on {show_name}" if show_name else "")
+                    + "\" — then pivot into the music. One or two beats of colour, "
+                    "then move on. It's a handoff, not a monologue.\n"
+                )
+            else:
+                # Same DJ, new Show — they're not arriving cold, they're flipping
+                # the framing. Acknowledge the show change in their voice rather
+                # than pretending they just walked in.
+                handoff_block = (
+                    f"Show takeover this round: same you, new show — "
+                    + (f"'{show_name}' just started. " if show_name else "the next show just started. ")
+                    + f"Flip the framing on air in a way that's true to {station.dj_name}'s "
+                    "personality: excited if this slot is your wheelhouse, dry if it's not, "
+                    "wryly resigned if you're stuck with it, theatrical if that's your bag. "
+                    + (f"Self-ID with the new show name — \"…you're with {station.dj_name} on "
+                       f"{show_name} now\" — then pivot into the music. "
+                       if show_name else
+                       f"Self-ID with your name — \"this is {station.dj_name}\" — then pivot "
+                       "into the music. ")
+                    + "Keep it brief; the colour does the work, not the word count.\n"
+                )
+    _last_handoff_state["dj_id"] = current_dj_id
+    _last_handoff_state["show_id"] = current_show_id
+    _last_handoff_state["dj_name"] = station.dj_name
+
     # Self-ID roll. Real radio DJs identify themselves and the show every few
     # transitions, not every one (constant self-ID gets grating; never doing it
     # leaves the listener wondering who they're hearing). LLMs are stateless
@@ -316,7 +397,12 @@ def _build_prompt(
     # an announcement.
     import random as _random
     self_id_block = ""
-    if _random.random() < _SELF_ID_CHANCE:
+    # Skip the self-ID roll when a takeover fires — the handoff block
+    # already self-IDs (more naturally, in context). Stacking both would
+    # produce "thanks Sammy, you're with Mel… this is Mel, you're listening
+    # to Late Night Sessions", which is exactly the over-announcing we're
+    # trying to avoid.
+    if not handoff_block and _random.random() < _SELF_ID_CHANCE:
         if show_name:
             self_id_block = (
                 f"Self-ID this round: weave in your name AND the show name naturally. "
@@ -353,6 +439,7 @@ def _build_prompt(
         "ad_block": ad_block,
         "reason_block": reason_block,
         "self_id_block": self_id_block,
+        "handoff_block": handoff_block,
     }
     template = station.dj_prompt_template or DEFAULT_DJ_PROMPT_TEMPLATE
     try:
