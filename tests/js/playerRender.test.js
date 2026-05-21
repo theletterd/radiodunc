@@ -276,6 +276,39 @@ describe('setOnAirMode badge avatar', () => {
     // Text content includes the DJ's name (textContent strips the markup).
     expect(el.textContent).toContain('Ms. Jessica Danger');
     expect(el.textContent).toContain('On air with');
+    // Placeholder colour falls back to the neutral slate when the DJ isn't
+    // in the local colour cache (init's /config didn't include this id).
+    // The visible behaviour we care about — that the badge picks a colour
+    // matched to the schedule/roster when the cache IS populated — gets
+    // covered by the dedicated test below.
+    expect(avatar.style.background).toBeTruthy();
+  });
+
+  it('badge avatar background matches the DJ colour cache (not hardcoded pink)', async () => {
+    // Pre-populate the colour cache via _refreshDjColourCache — same code
+    // path init() takes after fetching /config. This DJ ends up at index 1
+    // → palette colour _personaColor(1) = '#fb923c'.
+    globalThis._refreshDjColourCache({
+      station: {
+        djs: [
+          { id: 'dj-other', name: 'Other', personality: 'x' },
+          { id: 'dj-jess-cached', name: 'Jess', personality: 'x' },
+        ],
+      },
+    });
+    globalThis.__setServerState(baseState({
+      station: {
+        name: 'Test FM', tagline: 't', dj_name: 'Jess',
+        active_dj_id: 'dj-jess-cached',
+      },
+    }));
+
+    globalThis.setOnAirMode('dj');
+    await flush(); await flush();
+
+    const avatar = document.querySelector('#nowPlaying .badge-avatar');
+    // happy-dom keeps hex colours as-set rather than normalising to rgb().
+    expect(avatar.style.background).toBe('#fb923c');
   });
 
   it('dj mode without active_dj_id falls back to plain text (no avatar)', async () => {

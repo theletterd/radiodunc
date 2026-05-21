@@ -1100,13 +1100,13 @@ ul {
 
 /* On-air badge avatar: tiny inline circle slotted before the "🎙️ On air
    with ..." text. Vertically aligned with the surrounding text + a small
-   right margin so the emoji + name still read as one line. The default
-   placeholder uses a pink-tinted fill so it blends with the existing badge
-   theming when no avatar's generated yet for the active DJ. */
+   right margin so the emoji + name still read as one line. The background
+   colour is set inline per-DJ (matches the schedule grid + roster colour),
+   so the placeholder circle reads as the same DJ across surfaces during
+   the image-load flash. */
 .badge-avatar {
   vertical-align: -5px;
   margin-right: 6px;
-  background: var(--pink-dim);
 }
 
 /* DJ editor: avatar header row sits above the form fields. */
