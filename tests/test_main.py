@@ -624,6 +624,99 @@ def test_queue_inject_inserts_after_current(monkeypatch, tmp_path):
     assert updated_queue[1]["track_id"] == track2.id
 
 
+def test_queue_inject_appends_at_end_when_position_is_end(monkeypatch, tmp_path):
+    """The "Add to playlist" button in the search results sends position='end',
+    which appends the requested track to the tail of the queue (heard
+    eventually) rather than slotting it right after the currently-playing
+    one. The track is still flagged requested=True so the DJ banter
+    acknowledges it when the queue gets there."""
+    from app.main import _prefetch_cache, _prefetch_lock
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Already Queued", artist="B")
+    t3 = Track(file_path="/m/3.mp3", title="Also Queued", artist="C")
+    t4 = Track(file_path="/m/4.mp3", title="Appended", artist="D")
+    db.add_all([t1, t2, t3, t4])
+    db.commit()
+    for t in (t1, t2, t3, t4): db.refresh(t)
+
+    queue = [
+        {"type": "track", "track_id": t1.id, "label": "A - Current"},
+        {"type": "track", "track_id": t2.id, "label": "B - Already Queued"},
+        {"type": "track", "track_id": t3.id, "label": "C - Also Queued"},
+    ]
+    state = PlayerState(is_playing=True, queue_json=json.dumps(queue), queue_index=0)
+    db.add(state)
+    db.commit()
+
+    # Pre-seed the prefetch cache so we can verify position='end' DOESN'T
+    # clear it (the immediate-next-track wasn't displaced).
+    with _prefetch_lock:
+        _prefetch_cache[1] = {"script_text": "for t2", "clip_hash": "hash-t2"}
+
+    result = queue_inject(
+        QueueInjectRequest(track_id=t4.id, position="end"), db,
+    )
+
+    # Appended at the tail (index 3), queue is now 4 deep.
+    assert result.position == 3
+    assert result.label == "D - Appended"
+    assert result.queue_depth == 4
+
+    db.refresh(state)
+    updated = json.loads(state.queue_json)
+    assert len(updated) == 4
+    assert updated[3]["track_id"] == t4.id
+    # requested flag preserved across the position variants.
+    assert updated[3]["requested"] is True
+    # Original queue order is untouched.
+    assert [item["track_id"] for item in updated[:3]] == [t1.id, t2.id, t3.id]
+    # Prefetch cache survives — t2 is still next, the prefetch is still valid.
+    assert _prefetch_cache.get(1) == {"script_text": "for t2", "clip_hash": "hash-t2"}
+
+    # Cleanup so other tests start clean.
+    with _prefetch_lock:
+        _prefetch_cache.clear()
+
+
+def test_queue_inject_position_next_still_clears_prefetch_cache(monkeypatch):
+    """Counterpart: the default position='next' DOES clear the prefetch
+    cache because what was queue[idx+1] is no longer next — the prefetched
+    clip is for the wrong track now."""
+    from app.main import _prefetch_cache, _prefetch_lock
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Was Next", artist="B")
+    t3 = Track(file_path="/m/3.mp3", title="Jumping In", artist="C")
+    db.add_all([t1, t2, t3])
+    db.commit()
+    for t in (t1, t2, t3): db.refresh(t)
+
+    queue = [
+        {"type": "track", "track_id": t1.id, "label": "A - Current"},
+        {"type": "track", "track_id": t2.id, "label": "B - Was Next"},
+    ]
+    state = PlayerState(is_playing=True, queue_json=json.dumps(queue), queue_index=0)
+    db.add(state)
+    db.commit()
+
+    with _prefetch_lock:
+        _prefetch_cache[1] = {"script_text": "for t2", "clip_hash": "hash-t2"}
+
+    queue_inject(QueueInjectRequest(track_id=t3.id), db)  # position defaults to "next"
+
+    # Prefetched clip was for t2-as-next; t3 took that slot, so the clip is stale.
+    assert _prefetch_cache == {}
+
+
+def test_queue_inject_position_defaults_to_next():
+    """Schema default keeps backwards compatibility — old clients (and any
+    server-side caller) that don't pass position still get the historical
+    "insert after current" behaviour."""
+    req = QueueInjectRequest(track_id=42)
+    assert req.position == "next"
+
+
 def test_queue_inject_track_not_found_raises_404():
     db = _make_db_session()
     state = PlayerState(is_playing=True, queue_json='[{"type":"track","track_id":1,"label":"X"}]', queue_index=0)
