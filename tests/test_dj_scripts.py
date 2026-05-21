@@ -1411,6 +1411,11 @@ def test_handoff_block_fires_on_dj_change_with_previous_name(monkeypatch):
     assert "Sammy Jacobs" in prompt
     assert "Mel Ann-Cholia" in prompt
     assert "Late Night Sessions" in prompt
+    # The whole point of the handoff colour: nudge the LLM to react in
+    # character to the previous DJ — warmth, rivalry, fan-mode, whatever
+    # fits — rather than a neutral baton-pass. The word "personality"
+    # surfacing in the directive is what unlocks that for the LLM.
+    assert "personality" in prompt
 
 
 def test_handoff_block_fires_on_show_change_with_same_dj(monkeypatch):

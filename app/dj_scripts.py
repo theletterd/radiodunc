@@ -353,20 +353,36 @@ def _build_prompt(
             # ID changes mid-shift via config edit).
             if prev_dj_name and prev_dj_name != station.dj_name:
                 handoff_block = (
-                    f"Show takeover this round: you've JUST taken the mic from {prev_dj_name}. "
-                    f"Open with a quick live-radio handoff — \"thanks {prev_dj_name}, "
-                    f"you're with {station.dj_name} now"
+                    f"Show takeover this round: you've JUST taken the mic from "
+                    f"{prev_dj_name}. Open with a live-radio handoff that's TRUE TO "
+                    f"YOUR personality — real DJs have opinions about each other and "
+                    f"about the show they're following. Pick whichever fits {station.dj_name}'s "
+                    f"vibe: warm and gracious if you'd genuinely thank them; gushing "
+                    f"fan-mode if their show rules; mock-shady or playfully catty if "
+                    f"their style grates on yours; dryly relieved (\"finally\") if "
+                    f"you're glad it's over; affectionate piss-take between friends; "
+                    f"or just brisk and professional if that's who you are. "
+                    f"Self-ID in the same beat — \"…you're with {station.dj_name} now"
                     + (f" on {show_name}" if show_name else "")
-                    + "\", that feel. One sentence of takeover, then pivot into the music. "
-                    "Don't dwell; it's a passing of the baton, not a monologue.\n"
+                    + "\" — then pivot into the music. One or two beats of colour, "
+                    "then move on. It's a handoff, not a monologue.\n"
                 )
             else:
+                # Same DJ, new Show — they're not arriving cold, they're flipping
+                # the framing. Acknowledge the show change in their voice rather
+                # than pretending they just walked in.
                 handoff_block = (
-                    f"Show takeover this round: your show just started. "
-                    f"Open with a quick \"this is {station.dj_name}"
-                    + (f", you're listening to {show_name}" if show_name else "")
-                    + "\" — establish yourself, then pivot into the music. "
-                    "Keep it brief; it's an arrival, not an announcement.\n"
+                    f"Show takeover this round: same you, new show — "
+                    + (f"'{show_name}' just started. " if show_name else "the next show just started. ")
+                    + f"Flip the framing on air in a way that's true to {station.dj_name}'s "
+                    "personality: excited if this slot is your wheelhouse, dry if it's not, "
+                    "wryly resigned if you're stuck with it, theatrical if that's your bag. "
+                    + (f"Self-ID with the new show name — \"…you're with {station.dj_name} on "
+                       f"{show_name} now\" — then pivot into the music. "
+                       if show_name else
+                       f"Self-ID with your name — \"this is {station.dj_name}\" — then pivot "
+                       "into the music. ")
+                    + "Keep it brief; the colour does the work, not the word count.\n"
                 )
     _last_handoff_state["dj_id"] = current_dj_id
     _last_handoff_state["show_id"] = current_show_id
