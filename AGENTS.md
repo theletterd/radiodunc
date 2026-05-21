@@ -84,17 +84,10 @@ When an ad break is about to play, `ad_break_follows=True` is passed to DJ scrip
 When `alerts.news.enabled` is true and the break is on cadence, `_attach_news` consults the news cache (see "News clip caching" above) and returns the URL + script. Bulletins are generated via `generate_news_script()` (fetches top N headlines from the RSS feed, asks LLM to write an intro/body/outro structured bulletin in the voice of a specific newsreader by name). The DJ teases the bulletin via `news_break_follows=True` in the DJ script request (same pattern as `ad_break_follows`). On the frontend, news shows a blue `📰 News` badge.
 
 ### Audience request flag
-Queue items injected via `POST /player/queue/inject` carry `"requested": True`. `player_next` detects this and passes `reason="request"` to `generate_dj_script`, which adds a "someone called in for this" flavour to the prompt.
+Queue items injected via `POST /player/queue/inject` carry `"requested": True`. Both the live-generation path in `player_next` AND the background `_prefetch_dj_clip` worker (PR #160) detect this and pass `reason="request"` to `generate_dj_script`, which adds a "someone called in for this" flavour to the prompt. Without the prefetch-path fix, a requested track that happened to be prefetched would lose its request framing — the cached "auto" clip would shadow the live path. `queue_inject` also clears the prefetch cache for `position="next"` inserts (the next-track changed) but NOT for `position="end"` inserts (tail-appended; the immediate next is unchanged).
 
-## Config shape — things that have changed
-
-- `voice_hint` was renamed to `voice` everywhere (station, persona roster entries)
-- `ads.voice` (single string) was replaced by `ads.voices` (list of `{voice, voice_instructions}`)
-- `ads.pool_size` controls when to stop generating new ad clips (default 100)
-- Each `dj_roster` entry and the base station can have `voice` and `voice_instructions` independently
-- `alerts.weather_latitude`/`weather_longitude` bypass Open-Meteo geocoding when set — useful for small cities not in their database. `weather_location` is still used as the spoken display name.
-
-The example config is `example-radio_config.json`. The local config is `radio_config.json` (gitignored).
+### Self-ID directive
+Real DJs say "you're listening to X, with yours truly Y" occasionally. The LLM doesn't volunteer this without a nudge — and a permanent nudge would make every transition a self-ID. `_build_prompt` rolls `random.random() < _SELF_ID_CHANCE` (= `1/3`) and on a hit injects a `self_id_block` directive with the actual DJ + show names baked in; on a miss the block is empty. Probabilistic Python-side because the LLM is stateless across calls — "occasionally" can't be enforced from inside the prompt. `_SELF_ID_CHANCE` is the only tunable; 0 disables.
 
 ## Station config fields — what each one does
 
@@ -109,19 +102,48 @@ The example config is `example-radio_config.json`. The local config is `radio_co
 
 `genre_focus` and `core_artists` are easy to confuse: `genre_focus` only affects what the DJ *says*, `core_artists` only affects which *tracks get played*.
 
-## DJ persona scheduling
+## DJ-vs-Show architecture
 
-`dj_roster` is an ordered list of `DJPersona` entries. Each persona has a list of `DJShift` entries — each `{day, start_hour, end_hour}` — so one persona can have different hours on different days (e.g. fri 20-23 + sat 19-01 as a single persona). `pick_active_persona()` returns the **first match in roster order**, so order = priority. `active_station()` applies the match by merging fields onto the base `StationConfig` (`dj_name`, `personality`, `voice`, `voice_instructions`, `dj_prompt_template`). The base station is the fallback when no persona matches.
+Two separate concepts on `StationConfig`:
 
-Old configs with `days` + `start_hour` + `end_hour` (a single hour range applied to all selected days) auto-migrate to `shifts` on load via a `model_validator`. Don't write that old shape in new code; the migration only exists for backwards compatibility.
+- **`djs: list[DJ]`** — reusable DJ identities. Each `DJ` has `id` (UUID), `name`, `personality`, `voice`, `voice_instructions`, `prompt_template`. No scheduling info — a DJ is just a character.
+- **`shows: list[Show]`** — bindings that put a DJ on the air. Each `Show` has `id` (UUID), optional `name` (e.g. "After Hours"), `dj_id` (FK into `djs` — `None` means the station-level fallback DJ, "The Ghost", hosts the slot), and `shifts: list[DJShift]` (`{day, start_hour, end_hour}`).
+
+The resolver — `pick_active_persona(station, now)` in `dj_scripts.py` — walks `station.shows` in order, returns the DJ for the first Show whose shifts cover `now`, or `None` if no Show matches or the matching Show has `dj_id=None`. `active_station()` then merges the matched DJ's fields onto the base station via `model_copy`, preserving station-level identity (`dj_name`/`personality`/etc.) as the fallback when nothing matches.
+
+`active_station()` flattens the DJ identity into the station fields and **drops the id**. Callers that need the active DJ's id (the on-air-badge avatar URL is the main one) use `active_dj()` instead — thin wrapper over `pick_active_persona` that handles the same timezone-aware `now`-defaulting. The on-air badge avatar reads `serverState.station.active_dj_id` (exposed separately on `StationOut`).
+
+**The Ghost** is the convention for the station-level default DJ. In Duncan's config it's "The Ghost — the spectre that haunts the empty hallways of this radio station", with `voice: onyx` and theatrical/slow voice instructions. The schema doesn't enforce this — `station.dj_name`/etc. are just text — but configs that name their fallback persona deliberately (rather than e.g. "DJ Default") give the silent hours a personality.
+
+**`{show_name}` and `{show_block}`** placeholders are exposed to the DJ prompt template. `{show_name}` is the raw active-Show name (empty when no Show matches); `{show_block}` is a pre-formatted hint sentence ("Current show: 'After Hours' — if its vibe contrasts with your DJ persona, that's a hook to play with."). The default prompt template uses `{show_block}`; custom templates can use either.
+
+Legacy `dj_roster: list[DJPersona]` from before #144 is gone from the schema but a `mode="before"` validator in `StationConfig` still expands any `dj_roster` it finds in raw JSON into `djs` + `shows` on load. Old configs load cleanly without manual edits; the field is invisible to anything written after the migration.
 
 ### Schedule editor UI
-A weekly grid (7 columns × 24 rows) lives in a left-sidebar takeover (click "📅 The Schedule"). Persona shifts render as coloured blocks (palette of 8 hues rotates by roster index); the current hour is highlighted with a pulsing white outline; wrap-around shifts render as TWO blocks across midnight. Blocks support:
-- **click** → opens a persona editor drawer (form: name, personality, voice, voice_instructions with ▶ Preview button, shifts list)
-- **drag top/bottom edge** → snap-to-hour resize (skipped on wrap-around blocks for simplicity)
-- **drag body** → snap-to-cell move (4 px click-vs-drag threshold; duration preserved; clamped to mon-sun and 0-23)
 
-A `_suppressNextClick` mutex stops a successful drag from also opening the editor on mouseup.
+A weekly grid (7 columns × 24 rows) lives in a left-sidebar takeover (click "📅 The Schedule"). Show shifts render as coloured blocks — palette of 8 hues, keyed by **DJ index in `djs[]`** (so the same DJ in two different Shows shares a colour). Default-DJ Shows (`dj_id=None`) get a dashed-outline / muted treatment. Current hour highlighted with a pulsing white outline; wrap-around shifts render as TWO blocks across midnight.
+
+Block labels read **"`<show name>` with `<DJ name>`"** (when the Show has a name) or just the DJ name (when not). The text wraps to multiple lines on narrow cells instead of truncating. 1-hour blocks fall back to a single-letter monogram (show name initial if set, else DJ name).
+
+Block interactions:
+- **click** → opens the **Show editor drawer** (form: optional Show name, DJ picker dropdown with "(Default DJ)" + alphabetical DJs + "+ Create new DJ…", shifts list).
+- **drag top/bottom edge** → snap-to-hour resize (skipped on wrap-around blocks).
+- **drag body** → snap-to-cell move (4 px click-vs-drag threshold; duration preserved; clamped to mon-sun, 0-23).
+
+`_suppressNextClick` mutex stops a successful drag from also opening the editor.
+
+DJ identities live in a **separate sidebar takeover** — 🎙 DJ Roster (click the sidebar button). List rows show name + personality preview + voice + "used in N show(s)" counter + an "⚠ not in any show" badge when N=0. Clicking a row opens the **DJ editor**: name, personality, voice picker with ▶ Preview, voice instructions, and (for existing DJs) a "Used in N show(s)" footer listing the shift ranges. Deleting a DJ reassigns hosted Shows to the Default DJ slot rather than dropping them — the confirm prompt lists the affected shows.
+
+Adding a DJ from inside the Show editor goes through an **inline modal** (`+ Create new DJ…` option in the DJ picker) — minimal name/personality/voice/instructions form that creates the DJ, closes the modal, and pre-selects it in the picker. Full identity editing happens in the DJ Roster takeover.
+
+### DJ avatars
+Stylised vector portraits per DJ, generated via OpenAI `gpt-image-1` low (~$0.011/call). Two-step pipeline: text model (gpt-4o-mini at `temperature=0.5`) rephrases the DJ's personality into a **SFW visual brief**, then the image model renders the brief. The text pipeline exists because image moderation is much stricter than text moderation — personality strings written for voice ("flirty", "smoky", "teasing") reliably trip 400s when sent raw to the image model. The rephrase is invisible to the user; if it fails, the whole pipeline aborts rather than falling back to the raw personality (which would just trip the same 400).
+
+Manual trigger only via "Regenerate avatar" button in the DJ editor (`POST /djs/{dj_id}/avatar`). Files live at `generated/dj_icons/{uuid}.png`, served by `/media/dj-icon/{id}` with a **fallback to `app/seed/dj_icons/`**. The seed dir ships avatar PNGs matching the UUIDs in `example-radio_config.json`, so fresh clones get an illustrated roster out of the box without anyone having to regenerate. Seed PNGs are downscaled to 256×256 (UI displays at max 96 px) — that's the 95% size reduction noted in PR #159's diff.
+
+Avatars surface in three places: the DJ Roster row (`.dj-avatar-md`, 60 px), the DJ editor header (`.dj-avatar-lg`, 96 px), and the on-air badge (`.dj-avatar-xs`, 22 px, inline in the "🎙️ On air with …" text). All use the same `.dj-avatar` base — a coloured circle (matching the DJ's grid palette colour) with the `<img>` layered on top via `onerror="this.remove()"` so a 404 leaves the coloured placeholder rather than a broken image icon.
+
+Per-DJ cache-bust: `_djAvatarTs` Map updates per DJ on regenerate so refetching one avatar doesn't bust the others. Browser cache key is `?v=<server-generated-at>`.
 
 ## Frontend (app/ui/)
 
@@ -154,7 +176,12 @@ When adding a new top-level function and wanting to test it: add its name to `EX
 
 ## DB migrations
 
-Done inline in `_migrate_drop_legacy_schema()` at startup in `main.py` using raw SQL `PRAGMA table_info` checks. Add new migrations there — no Alembic.
+Done inline at module load in `main.py` using raw SQL via `engine.begin()`. No Alembic. Two functions today, each idempotent:
+
+- `_migrate_drop_legacy_schema()` — drops legacy multi-station tables (`stations`, `favorite_stations`, `recent_stations`), drops obsolete `player_state` columns from the old multi-station era, adds `dj_clips.is_ad` if missing.
+- `_migrate_dj_clip_paths_after_generated_rename()` — rewrites `dj_clips.audio_path` from `generated_audio/…` → `generated/…` for installs that pre-date the #159 rename. Without this, every clip cached before the rename 404s at serve time because `_safe_media_path` resolves against a directory that no longer exists.
+
+Add new migrations as sibling functions invoked at module load, immediately after the existing two. Each should filter to only the rows that need touching so re-running on a fresh DB is a cheap no-op.
 
 ## Logging
 
