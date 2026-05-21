@@ -4,17 +4,12 @@ Active backlog only. Anything shipped lives in git history (search the PR
 list); the short "recently shipped" list at the bottom is just a quick scan
 of what's landed lately, not a permanent archive.
 
-## ☐ DJ avatars — remaining surfaces
+## ☐ DJ avatars — schedule grid block corners
 
-Slice 1 shipped (manual "Regenerate avatar" button in the DJ editor) along
-with the on-air badge avatar + roster row treatment. Still to do:
-
-- **Schedule grid blocks** — small avatar circle in the corner of each
-  block. Layout work to fit it cleanly alongside the "<show> with <DJ>"
-  label without crowding.
-- **Auto-regenerate trigger** — currently button-only. Could opt in to
-  auto-regen on personality changes ($0.011/save via `gpt-image-1` low) if
-  the button-only flow turns out to be friction.
+Slice 1 shipped (manual "Regenerate avatar" button) along with the on-air
+badge avatar + roster row treatment. The remaining surface is the schedule
+grid: a small avatar circle in the corner of each Show block. Layout work
+to fit it cleanly alongside the "<show> with <DJ>" label without crowding.
 
 ## ☐ Move per-segment audio gain into config
 
@@ -24,44 +19,41 @@ Music has no segment-level boost (effectively 1.0); the compressor flattens
 dynamic range afterwards, so audible differences are smaller than raw
 ratios suggest.
 
-Worth promoting to an `audio_levels` block under `AppConfig` (probably
-`audio_levels: {dj, news, ads, stingers}`) once values feel settled —
-tweaking currently means a code edit + reload, which makes the constants
-feel more permanent than they are. Hot-reload via the existing `/config`
-change hook would pick this up cleanly.
+Blocked on Duncan wanting to tweak values manually first before we settle
+on what to commit. Once values feel right, promote to an `audio_levels`
+block under `AppConfig` (probably `audio_levels: {dj, news, ads, stingers}`)
+so future tweaks don't need a code edit + reload. Hot-reload via the
+existing `/config` change hook would pick this up cleanly.
 
-## ☐ Spurious unprompted playback after lid-close / wake
+## Monitoring (not actionable until something changes)
 
-Repro: hit Stop, close laptop lid, walk away. On lid-open, the player
-started playing on its own without any user gesture.
+### Spurious unprompted playback after lid-close / wake
 
-**Status**: instrumentation shipped (PR #119); every playback entry point
-logs through `_logPlayback(event, fields)` with full state context, and
-`triggerTransition` defensively bails with a `console.warn` if
+Original repro: hit Stop, close laptop lid, walk away — on lid-open, the
+player started playing on its own.
+
+Instrumentation + a defensive guard shipped in PR #119: every playback
+entry point logs through `_logPlayback(event, fields)` with full state
+context, and `triggerTransition` bails with a `console.warn` if
 `serverState?.is_playing` is false. So the symptom is suppressed (the
-guard catches it before any audio plays), and the next repro will name
+guard catches it before any audio plays) and the next repro will name
 the offending entry point in the console.
 
-Waiting on a fresh repro to chase the root cause. Likely suspect: a stale
-`autoTrigger` setTimeout that survived `stopPlayback` (macOS power
-management may suspend/resume the JS event loop without firing
-`clearTimeout` cleanly). If confirmed, fix is to give timers a generation
-token, or have the autoTrigger callback re-check `serverState.is_playing`
-itself.
+No fix until a fresh repro. Likely suspect: a stale `autoTrigger`
+setTimeout that survived `stopPlayback`. If confirmed, fix is to give
+timers a generation token or have the autoTrigger callback re-check
+`serverState.is_playing` itself.
 
 ## ☐ Future ideas (not committed yet)
 
-- **Cost guardrail** — track $/day OpenAI usage in the DB, surface in the
-  UI, optional soft cap with a warning toast. Lets you experiment with
-  bigger phrase pools / longer prompts without anxiety.
 - **Like / dislike signal** — heart/x buttons in the player that bias the
   scheduler. Connects what you actually enjoy to what plays.
 - **Stinger pool variety on warmup** — currently the startup warmup seeds
   one stinger clip; could top up the pool gradually so the first few
-  skip-stingers have variety from minute one.
-- **Multi-listener / shareable URL** — would need a real broadcast layer
-  (icecast, HLS, or polling-based sync). Big architectural shift; only
-  worth it if you want friends to tune in.
+  skip-stingers have variety from minute one. (~hour of work.)
+- **Multi-listener / shareable URL** *(probably never)* — would need a
+  real broadcast layer (icecast, HLS, or polling-based sync). Big
+  architectural shift; only worth it if friends end up wanting to tune in.
 - **Live-progress UI for library scans** — `/library/scan/progress`
   endpoint or websocket so the UI shows a live "imported 2,340 of ~8,000…"
   counter instead of staring at "Scanning…" for a minute. The chunked
