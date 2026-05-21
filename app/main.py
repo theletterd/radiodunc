@@ -727,12 +727,21 @@ def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
             include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
             news_break_follows = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
             ad_break_follows = config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks)
+            # Default to "auto" because prefetch assumes a natural track-end
+            # advance. If the upcoming track was queued via the search bar
+            # (requested=True on the queue item), use reason="request" so the
+            # generated banter actually mentions it — otherwise the DJ greets
+            # a caller-requested track as if it were just another auto-advance,
+            # silently dropping the request acknowledgement. The skip path
+            # invalidates the prefetch cache entirely (different prompt
+            # context) so we never need to handle "skip" here.
+            reason = "request" if target_item.get("requested") else "auto"
 
             script_response = generate_dj_script(
                 station,
                 DJScriptGenerateRequest(
                     max_sentences=3,
-                    reason="auto",  # prefetch assumes auto-advance; skip invalidates the cache
+                    reason=reason,
                     include_weather=include_weather,
                     news_break_follows=news_break_follows,
                     ad_break_follows=ad_break_follows,
