@@ -129,28 +129,28 @@ from the six other call sites. Regression test in
 `tests/js/schedule.test.js` re-renders in place and asserts that a click
 on the new block still opens the editor.
 
-## ☐ Chunked scan commits
+## ✅ Chunked scan commits
 
-`scan_library` in `app/scanner.py` currently `db.add(track)`s every new file
-and does a single `db.commit()` at the end. On large libraries (10k+
-files) this means:
+Shipped. `scan_library` now flushes + commits every `SCAN_COMMIT_CHUNK_SIZE`
+(= 200) imported tracks, then calls `expire_all()` to release the chunk's
+Track objects from the session. Peak memory stays bounded regardless of
+library size, and a mid-scan crash (process kill, KeyboardInterrupt)
+leaves all previously-committed chunks intact in the DB — the next scan
+picks up from there because the duplicate-check sees the committed rows.
 
-- The whole new-track set sits in the session's identity map until commit
-  → memory grows with library size.
-- One huge transaction → if the scan crashes or the user kills it
-  partway through, NOTHING was written. Forces a fresh start instead of
-  resuming where it left off.
-- The user sees nothing in the UI's "track count" until the entire scan
-  finishes.
+Two new tests in `tests/test_scanner.py`:
+- `test_scan_partial_progress_survives_midstream_crash` — a 1000-file
+  scan that crashes at the 450th extraction leaves exactly 2 ×
+  `SCAN_COMMIT_CHUNK_SIZE` rows committed (the 49 in-flight ones are
+  discarded, as expected).
+- `test_scan_resumes_correctly_after_partial_failure` — first scan
+  crashes after one chunk; second scan (fresh session, simulating a
+  process restart) skips the 200 already-committed files as duplicates
+  and imports the remaining 300.
 
-Fix: flush + commit every N tracks (probably N=200 or so — small enough
-to bound memory, large enough that commit overhead doesn't dominate).
-The `existing` duplicate check stays correct because committed rows are
-still visible to subsequent queries in the same session.
-
-Stretch: a `/library/scan/progress` endpoint or websocket so the UI can
-show a live counter ("imported 2,340 of ~8,000…") instead of staring
-at "Scanning…" for a minute.
+Stretch (not shipped): `/library/scan/progress` endpoint or websocket so
+the UI can show a live "imported 2,340 of ~8,000…" counter instead of
+"Scanning…" for a minute. Filed as future work.
 
 ## ☐ Spurious unprompted playback after lid-close / wake
 
