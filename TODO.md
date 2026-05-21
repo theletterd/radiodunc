@@ -21,7 +21,7 @@ Deliberately still json-only:
 
 Slice 1 shipped: manual "Regenerate avatar" button in the DJ editor,
 generated via `gpt-image-1` low quality (~$0.011/click), served from
-`generated_audio/dj_icons/{dj_id}.png`. Avatars show in the DJ Roster
+`generated/dj_icons/{dj_id}.png`. Avatars show in the DJ Roster
 list rows + the editor itself; coloured-circle fallback when no avatar
 has been generated yet.
 

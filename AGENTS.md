@@ -30,7 +30,7 @@ There is exactly one station, defined in `radio_config.json`. The old multi-stat
 `DJClip` rows store `(script_text, voice, voice_instructions)` → MP3 file path. The cache key is `sha256(voice + "\n" + instructions + "\n" + script_text)`. Clips are never regenerated if the hash matches. Ad clips have `is_ad=True` and are pooled: once `pool_size` ad clips are cached, new ad breaks pick randomly from the existing pool instead of generating fresh ones.
 
 ### TTS flow
-`get_or_create_dj_clip()` in `tts.py` is the single entry point. It checks the DB, generates if missing, writes an MP3 to `generated_audio/<subdir>/`, commits a `DJClip` row, and returns `(clip, path, was_cached)`. `clip_type` arg routes to the right subdir: `transitions/`, `ads/`, `news/`, or `station_ids/`. Default is `transitions`. OpenAI TTS is asked for `response_format="mp3"` — smaller than WAV with no audible difference for speech. The `ToneTTSProvider` (dev fallback) still writes WAV.
+`get_or_create_dj_clip()` in `tts.py` is the single entry point. It checks the DB, generates if missing, writes an MP3 to `generated/<subdir>/`, commits a `DJClip` row, and returns `(clip, path, was_cached)`. `clip_type` arg routes to the right subdir: `transitions/`, `ads/`, `news/`, or `station_ids/`. Default is `transitions`. OpenAI TTS is asked for `response_format="mp3"` — smaller than WAV with no audible difference for speech. The `ToneTTSProvider` (dev fallback) still writes WAV.
 
 ### Network drive reliability
 Track files live on a network mount. `GET /media/{track_id}` reads the whole file into memory with `Path.read_bytes()` before returning a `Response` — this avoids mid-stream failures from the mount dropping. The frontend also retries failed audio loads up to 3× via `loadWithRetry()`.
@@ -64,7 +64,7 @@ Short "This is RadioDunc 107.2 FM" throws played right after every **ad break OR
 When a user hits Next, there's unavoidable dead-air while the DJ clip generates. The client schedules a **3 s setTimeout** at the start of `triggerTransition('user')`. If the timer fires before the DJ clip is ready, it fetches `GET /player/stinger-url` (which returns a random clip from the cached station-ID pool) and plays it. `stingerEndTime` tracks the AudioContext end so `djStart` is `max(ctx.currentTime + 0.05, stingerEndTime + 0.1)` — DJ waits for the stinger if it's still playing instead of overlapping. Auto-advance doesn't get a stinger (prefetch covers that latency).
 
 ### Voice preview endpoint
-`POST /tts/preview {text, voice, voice_instructions}` returns a `clip_url`. Used by the persona-editor UI's ▶ Preview button so users can audition a voice change without waiting for a transition. Clips live under `generated_audio/previews/` and are cached forever via the standard hash so repeated previews of the same combo are free.
+`POST /tts/preview {text, voice, voice_instructions}` returns a `clip_url`. Used by the persona-editor UI's ▶ Preview button so users can audition a voice change without waiting for a transition. Clips live under `generated/previews/` and are cached forever via the standard hash so repeated previews of the same combo are free.
 
 ### Anti-anchoring: Python picks from a list, LLM gets one focused brief
 Same pattern shows up in two places: station-ID vibes (5 batches) and ad categories (16 in `AD_CATEGORIES`). Whenever the LLM has to pick from an embedded list, it over-indexes on the last item (the dating-app issue, before the fix). Move the variance to Python and inject a single category/vibe per call. This is the right reach whenever output feels samey.
@@ -164,6 +164,7 @@ Done inline in `_migrate_drop_legacy_schema()` at startup in `main.py` using raw
 
 ## What not to touch
 
-- `radio_config.json` — Duncan's personal config, gitignored. Propose changes, don't overwrite silently.
-- `generated_audio/` — cached TTS WAVs, not committed.
+- `radio_config.json` — Duncan's personal config, gitignored. Propose changes, don't overwrite silently. New clones bootstrap from `example-radio_config.json` (committed) into this file on first load.
+- `generated/` — runtime cache of TTS MP3s + image-gen PNGs (renamed from `generated_audio/` in PR #159 after avatars joined the party). Not committed. Subdirs: `transitions/`, `ads/`, `news/`, `station_ids/`, `previews/`, `dj_icons/`.
+- `app/seed/dj_icons/` — bundled avatar PNGs that ship with the example roster. The `/media/dj-icon/{id}` route serves from `generated/dj_icons/` first and falls back to here, so fresh clones see the shipped DJs illustrated without anyone having to regenerate. Filenames are the DJ UUIDs from `example-radio_config.json`.
 - `radio.db` — SQLite data file, not committed.

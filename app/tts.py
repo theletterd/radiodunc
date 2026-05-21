@@ -123,7 +123,7 @@ def get_or_create_dj_clip(
     normalized_voice = (voice or "default").strip() or "default"
     digest = _clip_hash(script_text, normalized_voice, voice_instructions)
     subdir = _CLIP_TYPE_SUBDIRS.get(clip_type, "transitions")
-    clips_dir = Path("generated_audio") / subdir
+    clips_dir = Path("generated") / subdir
     local_provider = provider or ToneTTSProvider()
 
     existing = db.query(DJClip).filter(DJClip.script_hash == digest).first()

@@ -493,7 +493,7 @@ def queue_extend(payload: QueueExtendRequest, db: Session = Depends(get_db)):
 
 def _safe_media_path(raw_path: str, config: AppConfig) -> Path:
     media_path = Path(raw_path).expanduser().resolve()
-    allowed_roots = [Path(config.music_folder).expanduser().resolve(), Path("generated_audio").resolve()]
+    allowed_roots = [Path(config.music_folder).expanduser().resolve(), Path("generated").resolve()]
     if not any(str(media_path).startswith(str(root)) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Media path is outside allowed roots")
     if not media_path.exists() or not media_path.is_file():
@@ -533,7 +533,7 @@ def media_dj_clip(clip_hash: str, db: Session = Depends(get_db)):
 # ── DJ avatars ──────────────────────────────────────────────────────────────
 # Stylised portrait images per DJ. Generation is manual (button in the DJ
 # editor) so cost is explicit and predictable — see generate_dj_avatar in
-# dj_scripts.py for the model details. Files live in generated_audio/dj_icons
+# dj_scripts.py for the model details. Files live in generated/dj_icons
 # keyed by the DJ's UUID so renames don't strand the image.
 
 @app.post("/djs/{dj_id}/avatar")
@@ -566,18 +566,37 @@ def generate_dj_avatar_endpoint(dj_id: str):
     }
 
 
+# Bundled "seed" avatars that ship with the repo. Served as a fallback when
+# the user hasn't (yet) regenerated for one of the seed DJs. Keyed by the
+# same UUIDs as the seed roster in example-radio_config.json, so a fresh
+# clone gets a fully-illustrated roster out of the box.
+DJ_AVATAR_SEED_DIR = Path("app/seed/dj_icons")
+
+
 @app.get("/media/dj-icon/{dj_id}")
 def media_dj_icon(dj_id: str):
-    """Serve a DJ's avatar PNG, or 404 if they don't have one yet.
+    """Serve a DJ's avatar PNG, or 404 if neither the generated nor the
+    seed copy exists.
+
+    Resolution order:
+      1. ``generated/dj_icons/{dj_id}.png`` — user-regenerated (latest).
+      2. ``app/seed/dj_icons/{dj_id}.png`` — bundled with the repo.
+
+    Generated wins so a regenerate always shadows the seed, even if the
+    DJ originated in the seed roster. New clones with no /generated yet
+    fall through to the seed and see the shipped avatars.
 
     No path traversal risk: dj_id comes from the path segment and is
     appended to a fixed directory + ".png" suffix; FastAPI rejects
     slashes in path params by default.
     """
-    path = DJ_AVATAR_DIR / f"{dj_id}.png"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="No avatar for this DJ")
-    return FileResponse(str(path), media_type="image/png")
+    generated_path = DJ_AVATAR_DIR / f"{dj_id}.png"
+    if generated_path.exists():
+        return FileResponse(str(generated_path), media_type="image/png")
+    seed_path = DJ_AVATAR_SEED_DIR / f"{dj_id}.png"
+    if seed_path.exists():
+        return FileResponse(str(seed_path), media_type="image/png")
+    raise HTTPException(status_code=404, detail="No avatar for this DJ")
 
 
 def _warm_caches_background(config: AppConfig) -> None:
@@ -1221,7 +1240,7 @@ def tts_preview(payload: TTSPreviewRequest, db: Session = Depends(get_db)):
 
     Reuses the same get_or_create_dj_clip cache, so identical (text, voice,
     instructions) triples produce one clip and replay instantly thereafter.
-    Stored under generated_audio/previews/ to keep them separate from the
+    Stored under generated/previews/ to keep them separate from the
     on-air pools.
     """
     config = load_config()

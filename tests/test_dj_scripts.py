@@ -1037,7 +1037,7 @@ def test_dj_persona_silently_drops_legacy_voice_gain_offset_db():
 def test_generate_dj_avatar_writes_png_on_success(monkeypatch, tmp_path):
     """Happy path for the two-step pipeline: text model returns a SFW visual
     brief, image model returns base64 PNG bytes, we decode and write to
-    generated_audio/dj_icons/{dj_id}.png. The image prompt contains the
+    generated/dj_icons/{dj_id}.png. The image prompt contains the
     text-step's brief, NOT the raw personality (which is exactly what we
     want — that's the point of the two-step pipeline)."""
     import base64 as _b64
