@@ -1105,6 +1105,36 @@ def test_generate_dj_avatar_returns_none_on_http_error(monkeypatch, tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_generate_dj_avatar_http_error_logs_response_body(monkeypatch, tmp_path, caplog):
+    """A bare status code leaves us guessing — OpenAI's 400s explain the
+    actual failure (prompt rejected, org not verified for gpt-image-1, etc.).
+    The error path captures the response body and logs it so debugging
+    doesn't require packet captures."""
+    import io
+    import logging
+    import urllib.error
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    error_body = b'{"error": {"message": "Organization must be verified for gpt-image-1"}}'
+
+    def fake_urlopen(req, timeout=60):
+        raise urllib.error.HTTPError(
+            req.full_url, 400, "Bad Request", {}, io.BytesIO(error_body),
+        )
+
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", fake_urlopen)
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-verify-needed", name="Sam", personality="x")
+
+    with caplog.at_level(logging.WARNING, logger="app.dj_scripts"):
+        assert generate_dj_avatar(dj, cfg) is None
+
+    log_text = "\n".join(r.message for r in caplog.records)
+    assert "status=400" in log_text
+    assert "Organization must be verified" in log_text
+
+
 def test_generate_dj_avatar_returns_none_on_empty_response(monkeypatch, tmp_path):
     """Defensive: a malformed response (no b64_json) is treated like a failure."""
     from app.dj_scripts import generate_dj_avatar
