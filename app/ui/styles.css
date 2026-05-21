@@ -650,10 +650,18 @@ ul {
   flex-direction: column;
   gap: 8px;
 }
+/* Two-column row: 60 px avatar on the left as a clear visual anchor,
+   stacked name/personality/meta on the right, vertically centred so the
+   row reads as balanced when the avatar is significantly bigger than any
+   single text line. The min-width:0 on .roster-row-content is the usual
+   flex incantation that lets the text columns shrink below their intrinsic
+   width — without it, long personality strings push the row wider than
+   the sidebar instead of getting clamped by the ellipsis. */
 .roster-row {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
   padding: 12px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -665,18 +673,16 @@ ul {
   background: #1e293b;
   border-color: var(--pink);
 }
+.roster-row-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
 .roster-row-name {
   font-weight: 600;
   font-size: 0.95rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.roster-row-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  display: inline-block;
 }
 .roster-row-personality {
   font-size: 0.78rem;
@@ -1087,8 +1093,21 @@ ul {
   object-fit: cover;
   display: block;
 }
+.dj-avatar-xs { width: 22px; height: 22px; }
 .dj-avatar-sm { width: 28px; height: 28px; }
+.dj-avatar-md { width: 60px; height: 60px; }
 .dj-avatar-lg { width: 96px; height: 96px; }
+
+/* On-air badge avatar: tiny inline circle slotted before the "🎙️ On air
+   with ..." text. Vertically aligned with the surrounding text + a small
+   right margin so the emoji + name still read as one line. The default
+   placeholder uses a pink-tinted fill so it blends with the existing badge
+   theming when no avatar's generated yet for the active DJ. */
+.badge-avatar {
+  vertical-align: -5px;
+  margin-right: 6px;
+  background: var(--pink-dim);
+}
 
 /* DJ editor: avatar header row sits above the form fields. */
 .dj-editor-avatar-row {

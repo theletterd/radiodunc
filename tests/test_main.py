@@ -1724,3 +1724,64 @@ def test_config_change_hook_failure_does_not_break_put(monkeypatch):
     # cleanup
     m._news_cache = None
     m._prefetch_cache.clear()
+
+
+# ── On-air avatar plumbing ─────────────────────────────────────────────────
+
+def test_station_out_includes_active_dj_id_when_provided():
+    """_station_out passes the active_dj_id through when the caller knows
+    which DJ is currently on air. The client uses this to build the on-air
+    avatar URL — active_station's model_copy flattens the override into
+    dj_name/personality and loses the id, so we surface it separately."""
+    from app.main import _station_out
+    from app.config import StationConfig
+    station = StationConfig(name="Test FM", dj_name="Sam", personality="warm")
+    out = _station_out(station, active_dj_id="dj-currently-on-air")
+    assert out.active_dj_id == "dj-currently-on-air"
+
+
+def test_station_out_active_dj_id_defaults_to_none():
+    """When no active DJ is supplied (or the Default DJ is hosting), the
+    field comes back as None so the client falls back to a neutral badge."""
+    from app.main import _station_out
+    from app.config import StationConfig
+    station = StationConfig(name="Test FM", dj_name="Sam", personality="warm")
+    out = _station_out(station)
+    assert out.active_dj_id is None
+
+
+def test_active_dj_returns_dj_for_matching_show(monkeypatch):
+    """active_dj is a thin wrapper over pick_active_persona that handles the
+    timezone-aware now-defaulting active_station does. End-to-end check that
+    a Show whose shifts cover 'now' yields the right DJ."""
+    from datetime import datetime
+    from app.config import DJ, DJShift, Show, StationConfig
+    from app.dj_scripts import active_dj
+    dj = DJ(id="dj-monday-noon", name="Noonish", personality="bright")
+    show = Show(
+        id="show-1", dj_id=dj.id,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    station = StationConfig(djs=[dj], shows=[show])
+    cfg = AppConfig(station=station)
+    monday_noon = datetime(2026, 5, 18, 12, 0)
+    result = active_dj(station, cfg, now=monday_noon)
+    assert result is not None
+    assert result.id == "dj-monday-noon"
+
+
+def test_active_dj_returns_none_for_default_dj_slot():
+    """A matching Show with dj_id=None means 'Default DJ hosts this slot' —
+    active_dj returns None so the client knows to render the neutral badge,
+    not look up a non-existent avatar."""
+    from datetime import datetime
+    from app.config import DJShift, Show, StationConfig
+    from app.dj_scripts import active_dj
+    show = Show(
+        id="show-default", dj_id=None,
+        shifts=[DJShift(day="monday", start_hour=0, end_hour=23)],
+    )
+    station = StationConfig(djs=[], shows=[show])
+    cfg = AppConfig(station=station)
+    monday_noon = datetime(2026, 5, 18, 12, 0)
+    assert active_dj(station, cfg, now=monday_noon) is None

@@ -25,13 +25,20 @@ generated via `gpt-image-1` low quality (~$0.011/click), served from
 list rows + the editor itself; coloured-circle fallback when no avatar
 has been generated yet.
 
+Shipped after slice 1:
+- **On-air badge avatar** — small 22 px circle in front of the "🎙️ On
+  air with [DJ]" text in the player. Server exposes `active_dj_id` on
+  `StationOut` so the client can build the avatar URL (active_station's
+  model_copy drops the id along the way; surfaced separately).
+- **Roster row avatar bumped to 60 px** — and the row layout flipped
+  from vertical-stack to flex-row with the text content stacked to the
+  right of the avatar, so the bigger image doesn't tower over the
+  three-line text column.
+
 Still to do, whenever:
 - **Schedule grid blocks** — small avatar circle in the corner of each
   block. Layout work to fit it cleanly alongside the
   "<show> with <DJ>" label.
-- **"On air with [DJ]" badge** — avatar next to the DJ name in the main
-  player UI. User wants to think about the design first before this
-  one lands.
 - **Auto-regenerate trigger** — currently button-only. Could opt in to
   auto-regen on personality changes ($0.011/save) if button-only turns
   out to be friction.

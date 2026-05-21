@@ -93,22 +93,40 @@ function setOnAirMode(mode, label = null) {
   onAirMode = mode;
   const el = document.getElementById('nowPlaying');
   el.dataset.mode = mode;
-  let text;
-  if (mode === 'ad')        text = '📻 Ad break';
-  else if (mode === 'news') text = '📰 News';
-  else if (mode === 'dj') {
+  if (mode === 'ad') {
+    animateLabel(el, '📻 Ad break');
+  } else if (mode === 'news') {
+    animateLabel(el, '📰 News');
+  } else if (mode === 'dj') {
     // Show the active DJ's name when we have it (server keeps station.dj_name
-    // persona-aware via active_station). Falls back to plain 'On air' if state
-    // hasn't loaded yet or DJ name is missing.
-    const dj = serverState?.station?.dj_name;
-    text = dj ? `🎙️ On air with ${dj}` : '🎙️ On air';
+    // persona-aware via active_station). When we also have the DJ's id —
+    // exposed separately on serverState.station.active_dj_id, since
+    // active_station flattens the DJ identity into name/personality and
+    // drops the id along the way — slot a small avatar in front of the
+    // text so the badge has more presence. Falls back to plain text when
+    // any of that's missing (state not loaded yet, Default DJ hosting,
+    // or no avatar generated for this DJ — the <img> onerror leaves the
+    // coloured placeholder circle in place).
+    const dj   = serverState?.station?.dj_name;
+    const djId = serverState?.station?.active_dj_id;
+    if (dj && djId) {
+      const html =
+        `<span class="badge-avatar dj-avatar dj-avatar-xs">` +
+        `<img src="${_djAvatarUrl(djId)}" alt="" onerror="this.remove()" />` +
+        `</span>🎙️ On air with ${_escapeText(dj)}`;
+      animateLabel(el, html, { html: true });
+    } else {
+      animateLabel(el, dj ? `🎙️ On air with ${dj}` : '🎙️ On air');
+    }
+  } else {
+    animateLabel(el, label || serverState?.now_playing_label || el.textContent || '-');
   }
-  else text = label || serverState?.now_playing_label || el.textContent || '-';
-  animateLabel(el, text);
 }
 
-async function animateLabel(el, newText) {
-  if (el.textContent === newText) return;
+async function animateLabel(el, newContent, { html = false } = {}) {
+  // Early-bail when nothing's changed. For html mode we compare innerHTML
+  // (whitespace-sensitive but predictable since we control both sides).
+  if (html ? el.innerHTML === newContent : el.textContent === newContent) return;
 
   // Cancel any in-flight animation before starting a new one
   if (_labelAnim) { try { _labelAnim.cancel(); } catch (_) {} }
@@ -122,7 +140,7 @@ async function animateLabel(el, newText) {
   try { await out.finished; } catch (_) { return; }
   if (_labelAnim !== out) return; // superseded by a newer call
 
-  el.textContent = newText;
+  if (html) el.innerHTML = newContent; else el.textContent = newContent;
 
   const inn = el.animate(
     [{ transform: 'translateY(110%)', opacity: 0 },
@@ -1877,25 +1895,33 @@ async function _renderRosterList() {
     row.className = 'roster-row';
     row.dataset.djId = dj.id;
 
+    // Two-column row: 60 px avatar on the left, content stack on the right.
+    // The avatar is sized larger than the original 28 px swatch because it's
+    // doing more visual work now (showing actual generated portraits, not
+    // just colour-coding), so the row is built as flex-row with the text
+    // stack vertically centred against the avatar to keep the eye balanced.
+    // Avatar still has the DJ's grid-block colour as its background so it
+    // gracefully falls back to a coloured circle if no avatar's been
+    // generated — the <img> self-removes via onerror.
+    const avatar = document.createElement('span');
+    avatar.className = 'dj-avatar dj-avatar-md';
+    avatar.style.background = colourByIdx.get(dj.id);
+    avatar.innerHTML = `<img src="${_djAvatarUrl(dj.id)}" alt="" onerror="this.remove()" />`;
+    row.appendChild(avatar);
+
+    const content = document.createElement('div');
+    content.className = 'roster-row-content';
+
     const nameLine = document.createElement('div');
     nameLine.className = 'roster-row-name';
-    // Avatar = a coloured circle with the generated image layered on top via
-    // an <img>. If the image 404s (DJ never had one generated), the <img>
-    // self-removes via onerror and the coloured circle stays as the
-    // placeholder. The colour matches the DJ's schedule-grid blocks so the
-    // eye can stitch the two views together.
-    nameLine.innerHTML =
-      `<span class="dj-avatar dj-avatar-sm" style="background:${colourByIdx.get(dj.id)};">` +
-      `  <img src="${_djAvatarUrl(dj.id)}" alt="" onerror="this.remove()" />` +
-      `</span>` +
-      `<span>${_escapeText(dj.name)}</span>`;
-    row.appendChild(nameLine);
+    nameLine.textContent = dj.name;
+    content.appendChild(nameLine);
 
     if (dj.personality) {
       const p = document.createElement('div');
       p.className = 'roster-row-personality';
       p.textContent = dj.personality;
-      row.appendChild(p);
+      content.appendChild(p);
     }
 
     const meta = document.createElement('div');
@@ -1905,8 +1931,9 @@ async function _renderRosterList() {
       `<span>${dj.voice ? `Voice: ${_escapeText(dj.voice)}` : 'Voice: (default)'}</span>` +
       `<span>Used in ${usesLabel}</span>` +
       (orphan ? `<span class="orphan">⚠ not in any show</span>` : '');
-    row.appendChild(meta);
+    content.appendChild(meta);
 
+    row.appendChild(content);
     row.addEventListener('click', () => _openDJEditor(dj.id));
     container.appendChild(row);
   });

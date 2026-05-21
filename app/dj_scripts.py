@@ -76,6 +76,23 @@ def pick_active_persona(station: StationConfig, now: datetime) -> DJ | None:
     return djs_by_id.get(show.dj_id)
 
 
+def active_dj(station: StationConfig, config: AppConfig, now: datetime | None = None) -> DJ | None:
+    """Return the DJ currently on air (per the resolver), or None.
+
+    Thin convenience wrapper over pick_active_persona that handles the same
+    timezone-aware ``now`` defaulting active_station does. Callers that need
+    the active DJ's id (e.g. the on-air badge avatar URL) want this instead
+    of active_station — active_station's model_copy flattens the DJ identity
+    into the station fields and drops the id along the way.
+    """
+    if now is None:
+        try:
+            now = datetime.now(ZoneInfo(config.alerts.local_time_zone))
+        except Exception:  # noqa: BLE001
+            now = datetime.now()
+    return pick_active_persona(station, now)
+
+
 def active_station(station: StationConfig, config: AppConfig, now: datetime | None = None) -> StationConfig:
     """Return station with DJ fields overridden by any matching Show's DJ."""
     if not station.shows:

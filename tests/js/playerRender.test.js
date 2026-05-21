@@ -227,3 +227,129 @@ describe('renderQueue', () => {
     expect(btns[0].textContent).toBe('✕');
   });
 });
+
+
+// ── setOnAirMode + badge avatar ─────────────────────────────────────────────
+
+describe('setOnAirMode badge avatar', () => {
+  beforeEach(() => {
+    // Stub fetch BEFORE loadAppJs so init()'s /config call hits a sensible
+    // response instead of the default `{}` (which has no .music_folder and
+    // trips an unhandled rejection that vitest surfaces as a noisy "1 error"
+    // line). The other test files get away with no stub because they don't
+    // await past the synchronous tick where init() blows up; ours await
+    // flush() for the animation, so the rejection has time to land.
+    stubFetch({
+      'GET /config': () => ({ music_folder: '/x', station: {}, alerts: {} }),
+      'GET /player/status': () => baseState(),
+      'GET /player/queue': () => ({ items: [] }),
+      'GET /library/status': () => ({ track_count: 0 }),
+    });
+    loadAppJs();
+    globalThis.__setPaused(false);
+    globalThis.__setOnAirModeVar('track');
+  });
+
+  it('dj mode with both dj_name and active_dj_id renders an inline avatar', async () => {
+    globalThis.__setServerState(baseState({
+      station: {
+        name: 'Test FM', tagline: 't', dj_name: 'Ms. Jessica Danger',
+        active_dj_id: 'dj-jess-123',
+      },
+    }));
+
+    globalThis.setOnAirMode('dj');
+    // The roll-out animation flips innerHTML at the midpoint; give it a
+    // couple of microtask ticks to settle.
+    await flush();
+    await flush();
+
+    const el = document.getElementById('nowPlaying');
+    expect(el.dataset.mode).toBe('dj');
+    const avatar = el.querySelector('.badge-avatar.dj-avatar.dj-avatar-xs');
+    expect(avatar).toBeTruthy();
+    const img = avatar.querySelector('img');
+    expect(img.getAttribute('src')).toContain('/media/dj-icon/dj-jess-123');
+    // onerror self-removes so the placeholder background stays visible if
+    // the DJ has no avatar generated yet.
+    expect(img.getAttribute('onerror')).toContain('this.remove()');
+    // Text content includes the DJ's name (textContent strips the markup).
+    expect(el.textContent).toContain('Ms. Jessica Danger');
+    expect(el.textContent).toContain('On air with');
+  });
+
+  it('dj mode without active_dj_id falls back to plain text (no avatar)', async () => {
+    // Default-DJ slot: dj_name is set (the station's own DJ takes over) but
+    // active_dj_id is null because no Show's DJ is hosting. We render the
+    // plain text badge — no avatar to slot in.
+    globalThis.__setServerState(baseState({
+      station: { name: 'Test FM', tagline: 't', dj_name: 'Default Dan', active_dj_id: null },
+    }));
+
+    globalThis.setOnAirMode('dj');
+    await flush();
+    await flush();
+
+    const el = document.getElementById('nowPlaying');
+    expect(el.querySelector('.badge-avatar')).toBeNull();
+    expect(el.textContent).toContain('On air with Default Dan');
+  });
+
+  it('dj mode with no dj_name at all says plain "On air"', async () => {
+    globalThis.__setServerState(baseState({
+      station: { name: 'Test FM', tagline: 't' },  // no dj_name, no active_dj_id
+    }));
+
+    globalThis.setOnAirMode('dj');
+    await flush();
+    await flush();
+
+    const el = document.getElementById('nowPlaying');
+    expect(el.querySelector('.badge-avatar')).toBeNull();
+    expect(el.textContent).toContain('On air');
+    expect(el.textContent).not.toContain('with');
+  });
+
+  it('non-dj modes do not render an avatar', async () => {
+    globalThis.__setServerState(baseState({
+      station: { name: 'Test FM', tagline: 't', dj_name: 'Sam', active_dj_id: 'dj-sam' },
+    }));
+
+    globalThis.setOnAirMode('ad');
+    await flush(); await flush();
+    let el = document.getElementById('nowPlaying');
+    expect(el.querySelector('.badge-avatar')).toBeNull();
+    expect(el.textContent).toContain('Ad break');
+
+    globalThis.setOnAirMode('news');
+    await flush(); await flush();
+    el = document.getElementById('nowPlaying');
+    expect(el.querySelector('.badge-avatar')).toBeNull();
+    expect(el.textContent).toContain('News');
+  });
+
+  it('escapes the dj name so HTML injection in dj_name is harmless', async () => {
+    // dj_name flows from the config (user-editable). The badge interpolates
+    // it into innerHTML when an avatar is present, so we have to escape it
+    // — otherwise a DJ literally named `<script>alert(1)</script>` would
+    // execute.
+    globalThis.__setServerState(baseState({
+      station: {
+        name: 'Test FM', tagline: 't',
+        dj_name: '<img src=x onerror=alert(1)>',
+        active_dj_id: 'dj-attack',
+      },
+    }));
+
+    globalThis.setOnAirMode('dj');
+    await flush(); await flush();
+
+    const el = document.getElementById('nowPlaying');
+    // The escaped form lands in textContent as the literal characters.
+    // Critically: no extra <img> element from the injection attempt.
+    const imgs = el.querySelectorAll('img');
+    // Only the legitimate avatar img — not the injected one.
+    expect(imgs.length).toBe(1);
+    expect(imgs[0].getAttribute('src')).toContain('/media/dj-icon/dj-attack');
+  });
+});

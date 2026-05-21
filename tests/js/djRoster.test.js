@@ -419,13 +419,15 @@ describe('roster mode', () => {
 describe('DJ avatars', () => {
   beforeEach(() => loadAppJs());
 
-  it('roster row renders the avatar circle with an <img> overlay', async () => {
+  it('roster row renders a 60 px avatar circle with an <img> overlay', async () => {
     stubFetch({ 'GET /config': () => makeConfig({ djs: [SAM] }) });
     await openRoster();
 
     const avatar = document.querySelector('#rosterList .dj-avatar');
     expect(avatar).toBeTruthy();
-    expect(avatar.classList.contains('dj-avatar-sm')).toBe(true);
+    // -md = 60 px, sized up from the old 28 px swatch because the avatar is
+    // now doing actual portrait work, not just colour-coding.
+    expect(avatar.classList.contains('dj-avatar-md')).toBe(true);
     // Background colour is the DJ's palette colour (placeholder if the
     // <img> fails to load).
     expect(avatar.style.background).toBeTruthy();
@@ -437,6 +439,30 @@ describe('DJ avatars', () => {
     // onerror self-removes the <img> so the coloured circle stays as the
     // placeholder when no avatar has been generated yet.
     expect(img.getAttribute('onerror')).toContain('this.remove()');
+  });
+
+  it('roster row uses a horizontal layout with avatar + content stack', async () => {
+    // Layout regression guard. The 60 px avatar looks unbalanced when the
+    // row is a vertical stack (avatar towers above three small text lines);
+    // the row needs to be flex-row with the text content stacked beside the
+    // avatar so the eye reads the two columns evenly. Asserting the DOM
+    // structure is the cheapest way to lock that in without trying to
+    // measure pixels in happy-dom.
+    stubFetch({ 'GET /config': () => makeConfig({ djs: [SAM] }) });
+    await openRoster();
+
+    const row = document.querySelector('#rosterList .roster-row');
+    expect(row).toBeTruthy();
+    // Two direct children: avatar + content. The text fields (name,
+    // personality, meta) live inside .roster-row-content, not as direct
+    // children of .roster-row.
+    const directChildren = Array.from(row.children);
+    expect(directChildren.length).toBe(2);
+    expect(directChildren[0].classList.contains('dj-avatar')).toBe(true);
+    expect(directChildren[1].classList.contains('roster-row-content')).toBe(true);
+    // The text fields all live inside the content stack.
+    expect(directChildren[1].querySelector('.roster-row-name')).toBeTruthy();
+    expect(directChildren[1].querySelector('.roster-row-meta')).toBeTruthy();
   });
 
   it('editor avatar shows the image + a Regenerate avatar button for existing DJs', async () => {

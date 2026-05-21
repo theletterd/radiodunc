@@ -28,6 +28,12 @@ class StationOut(BaseModel):
     genre_focus: list[str] = Field(default_factory=list)
     dj_name: str
     personality: str
+    # UUID of the DJ currently on air per the resolver, or None when the
+    # Default DJ is hosting (no Show matches now, or the matching Show has
+    # dj_id=None). The client uses this to build the on-air avatar URL —
+    # active_station() flattens the DJ identity into dj_name/personality
+    # overrides but loses the id, so we surface it separately here.
+    active_dj_id: str | None = None
 
 
 class QueueResponse(BaseModel):
