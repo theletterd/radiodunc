@@ -1,277 +1,108 @@
 # RadioDunc — Backlog
 
-## ✅ Move more settings into the UI
+Active backlog only. Anything shipped lives in git history (search the PR
+list); the short "recently shipped" list at the bottom is just a quick scan
+of what's landed lately, not a permanent archive.
 
-Shipped: "⚙ Station Settings" sidebar takeover that parallels the
-schedule editor. Six collapsible sections (Station identity, Weather,
-News, Ads, Station IDs, AI). Save merges back onto the live config so
-fields the panel doesn't expose (dj_roster, voice pools) round-trip
-untouched.
+## ☐ DJ avatars — schedule grid block corners
 
-Deliberately still json-only:
-- `alerts.news.voices` / `alerts.ads.voices` — arrays of voice+
-  instructions entries; need their own mini-editor (probably next
-  iteration).
-- `*.prompt_template` overrides — power-user knobs, easy to misuse.
-- `local_time_zone`, `tts_provider`, `openai_*_model`,
-  `playlist_artist_repeat_window`, `core_artists`, `music_folder` —
-  infrequent enough to leave in json.
-
-## ☐ DJ avatars — extra surfaces
-
-Slice 1 shipped: manual "Regenerate avatar" button in the DJ editor,
-generated via `gpt-image-1` low quality (~$0.011/click), served from
-`generated/dj_icons/{dj_id}.png`. Avatars show in the DJ Roster
-list rows + the editor itself; coloured-circle fallback when no avatar
-has been generated yet.
-
-Shipped after slice 1:
-- **On-air badge avatar** — small 22 px circle in front of the "🎙️ On
-  air with [DJ]" text in the player. Server exposes `active_dj_id` on
-  `StationOut` so the client can build the avatar URL (active_station's
-  model_copy drops the id along the way; surfaced separately).
-- **Roster row avatar bumped to 60 px** — and the row layout flipped
-  from vertical-stack to flex-row with the text content stacked to the
-  right of the avatar, so the bigger image doesn't tower over the
-  three-line text column.
-
-Still to do, whenever:
-- **Schedule grid blocks** — small avatar circle in the corner of each
-  block. Layout work to fit it cleanly alongside the
-  "<show> with <DJ>" label.
-- **Auto-regenerate trigger** — currently button-only. Could opt in to
-  auto-regen on personality changes ($0.011/save) if button-only turns
-  out to be friction.
+Slice 1 shipped (manual "Regenerate avatar" button) along with the on-air
+badge avatar + roster row treatment. The remaining surface is the schedule
+grid: a small avatar circle in the corner of each Show block. Layout work
+to fit it cleanly alongside the "<show> with <DJ>" label without crowding.
 
 ## ☐ Move per-segment audio gain into config
 
 Currently hardcoded as JS constants in `app/ui/app.js` (lines 13–16):
 `DJ_GAIN = 2.1`, `NEWS_GAIN = 1.7`, `AD_GAIN = 1.6`, `STINGER_GAIN = 2.0`.
-Music has no segment-level boost (effectively 1.0). The compressor flattens
+Music has no segment-level boost (effectively 1.0); the compressor flattens
 dynamic range afterwards, so audible differences are smaller than raw
 ratios suggest.
 
-Worth promoting to an `audio_levels` block under `AppConfig` (probably
-`audio_levels: {dj, news, ads, stingers}`) once we've settled on values
-we like — currently tweaking means a code edit + reload, which makes
-the constants feel more permanent than they are. Hot-reload via the
-existing `/config` change hook would also pick this up cleanly.
+Blocked on Duncan wanting to tweak values manually first before we settle
+on what to commit. Once values feel right, promote to an `audio_levels`
+block under `AppConfig` (probably `audio_levels: {dj, news, ads, stingers}`)
+so future tweaks don't need a code edit + reload. Hot-reload via the
+existing `/config` change hook would pick this up cleanly.
 
-## ✅ Hot-reload config on PUT /config
+## Monitoring (not actionable until something changes)
 
-Shipped. `update_config` loads the old config before save, then calls
-`_on_config_changed(old, new)` (in `app/main.py`) which selectively flushes
-the two in-memory caches that bake config values into their contents:
+### Spurious unprompted playback after lid-close / wake
 
-- **DJ-clip prefetch cache** (`_prefetch_cache`) — cleared on any change to
-  `station`, `alerts`, or the text/TTS generation knobs
-  (`tts_provider`, `script_provider`, `openai_text_model`/`_temperature`,
-  `openai_tts_model`/`_voice`). The prefetched audio was synthesised
-  against the old persona/cadence/voice.
-- **News bulletin cache** (`_news_cache`) — cleared when `station.name`,
-  `station.spoken_name`, the entire `alerts.news` subtree, or any
-  generation knob changes. Tweaking `alerts.ads.risque_chance` does NOT
-  drop the news (verified by test).
+Original repro: hit Stop, close laptop lid, walk away — on lid-open, the
+player started playing on its own.
 
-Intentionally left to expire naturally:
-- **Weather summary cache** — 30-min TTL handles it. The cost of one
-  extra HTTP fetch on save is small enough that an explicit invalidator
-  isn't worth the code.
-- **Station-ID stinger phrases** (disk file) — file is keyed by station
-  name and regenerated lazily when needed. An explicit eviction shaves
-  one LLM round-trip on the next stinger pull; not worth the surface.
+Instrumentation + a defensive guard shipped in PR #119: every playback
+entry point logs through `_logPlayback(event, fields)` with full state
+context, and `triggerTransition` bails with a `console.warn` if
+`serverState?.is_playing` is false. So the symptom is suppressed (the
+guard catches it before any audio plays) and the next repro will name
+the offending entry point in the console.
 
-Hook failures are logged and swallowed so a botched cache flush never
-500s the PUT — the new config is already on disk by then. Tests live in
-`tests/test_main.py` (the `test_config_change_*` block).
-
-## ✅ Front-end audio compression
-Shipped in PR #134. `DynamicsCompressorNode` sits between `masterGain` and
-`ctx.destination` in `initAudio()` with broadcast defaults (threshold -18
-dB, ratio 4:1, attack 5 ms, release 100 ms). Auto-flattens the loud/quiet
-gap between voices and between voices vs music. The per-voice trim plumbing
-was subsequently ripped out (PR #135) since the compressor handles it.
-
-## ✅ Separate DJ from show
-
-Shipped across 7 PRs (#144 design doc, #145–#150 vertical slices, #151
-follow-up polish on the block label). End state matches the design doc:
-
-- `StationConfig` has `djs[]` (reusable identities) + `shows[]`
-  (bindings that link a DJ to a set of shifts). The legacy `dj_roster`
-  field is gone from the schema; a `mode="before"` validator still
-  expands any legacy `dj_roster` it finds in raw JSON so old configs
-  load cleanly without manual edits.
-- Resolver (`pick_active_persona`) walks `shows[]` only; legacy fallback
-  removed.
-- `{show_name}` placeholder available in the DJ prompt template, plus a
-  pre-formatted `{show_block}` hint sentence that prompts the LLM to
-  riff on persona/show contrast (Raven Vale's "Velvet Hours" on Tuesday
-  afternoons is the sleeper feature).
-- Schedule grid renders Shows; DJ-stable colours; "<show> with <DJ>"
-  block label that wraps cleanly on narrow cells.
-- Show editor handles scheduling; DJ Roster takeover handles identity;
-  "+ Create new DJ…" inline modal keeps the Show flow uninterrupted;
-  Delete DJ reassigns Shows to Default rather than dropping them.
-
-## ✅ Schedule grid unclickable after persona edit → back
-
-Not actually a persona-edit bug — it was the 60-second auto-refresh
-(`_scheduleAutoRefresh`) calling `renderSchedule()` without re-running
-`_attachBlockClickHandlers()`. Every other caller did the pair correctly;
-the interval timer was the one forgotten path. Symptom showed up most
-often after persona editing because that's when the user lingers in
-scheduler mode long enough for the timer to fire.
-
-Fix: folded `_attachBlockClickHandlers()` into `renderSchedule` itself
-so it can't be forgotten again. Removed the now-redundant explicit calls
-from the six other call sites. Regression test in
-`tests/js/schedule.test.js` re-renders in place and asserts that a click
-on the new block still opens the editor.
-
-## ✅ Chunked scan commits
-
-Shipped. `scan_library` now flushes + commits every `SCAN_COMMIT_CHUNK_SIZE`
-(= 200) imported tracks, then calls `expire_all()` to release the chunk's
-Track objects from the session. Peak memory stays bounded regardless of
-library size, and a mid-scan crash (process kill, KeyboardInterrupt)
-leaves all previously-committed chunks intact in the DB — the next scan
-picks up from there because the duplicate-check sees the committed rows.
-
-Two new tests in `tests/test_scanner.py`:
-- `test_scan_partial_progress_survives_midstream_crash` — a 1000-file
-  scan that crashes at the 450th extraction leaves exactly 2 ×
-  `SCAN_COMMIT_CHUNK_SIZE` rows committed (the 49 in-flight ones are
-  discarded, as expected).
-- `test_scan_resumes_correctly_after_partial_failure` — first scan
-  crashes after one chunk; second scan (fresh session, simulating a
-  process restart) skips the 200 already-committed files as duplicates
-  and imports the remaining 300.
-
-Stretch (not shipped): `/library/scan/progress` endpoint or websocket so
-the UI can show a live "imported 2,340 of ~8,000…" counter instead of
-"Scanning…" for a minute. Filed as future work.
-
-## ☐ Spurious unprompted playback after lid-close / wake
-
-Repro: hit Stop, close laptop lid, walk away. On lid-open, the player started
-playing on its own without any user gesture.
-
-**Status**: instrumentation shipped in PR #119 (Nov 2026). Every playback
-entry point now logs through `_logPlayback(event, fields)` with full state
-context, and `triggerTransition` defensively bails with a `console.warn` if
-`serverState?.is_playing` is false. So:
-
-- Symptom is suppressed: the user no longer hears unexpected playback when
-  this bug fires (the guard catches it before any audio plays).
-- Diagnosis is automatic: next time the bug repros, the browser console
-  shows exactly which entry point fired and why — look for the
-  `triggerTransition blocked — serverState says not playing` warn and the
-  preceding entry log.
-
-Waiting on a fresh repro to chase the root cause. Likely suspect: a stale
-`autoTrigger` setTimeout that survived `stopPlayback` (macOS power
-management may suspend/resume the JS event loop without firing
-`clearTimeout` cleanly). If confirmed, fix is to give timers a
-generation token, or have the autoTrigger callback re-check
+No fix until a fresh repro. Likely suspect: a stale `autoTrigger`
+setTimeout that survived `stopPlayback`. If confirmed, fix is to give
+timers a generation token or have the autoTrigger callback re-check
 `serverState.is_playing` itself.
-
-## ✅ Always-async news generation
-Shipped in PR #118. `get_news_clip` never blocks on regeneration anymore;
-cache miss = skip the segment + queue a refresh. The warmup on `player_play`
-keeps the cache warm in normal use, so the skip path almost never fires.
-
-**Follow-up (May 2026):** with sparse news cadence (every_n_breaks ≥ 10),
-the skip path WAS firing in practice — when the 30-min cache expires between
-cadence hits, news disappears for an entire extra cycle. `_attach_news` now
-waits up to `NEWS_BLOCK_ON_MISS_S` (8 s) on the just-spawned refresh before
-falling back to skip. `get_news_clip`'s contract is unchanged.
-
-## ✅ Persona definition refactor — split personality from voice
-Shipped in PR #120. `dj_style` → `personality` on both `StationConfig`
-and `DJPersona`, with silent migration validators that accept the old
-keys. UI form label now reads "Personality — what they SAY". Voice
-direction lives in `voice` + `voice_instructions` as before.
 
 ## ☐ Future ideas (not committed yet)
 
-- **Cost guardrail** — track $/day OpenAI usage in the DB, surface in
-  the UI, optional soft cap with a warning toast. Lets you experiment
-  with bigger phrase pools / longer prompts without anxiety.
-- **Like / dislike signal** — heart/x buttons in the player that bias
-  the scheduler. Connects what you actually enjoy to what plays.
-- **Stinger pool variety on warmup** — currently the startup warmup
-  seeds ONE stinger clip; could top up the pool gradually so the first
-  few skip-stingers have variety from minute one.
-- **Multi-listener / shareable URL** — would need a real broadcast
-  layer (icecast, HLS, or just polling-based sync). Big architectural
-  shift; only worth it if you want friends to tune in.
+- **Like / dislike signal** — heart/x buttons in the player that bias the
+  scheduler. Connects what you actually enjoy to what plays.
+- **Stinger pool variety on warmup** — currently the startup warmup seeds
+  one stinger clip; could top up the pool gradually so the first few
+  skip-stingers have variety from minute one. (~hour of work.)
+- **Multi-listener / shareable URL** *(probably never)* — would need a
+  real broadcast layer (icecast, HLS, or polling-based sync). Big
+  architectural shift; only worth it if friends end up wanting to tune in.
+- **Live-progress UI for library scans** — `/library/scan/progress`
+  endpoint or websocket so the UI shows a live "imported 2,340 of ~8,000…"
+  counter instead of staring at "Scanning…" for a minute. The chunked
+  commits in PR #156 already provide the durability foundation (rows are
+  committed in batches as the scan runs); this is the UI half.
 
-## DJ / personality system
-- ✅ Consolidate DJ config: station fields are the default DJ, `dj_roster` entries are scheduled overrides
-- ✅ Renamed `voice_hint` → `voice` everywhere (consistent with `voice_instructions`)
-- ✅ Multiple ad-break voices/personalities — `AdVoice` list with per-voice instructions, random pick per break
+## Recently shipped
 
-## DJ script / prompts
-- ✅ When an ad break is coming up, DJ is told to tease it (`ad_break_follows` flag → prompt block)
-- ✅ Injected tracks flagged as audience requests (`requested: true` in queue item → `reason = "request"` in prompt)
+A quick orientation for what's landed in the last sweep of work. Look at
+the PR description for the full design notes; AGENTS.md describes the
+current state of each system.
 
-## UI — library panel
-- ✅ Hide the scanner behind a collapsible dropdown (it's rarely used)
-- ✅ Add a "Library status" widget to the sidebar showing track count, last scan time, etc.
-
-## UI — queue
-- ✅ Queue shows all upcoming tracks (was capped at 5), scrollable with max-height
-- ✅ Queue start size bumped to 30 tracks
-- ✅ Drag-to-reorder queue items (HTML5 drag-and-drop, blue drop indicator, ⠿ handle)
-- ✅ "Add more tracks" button extends the queue on demand
-
-## UI — layout / bugs
-- ✅ Search bar overflow fixed (box-sizing: border-box on inputs globally)
-- ✅ Queue delete 204 response no longer throws a JS error (api() skips JSON parse on empty)
-- ✅ Ad break badge timer is cancelled on new transition — no more stale early resets
-
-## Ad breaks
-- ✅ Cache ad clips forever; configurable `pool_size` (default 100), picks randomly from pool once full
-
-## Observability
-- ✅ Add timing logs for LLM and TTS steps (`elapsed_s` logged on all OpenAI calls)
-
-## UI — now playing
-- ✅ Show the MP3 filename in the now-playing display (monospace, below track title)
-
-## Config
-- ✅ Sync radio_config.json to match the new example config shape (voice → voices list for ads, voice_instructions on roster entries)
-
-## Docs
-- ✅ Update README to reflect current architecture (Web Audio, single-station config, persona system, etc.)
-
----
-
-## Done
-
-- ✅ End of queue handled gracefully (clean stop + message)
-- ✅ Auto-trigger uses correct duration (loadedmetadata only)
-- ✅ Dead `DJ_OVERLAP_S` constant removed
-- ✅ Volume slider persists across reload (localStorage)
-- ✅ Next button visual feedback (disabled + "Loading…")
-- ✅ DJ / music volume balance (`DJ_GAIN = 1.8`)
-- ✅ Upcoming queue display with veto buttons
-- ✅ Track request search bar with queue inject
-- ✅ Removed `ADMIN_API_TOKEN` auth (local app)
-- ✅ Single curated station — collapsed multi-station model into config-driven `StationConfig`
-- ✅ Adjustable base DJ prompt (`dj_prompt_template` with placeholder substitution)
-- ✅ Per-day DJ personas (`dj_roster` with day/hour scheduling)
-- ✅ DJ reacts to manual Next skips (`reason: "skip"` flag)
-- ✅ Real weather reports on a cadence (`alerts.weather.every_n_breaks`)
-- ✅ News headlines from RSS on a cadence (`alerts.news.rss_url`, `every_n_breaks`)
-- ✅ LLM-generated ad breaks with a second voice (`alerts.ads`, default voice "echo")
-- ✅ Auto-trigger reliability fix (handles metadata-already-loaded case)
-- ✅ Filename fallback when artist/title metadata missing
-- ✅ Transition "now playing" display (label updates the moment `/player/next` returns)
-- ✅ Ad-break UI badge ("📻 Ad break" flashes during ad playback)
-- ✅ Pre-generate next DJ clip in background (eliminates TTS latency on auto-advance)
-- ✅ Local time added to DJ prompt (`current_time`, `current_weekday` placeholders)
-- ✅ Per-DJ `voice_instructions` field passed to OpenAI TTS API
-- ✅ Weather reports in Celsius
-- ✅ Network drive reliability — track files read fully into memory before serving (retry on 503 client-side)
+- **#163** — startup migration rewrites `dj_clips.audio_path` from
+  legacy `generated_audio/…` → `generated/…` so cached stingers, ads,
+  news, and transitions all play after the dir rename. Required for any
+  install that pre-dates #159.
+- **#162** — `{self_id_block}` placeholder in the default DJ prompt;
+  ~1-in-3 transitions inject a "weave in your name and show name"
+  directive so the DJ does the classic "you're listening to X, with
+  yours truly Y" patter occasionally without grating.
+- **#161** — "Add to playlist" button on search results, appending to
+  the queue tail rather than the next slot. `QueueInjectRequest.position`
+  is now `"next"` | `"end"`.
+- **#160** — DJ-clip prefetch worker reads `requested` flag on the
+  target queue item and uses `reason="request"` accordingly. Fixes the
+  bug where caller-requested tracks didn't get acknowledged.
+- **#159** — `generated_audio/` → `generated/` rename (avatars share
+  the dir, so the audio-specific name was misleading). Seed roster:
+  `example-radio_config.json` ships the real DJ set + matching avatar
+  PNGs in `app/seed/dj_icons/`. `/media/dj-icon/{id}` falls back to the
+  seed dir, so fresh clones get a fully-illustrated roster out of the
+  box. (Caveat: this PR introduced the stale-paths bug fixed by #163.)
+- **#158** — on-air badge avatar background matches the DJ's palette
+  colour (per-DJ client-side cache), not hardcoded pink.
+- **#157** — on-air badge avatar (inline 22 px circle in the "🎙️ On air
+  with …" text) + DJ Roster row avatars bumped from 28 → 60 px with a
+  flex-row layout so the bigger image doesn't tower over the text.
+  Server exposes `active_dj_id` on `StationOut` so the client can build
+  the avatar URL.
+- **#156** — chunked scan commits: `scan_library` flushes + commits
+  every `SCAN_COMMIT_CHUNK_SIZE = 200` tracks, then `expire_all`s the
+  session, so memory stays bounded and a crash mid-scan keeps the
+  already-committed chunks in the DB.
+- **#153** — DJ avatars slice 1: manual "Regenerate avatar" button in
+  the DJ editor; two-step pipeline (gpt-4o-mini text rephrase →
+  gpt-image-1 low) to dodge image-moderation false positives on
+  personality strings.
+- **#152** — wall-clock timestamps on `[playback]` console logs so the
+  lid-wake repro logs are easy to tell apart from earlier in the session.
+- **#144–#151** — the DJ-vs-Show refactor across 7 PRs (design doc +
+  6 vertical slices + a block-label polish). See AGENTS.md for the
+  current state of `djs[]` + `shows[]` + The Ghost.
