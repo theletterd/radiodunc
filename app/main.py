@@ -86,7 +86,35 @@ def _migrate_drop_legacy_schema() -> None:
             conn.execute(text("ALTER TABLE dj_clips ADD COLUMN is_ad BOOLEAN NOT NULL DEFAULT 0"))
 
 
+def _migrate_dj_clip_paths_after_generated_rename() -> None:
+    """Rewrite ``dj_clips.audio_path`` from the old ``generated_audio/``
+    prefix to the new ``generated/`` one introduced in PR #159.
+
+    That rename moved the cache directory on disk but didn't migrate
+    existing DB rows, so every clip generated before the rename
+    (stingers, ads, news, transitions, previews) 404'd at serve time
+    because ``_safe_media_path`` resolved against ``generated_audio/``
+    which no longer existed. Symptom: skip-stingers stopped playing.
+
+    Idempotent — the WHERE clause filters to only rows with the legacy
+    prefix, so re-running on a clean DB is a no-op.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text(
+            "UPDATE dj_clips "
+            "SET audio_path = 'generated/' || substr(audio_path, length('generated_audio/') + 1) "
+            "WHERE audio_path LIKE 'generated_audio/%'"
+        ))
+        rewritten = result.rowcount
+    if rewritten:
+        logging.getLogger(__name__).info(
+            "migrated %d dj_clip audio_path(s) from generated_audio/ → generated/",
+            rewritten,
+        )
+
+
 _migrate_drop_legacy_schema()
+_migrate_dj_clip_paths_after_generated_rename()
 
 logger = logging.getLogger(__name__)
 
