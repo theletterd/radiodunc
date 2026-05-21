@@ -17,6 +17,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .models import DJClip, PlayerState, Track
 from .dj_scripts import (
     DJ_AVATAR_DIR,
+    active_dj,
     active_station,
     generate_ad_script,
     generate_dj_avatar,
@@ -274,7 +275,7 @@ def _track_label(track: Track) -> str:
     return f"Track {track.id}"
 
 
-def _station_out(station: StationConfig) -> StationOut:
+def _station_out(station: StationConfig, *, active_dj_id: str | None = None) -> StationOut:
     return StationOut(
         name=station.name,
         tagline=station.tagline,
@@ -284,6 +285,7 @@ def _station_out(station: StationConfig) -> StationOut:
         genre_focus=list(station.genre_focus),
         dj_name=station.dj_name,
         personality=station.personality,
+        active_dj_id=active_dj_id,
     )
 
 
@@ -376,10 +378,17 @@ def _build_player_state_response(db: Session, state: PlayerState) -> PlayerState
     if state.current_track_id is not None:
         current_track = db.query(Track).filter(Track.id == state.current_track_id).first()
 
+    # The on-air avatar lives on the client side; it builds the URL from
+    # the DJ's id. active_station() flattens the override into dj_name etc.
+    # but loses the id, so we plumb it through separately.
+    on_air_dj = active_dj(config.station, config)
     return PlayerStateResponse(
         is_playing=state.is_playing,
         volume=state.volume,
-        station=_station_out(active_station(config.station, config)),
+        station=_station_out(
+            active_station(config.station, config),
+            active_dj_id=on_air_dj.id if on_air_dj else None,
+        ),
         current_track=current_track,
         queue_depth=len(queue),
         queue_position=state.queue_index,
