@@ -8,6 +8,13 @@ from .models import Track
 
 SUPPORTED_EXTENSIONS = {".mp3", ".flac", ".m4a", ".ogg"}
 
+# How many new tracks to accumulate before flushing + committing. 200 is a
+# compromise: small enough to bound peak memory on huge libraries (each Track
+# only lives in the session for the chunk it was added in), large enough that
+# commit overhead doesn't dominate the wall-clock time (a commit costs roughly
+# one fsync; doing it every track would be ~10x slower on a typical SSD).
+SCAN_COMMIT_CHUNK_SIZE = 200
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,11 +63,14 @@ def scan_library(folder_path: str, db: Session) -> dict:
 
     logger.info("library.scan.started", extra={"folder": str(root)})
 
-    # NOTE: every new Track is added to the session and we commit once at the
-    # end. On very large libraries (10k+ files) this holds the full set in
-    # memory and produces one huge transaction. See TODO.md ("Chunked scan
-    # commits") for the follow-up — flush + commit every N tracks so memory
-    # stays bounded and partial progress survives a crash.
+    # NOTE: chunked commits. Every SCAN_COMMIT_CHUNK_SIZE imported tracks we
+    # commit + expire — so peak memory stays bounded regardless of library
+    # size, and a crash partway through leaves all previously-committed
+    # tracks in the DB (the next scan picks up from there because the
+    # duplicate-check query sees committed rows). The trade-off vs the old
+    # "one big commit at the end" path is a small wall-clock overhead per
+    # chunk, dominated by the fsync.
+    uncommitted_in_chunk = 0
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
@@ -77,9 +87,21 @@ def scan_library(folder_path: str, db: Session) -> dict:
             track = Track(file_path=file_path, **metadata)
             db.add(track)
             imported += 1
+            uncommitted_in_chunk += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"file_path": file_path, "error": str(exc)})
+            continue
 
+        if uncommitted_in_chunk >= SCAN_COMMIT_CHUNK_SIZE:
+            # commit() flushes + writes to disk; expire_all() drops the
+            # in-memory objects so the next chunk doesn't accumulate them.
+            # The duplicate-check query below still works correctly because
+            # SQLAlchemy will re-load any row it needs from the DB.
+            db.commit()
+            db.expire_all()
+            uncommitted_in_chunk = 0
+
+    # Final chunk (the remainder that didn't fill a full SCAN_COMMIT_CHUNK_SIZE).
     db.commit()
     logger.info(
         "library.scan.completed",
