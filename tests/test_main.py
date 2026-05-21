@@ -1173,6 +1173,100 @@ def test_prefetch_worker_populates_cache_on_success(monkeypatch, _reset_prefetch
     assert _prefetch_cache[1] == {"script_text": "Hi there.", "clip_hash": "abc123"}
 
 
+def test_prefetch_worker_uses_request_reason_for_requested_track(monkeypatch, _reset_prefetch_cache):
+    """Regression: the prefetch path used to always pass reason='auto' to
+    generate_dj_script, so caller-requested tracks (queued via the search
+    bar with requested=True) lost their "audience request" framing if the
+    prefetch happened to fire on them. The DJ would greet a requested
+    track exactly like a natural-advance one — no "we've got a request
+    coming in" framing — because the prefetch baked the wrong reason
+    into the cached clip.
+
+    Now the prefetch reads target_item.get("requested") and switches to
+    reason="request" accordingly, so the cached clip is the right kind of
+    banter from the start.
+    """
+    from app.main import _prefetch_dj_clip
+
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Requested", artist="B")
+    db.add_all([t1, t2])
+    db.commit()
+    db.refresh(t1); db.refresh(t2)
+
+    _patch_session_local(monkeypatch, db)
+    monkeypatch.setattr(
+        "app.main.load_config",
+        lambda: AppConfig(station=StationConfig(name="Req FM", dj_name="DJ Req")),
+    )
+
+    captured = {}
+    def _capture_script(_station, payload, _prev, _next, *, config=None):
+        captured["reason"] = payload.reason
+        return DJScriptResponse(
+            station_name="Req FM", dj_name="DJ Req",
+            sentences=["Hi"], script_text="Hi.",
+        )
+    monkeypatch.setattr("app.main.generate_dj_script", _capture_script)
+    monkeypatch.setattr(
+        "app.main.get_or_create_dj_clip",
+        lambda *_a, **_k: (_FakeClip(script_hash="reqhash"), "/path/clip.wav", False),
+    )
+    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
+
+    # Critically: target is the requested-flag track.
+    queue = [
+        {"type": "track", "track_id": t1.id},
+        {"type": "track", "track_id": t2.id, "requested": True},
+    ]
+    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
+
+    assert captured.get("reason") == "request"
+
+
+def test_prefetch_worker_uses_auto_reason_for_natural_advance(monkeypatch, _reset_prefetch_cache):
+    """Counterpart to the above: ordinary queue items (no requested flag)
+    still take the reason='auto' path, so we don't regress the default
+    natural-advance banter into something more elaborate than it needs."""
+    from app.main import _prefetch_dj_clip
+
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
+    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
+    db.add_all([t1, t2])
+    db.commit()
+    db.refresh(t1); db.refresh(t2)
+
+    _patch_session_local(monkeypatch, db)
+    monkeypatch.setattr(
+        "app.main.load_config",
+        lambda: AppConfig(station=StationConfig(name="Auto FM", dj_name="DJ Auto")),
+    )
+
+    captured = {}
+    def _capture_script(_station, payload, _prev, _next, *, config=None):
+        captured["reason"] = payload.reason
+        return DJScriptResponse(
+            station_name="Auto FM", dj_name="DJ Auto",
+            sentences=["Hi"], script_text="Hi.",
+        )
+    monkeypatch.setattr("app.main.generate_dj_script", _capture_script)
+    monkeypatch.setattr(
+        "app.main.get_or_create_dj_clip",
+        lambda *_a, **_k: (_FakeClip(script_hash="autohash"), "/path/clip.wav", False),
+    )
+    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
+
+    queue = [
+        {"type": "track", "track_id": t1.id},
+        {"type": "track", "track_id": t2.id},  # no `requested` key at all
+    ]
+    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
+
+    assert captured.get("reason") == "auto"
+
+
 def test_prefetch_worker_retries_with_voice_none_on_runtime_error(monkeypatch, _reset_prefetch_cache):
     from app.main import _prefetch_dj_clip, _prefetch_cache
 
