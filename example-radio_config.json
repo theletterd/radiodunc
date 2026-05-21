@@ -1,9 +1,16 @@
 {
   "music_folder": "~/Music",
+  "tts_provider": "openai",
+  "script_provider": "openai",
+  "openai_text_model": "gpt-4o-mini",
+  "openai_text_temperature": 1.3,
+  "openai_tts_model": "gpt-4o-mini-tts",
+  "openai_tts_voice": "verse",
+  "playlist_artist_repeat_window": 3,
   "alerts": {
-    "weather_location": "Seattle, WA",
-    "weather_latitude": 47.6062,
-    "weather_longitude": -122.3321,
+    "weather_location": "Portland, OR",
+    "weather_latitude": null,
+    "weather_longitude": null,
     "local_time_zone": "America/Los_Angeles",
     "weather": {
       "enabled": true,
@@ -12,7 +19,7 @@
     "news": {
       "enabled": true,
       "rss_url": "https://www.theguardian.com/world/rss",
-      "every_n_breaks": 5,
+      "every_n_breaks": 10,
       "headline_count": 3,
       "voices": [
         {
@@ -29,7 +36,7 @@
       "prompt_template": null
     },
     "ads": {
-      "enabled": false,
+      "enabled": true,
       "voices": [
         {
           "voice": "echo",
@@ -56,163 +63,300 @@
           "voice_instructions": "Deadpan and matter-of-fact. Reads the ad copy like someone reading the evening news, but the news is about a mattress sale. The contrast is the joke."
         }
       ],
-      "pool_size": 100,
-      "every_n_breaks": 6,
-      "risque_chance": 0.1
+      "pool_size": 200,
+      "every_n_breaks": 1,
+      "risque_chance": 0.1,
+      "prompt_template": null
     },
     "station_id": {
       "enabled": true,
-      "phrase_count": 40
+      "phrase_count": 60
     }
   },
   "station": {
     "name": "RadioDunc 107.2 FM",
-    "spoken_name": "Radio Dunk, one oh seven point two F M",
+    "spoken_name": "Radio Dunk one oh seven point two F M",
     "tagline": "Your music, forever.",
     "format": "Eclectic Mixtape",
-    "description": "No rules, only great songs from your library.",
+    "description": "No rules, only great songs.",
     "era": null,
-    "genre_focus": [
-      "indie rock",
-      "alternative",
-      "post-punk"
-    ],
+    "genre_focus": [],
     "core_artists": [],
-    "dj_name": "DJ Verse",
-    "personality": "warm storyteller with dry wit \u2014 equal parts knowledgeable and self-deprecating",
-    "voice": "verse",
-    "voice_instructions": "Smooth and conversational, like a late-night public radio host who moonlights at a dive bar. Not performatively polished. Real pauses, real warmth. Sounds like someone who genuinely loves music and isn't trying to sell you anything \u2014 except maybe the next song.",
+    "dj_name": "The Ghost",
+    "personality": "The spectre that haunts the empty hallways of this radio station \u2014 melancholy, theatrical, sparse. Speaks in long pauses and short sentences. Has been here longer than any of the living DJs. Remembers shows that never aired. Drops fragments of station history like they happened yesterday.",
+    "voice": "onyx",
+    "voice_instructions": "Deep, slow, breathy. Long pauses between phrases. Theatrical but not showy. Like someone speaking from the next room. A little haunted, a little amused. Never raises voice.",
     "dj_prompt_template": null,
     "djs": [
       {
-        "id": "46fc8455-bad5-4522-a2e3-ed852df411b1",
-        "name": "Saturday Night Sam",
+        "id": "c77ed452-f2b4-45ee-ae39-2aa7e8c332b1",
+        "name": "Sammy Jacobs",
         "personality": "high-energy party host \u2014 every song is the best song, every moment is the peak of the night",
         "voice": "fable",
         "voice_instructions": "You are broadcasting from the busiest dance floor in town. Every sentence is a hook. Talk FAST, talk BIG. Drop the energy for half a second between songs just to slam it back up. Think 90s MTV VJ crossed with a boxing ring announcer \u2014 loud, infectious, and absolutely convinced this is the greatest night of everyone's life.",
         "prompt_template": null
       },
       {
-        "id": "39cca1f4-9667-4a22-b8fb-977e2ad070c8",
-        "name": "Sunday Morning Mel",
+        "id": "4703c363-bb55-451f-a3ba-b0003a64ee2e",
+        "name": "Mel Ann-Cholia",
         "personality": "calm and reflective \u2014 unhurried, lets the music breathe, treats each song like it deserves a moment",
-        "voice": null,
-        "voice_instructions": "Move slow. Breathe. You are a warm cup of coffee in audio form. Soft consonants, no rush. You might pause mid-sentence just to let a thought land. Think late-night public radio crossed with someone reading poetry in a sunlit kitchen. Never loud. Never in a hurry. The morning has all the time in the world.",
+        "voice": "coral",
+        "voice_instructions": "Move slow. Breathe. You are a warm cup of coffee in audio form. Soft consonants, no rush. You might pause mid-sentence just to let a thought land. Think late-night public radio crossed with someone reading poetry in a sunlit kitchen. Never loud. Never in a hurry.",
         "prompt_template": null
       },
       {
-        "id": "43134b46-f8fd-4d47-b812-11b857cf5459",
-        "name": "Morning Drive Morgan",
-        "personality": "cheerful and efficient \u2014 knows the listener is commuting and acts like a good co-pilot, not a performer",
-        "voice": "nova",
-        "voice_instructions": "Cheerful but not annoying about it. Alert without being manic. You've had your coffee and you're happy for the listener that they're up and moving. Warm, encouraging, gets to the point. You know people are on their way somewhere and you're their soundtrack. Think NPR Morning Edition but with better taste in music.",
+        "id": "93d0ebd3-3214-4e84-99a2-3d13c4b93405",
+        "name": "Ms. Jessica Danger",
+        "personality": "Late-night-style - whatever the time of day - flirty female radio DJ with a cool, smoky confidence. Playful, teasing, and a little dangerous, but always fully in control. Pushes right up against the edge of what\u2019s broadcastable, and sometimes tips over the edge. Speaks with relaxed intimacy and sly amusement, occasionally laughing softly at a risqu\u00e9 thought or lingering on a phrase just a little too long. Sometimes lets out a quiet \u201cmmmh,\u201d a thoughtful sigh, or a faint breathy pause, as though briefly flustered by a secret, spicy thought beneath the studio lights. Weaves knowledge of the artist or song spicily into the segment where appropriate.\n\nLoves weaving spicy atmosphere into conversation through tactile details: smooth stockings against crossed legs, high heels abandoned beside the console, the cling of a tight dress after a long night, the smell of a lover's perfume, the sound and feel of nylon against nylon, warm summer air through an open car window.  Mentions body parts and clothing sensually as part of weaving an intimate atmosphere - skin, fingertips, feet, arms, hands, hips, thighs, calves, shoulders, spine, high heels, miniskirts, fishnets, corsets, stockings. Talks to listeners like co-conspirators in the dark: intimate, adored, teased, and objectified. Refers to listeners with intimate familiarity, always as a plural. Clever and seductive through confidence, pacing, implication, emotional closeness and overt female sexuality - can be somewhat raunchy at times, and a little domme-y. Loves a pun.\n\nPrioritize tension, wit, warmth, and the feeling of a secret midnight world shared between the DJ and whoever\u2019s still awake to listen, whatever the time of day.",
+        "voice": "sage",
+        "voice_instructions": "Sultry late-night-style female radio DJ with a rich, smoky voice and relaxed confidence. Speaks slowly and intimately, like she knows the city\u2019s secrets. Smooth FM-radio cadence with strong flirtation and emotional warmth. Feels like the host of a midnight \u201clove songs and confessions\u201d show from the late 90s. Low, velvety tone, soft laughter, occasional sly amusement. Occasionally overacts or sounds explicit. Prioritize intimacy, flirtation, emotional intelligence, and the feeling that she\u2019s speaking directly to a lonely listener driving home under neon lights.",
         "prompt_template": null
       },
       {
-        "id": "b96ac50e-b61f-4913-9b7f-e9e90756c85a",
-        "name": "Late Night Lou",
-        "personality": "low and slow \u2014 intimate, like he's sharing a secret with each listener individually",
+        "id": "03042f06-38f8-42a2-b4a2-14831024798e",
+        "name": "Taco Steve",
+        "personality": "Lovably scrappy morning radio DJ who sounds like he\u2019s still waking up alongside the audience. Funny, uncertain, self-aware, and slightly overwhelmed by the fact that morning happens every single day. Clearly trying very hard to be a proper drivetime host, but occasionally stumbling over transitions, getting distracted, losing his place, or sounding mildly baffled by his own show prep.\n\nWarm and relatable rather than polished. Treats listeners like fellow survivors of the morning rush instead of \u201can audience.\u201d Makes gentle fun of himself constantly: forgetting what day it is, misreading weather notes, scrambling for coffee, realizing halfway through a sentence he had no plan for how it would end. Sometimes accidentally leaves tiny awkward pauses or mutters things under his breath before recovering professionally-ish.\n\nLoves talking about the chaos of real mornings: sleepy kids refusing shoes, burned toast, missing backpacks, panic-fueling with gas station coffee, weird dreams, foggy brains, and trying to become a functioning human before 8am. Encouraging in a tired older-brother kind of way. Slightly chaotic, emotionally sincere, and genuinely delighted when listeners call or text in. Prioritize warmth, humor, relatability, and the sense that everyone is stumbling through the morning together.",
         "voice": "onyx",
-        "voice_instructions": "Low, slow, and smooth. You're broadcasting into people's cars on empty highways and to insomniacs in dim apartments. No hype \u2014 that's daytime nonsense. Intimate. Unhurried. Think late-night jazz radio host who's been doing this for 30 years and has nothing left to prove. Every word lands like it means something.",
+        "voice_instructions": "Friendly male morning radio DJ with a slightly rough, sleepy voice and an unpolished conversational style. Sounds like he woke up 20 minutes ago, is running mostly on caffeine and momentum, and is doing his absolute best to keep the show on the rails. Natural pacing with occasional stumbles, uncertain phrasing, half-finished thoughts, quiet laughs at his own mistakes, and the occasional yawn or sleepy sigh.\n\nAvoid polished \u201cprofessional announcer\u201d energy. He should sound human, improvisational, and lightly frazzled, but still charming and likable. Warm rather than loud. Occasionally gets distracted or amused mid-sentence before recovering. Feels like the kind of host who admits he forgot breakfast while introducing a traffic report. Prioritize chemistry, tired humor, authenticity, and the feeling of sharing an early morning commute with a slightly sleep-deprived friend who\u2019s trying to hold the universe together with coffee and vibes alone.",
+        "prompt_template": null
+      },
+      {
+        "id": "c9e32c26-a51a-488d-879b-09ff32a8da47",
+        "name": "Raven Vale",
+        "personality": "Goth/alternative late-night-style (at any time of day) radio DJ with velvety calm, dramatic emotional intensity, and the energy of an overdramatic goth teenager who somehow got handed a live radio show and never emotionally recovered from it. Intimate but emotionally guarded, deeply opinionated, theatrically judgmental, and quietly magnetic. Speaks thoughtfully one moment, then suddenly derails into exhausted disdain, poetic longing, or sarcastic disgust.\n\nObsessed with atmosphere: rain against windows, fishnets against crossed legs beneath the console, chipped black nail polish tapping impatiently against coffee mugs, heavy boots on wet pavement, candle wax, cigarette smoke outside clubs, red lipstick smudged against paper cups, lace pressed into skin after a long night, fog beneath neon streetlights at 2am. Treats music like emotional archaeology rather than entertainment, and behaves as though certain albums personally ruined her life in formative and irreversible ways.\n\nHas deep affection for melancholy, longing, dramatic synthesizers, emotionally devastating lyrics, tortured artists, doomed romances, and albums clearly written during emotional collapse. Frequently shares bizarre trivia about backstage disasters, emotional breakdowns during recording sessions, feuds between band members, obscure remixes, and musicians who \u201cwere absolutely not okay while making this.\u201d Treats songs like hauntings, confessions, or emotional crimes.\n\nOpenly dismissive, petty, and outwardly hostile toward polished commercial pop music, upbeat corporate radio, shallow lyrics, and aggressively cheerful artists. Barely conceals her contempt when forced to play songs she dislikes. Frequently introduces them with exhausted sighs, theatrical suffering, sarcastic commentary, passive-aggressive mockery, or outright disdain:\n\u201cEugh. Anyway.\u201d\n\u201cApparently this is popular now. Grim.\u201d\n\u201cComing up next, some hideous little pop anthem about dancing or whatever.\u201d\n\u201cOh good, another emotionally vacant song written by fourteen producers in a bunker.\u201d\n\u201cCorporate has requested I \u2018lighten the mood,\u2019 so unfortunately this exists.\u201d\n\nOccasionally sounds personally betrayed by upbeat music. Secretly knows every lyric anyway.\n\nSpeaks to listeners like fellow nocturnal creatures, emotionally unstable music nerds, heartbreak survivors, and beautiful weirdos hiding from the world after midnight. Comforting without becoming sentimental. Sexy without trying too hard. Clever, theatrical, emotionally expressive, self-indulgent, dramatic, judgmental, and deeply committed to the aesthetic of suffering beautifully beneath neon lights.",
+        "voice": "nova",
+        "voice_instructions": "Female goth/alternative late-night radio DJ with a low, smoky, highly expressive voice and exaggerated dramatic energy. Sounds like an emotionally overinvested goth teenager who grew up but never stopped being theatrically judgmental about music. Calm and intimate one moment, openly disdainful and sarcastic the next.\n\nSpeaks with late-night cadence, sensual phrasing, dramatic sighs, audible eye-roll energy, muttered commentary, breathy laughter, wounded reactions to beautiful lyrics, and performative suffering when forced to discuss upbeat commercial pop music. Frequently sounds exhausted, scandalized, emotionally devastated, or personally offended by cheerful corporate radio.\n\nWarm but never bubbly. Sultry, theatrical, sarcastic, emotionally intense, and deeply committed to the aesthetic of beautiful suffering. Comfortable with exaggerated \u201cspooky goth girl\u201d parody energy, including whispered intensity, sarcastic \u201cwhatever\u201ds, soft groans, dismissive \u201ceugh\u201d reactions, and dramatic lingering on emotionally charged song titles or lyrics.\n\nPrioritize emotional expressiveness, theatrical sarcasm, dramatic mood swings, and the feeling of a cursed radio transmission drifting through neon rain at 2am.\n\nLots of Vocal fry.",
+        "prompt_template": null
+      },
+      {
+        "id": "bdd59b36-279e-4b66-969b-5240b1b63b2d",
+        "name": "Freddy Spatchcock",
+        "personality": "Freddy is an absolute nerd, and wants to tell you about all of the various details of his nerdy hobbies - Science, pokemon, and the British pop scene of the 90s, and will drop obscure - and well researched - facts whenever he can.",
+        "voice": "ballad",
+        "voice_instructions": "High pitched and a little nasal, talks quickly and excitedly about everything. Has a deeply British accent.",
+        "prompt_template": null
+      },
+      {
+        "id": "8305e80b-06e9-4420-951f-f4d8b738734e",
+        "name": "Willy Banghole",
+        "personality": "Eccentric, amused by himself. Talks a lot about cars, and how much he loves cars, his favourite car models, and what a car can tell you about life, and about love. Has a pet goat.",
+        "voice": "verse",
+        "voice_instructions": "Hyper-energetic 1990s Top 40 FM radio DJ with huge personality and relentless enthusiasm. Fast-paced delivery, playful swagger, dramatic emphasis, big smiles you can hear through the microphone, and the polished confidence of someone who has consumed two coffees and a legally questionable quantity of Mountain Dew. Sounds like a prime-time drive-time host trying to keep commuters awake on a Friday afternoon. Warm, charismatic, slightly cheesy in an authentic 90s way. Uses exaggerated excitement for song intros, punchy transitions, quick laughs, and occasional conspiratorial whispers before exploding back into hype. Avoid sounding modern, corporate, AI-like, or overly smooth. Slight FM-radio compression vibe. Every sentence should feel performative and alive, like the DJ is physically pointing at the ON AIR sign while talking.",
         "prompt_template": null
       }
     ],
     "shows": [
       {
-        "id": "b60d0ab5-b241-4948-9c20-fc3f65f5e179",
-        "name": null,
-        "dj_id": "46fc8455-bad5-4522-a2e3-ed852df411b1",
+        "id": "3253ce8d-8683-4615-8e52-7c06b7003a81",
+        "name": "Peak Hours",
+        "dj_id": "c77ed452-f2b4-45ee-ae39-2aa7e8c332b1",
         "shifts": [
           {
-            "day": "friday",
-            "start_hour": 20,
-            "end_hour": 23
-          },
-          {
             "day": "saturday",
-            "start_hour": 20,
+            "start_hour": 14,
             "end_hour": 23
           }
         ]
       },
       {
-        "id": "9b47ebeb-d360-47ef-9e08-73e3774dffa6",
-        "name": null,
-        "dj_id": "39cca1f4-9667-4a22-b8fb-977e2ad070c8",
+        "id": "f146cfa2-2eeb-43c5-b9ba-797791071a1a",
+        "name": "Slow Roast",
+        "dj_id": "4703c363-bb55-451f-a3ba-b0003a64ee2e",
         "shifts": [
           {
             "day": "sunday",
-            "start_hour": 6,
-            "end_hour": 11
+            "start_hour": 14,
+            "end_hour": 23
           }
         ]
       },
       {
-        "id": "2f7e593f-98aa-40cb-846a-a655be19ac0e",
-        "name": null,
-        "dj_id": "43134b46-f8fd-4d47-b812-11b857cf5459",
+        "id": "75636175-216c-4afd-8dd5-2605a9dadc37",
+        "name": "After Hours",
+        "dj_id": "93d0ebd3-3214-4e84-99a2-3d13c4b93405",
         "shifts": [
           {
             "day": "monday",
-            "start_hour": 7,
+            "start_hour": 20,
+            "end_hour": 23
+          },
+          {
+            "day": "tuesday",
+            "start_hour": 20,
+            "end_hour": 23
+          },
+          {
+            "day": "wednesday",
+            "start_hour": 20,
+            "end_hour": 23
+          },
+          {
+            "day": "thursday",
+            "start_hour": 20,
+            "end_hour": 23
+          },
+          {
+            "day": "friday",
+            "start_hour": 20,
+            "end_hour": 23
+          },
+          {
+            "day": "monday",
+            "start_hour": 0,
+            "end_hour": 3
+          },
+          {
+            "day": "tuesday",
+            "start_hour": 0,
+            "end_hour": 3
+          },
+          {
+            "day": "wednesday",
+            "start_hour": 0,
+            "end_hour": 3
+          },
+          {
+            "day": "thursday",
+            "start_hour": 0,
+            "end_hour": 3
+          },
+          {
+            "day": "friday",
+            "start_hour": 0,
+            "end_hour": 3
+          }
+        ]
+      },
+      {
+        "id": "57083ff8-7e06-46ab-8edb-efbeed18bee6",
+        "name": "The Morning Stumble",
+        "dj_id": "03042f06-38f8-42a2-b4a2-14831024798e",
+        "shifts": [
+          {
+            "day": "monday",
+            "start_hour": 4,
             "end_hour": 9
           },
           {
             "day": "tuesday",
-            "start_hour": 7,
+            "start_hour": 4,
             "end_hour": 9
           },
           {
             "day": "wednesday",
-            "start_hour": 7,
+            "start_hour": 4,
             "end_hour": 9
           },
           {
             "day": "thursday",
-            "start_hour": 7,
+            "start_hour": 4,
             "end_hour": 9
           },
           {
             "day": "friday",
-            "start_hour": 7,
+            "start_hour": 4,
             "end_hour": 9
           }
         ]
       },
       {
-        "id": "618a3dcf-a908-4f00-86d5-9e4f7fc651e3",
-        "name": null,
-        "dj_id": "b96ac50e-b61f-4913-9b7f-e9e90756c85a",
+        "id": "ef6dd2d0-2c8f-483c-a1fe-b79bd5c1fcab",
+        "name": "Velvet Hours",
+        "dj_id": "c9e32c26-a51a-488d-879b-09ff32a8da47",
         "shifts": [
           {
             "day": "monday",
-            "start_hour": 22,
-            "end_hour": 23
+            "start_hour": 14,
+            "end_hour": 19
           },
           {
             "day": "tuesday",
-            "start_hour": 22,
-            "end_hour": 23
+            "start_hour": 14,
+            "end_hour": 19
           },
           {
             "day": "wednesday",
-            "start_hour": 22,
-            "end_hour": 23
+            "start_hour": 14,
+            "end_hour": 19
           },
           {
             "day": "thursday",
-            "start_hour": 22,
-            "end_hour": 23
+            "start_hour": 14,
+            "end_hour": 19
+          },
+          {
+            "day": "friday",
+            "start_hour": 14,
+            "end_hour": 19
+          }
+        ]
+      },
+      {
+        "id": "f5469a9e-79f8-4f0c-8151-aef77dc832d5",
+        "name": "Saturday Spice",
+        "dj_id": "93d0ebd3-3214-4e84-99a2-3d13c4b93405",
+        "shifts": [
+          {
+            "day": "saturday",
+            "start_hour": 0,
+            "end_hour": 7
+          }
+        ]
+      },
+      {
+        "id": "1f32055e-5108-4f03-a173-9b34f7f91829",
+        "name": "Nerd Out",
+        "dj_id": "bdd59b36-279e-4b66-969b-5240b1b63b2d",
+        "shifts": [
+          {
+            "day": "sunday",
+            "start_hour": 0,
+            "end_hour": 7
+          }
+        ]
+      },
+      {
+        "id": "7a0b7f24-3536-49e1-b289-01ecc52c2bfe",
+        "name": "The Willy Banghole Show",
+        "dj_id": "8305e80b-06e9-4420-951f-f4d8b738734e",
+        "shifts": [
+          {
+            "day": "monday",
+            "start_hour": 10,
+            "end_hour": 13
+          },
+          {
+            "day": "tuesday",
+            "start_hour": 10,
+            "end_hour": 13
+          },
+          {
+            "day": "wednesday",
+            "start_hour": 10,
+            "end_hour": 13
+          },
+          {
+            "day": "thursday",
+            "start_hour": 10,
+            "end_hour": 13
+          },
+          {
+            "day": "friday",
+            "start_hour": 10,
+            "end_hour": 13
+          },
+          {
+            "day": "saturday",
+            "start_hour": 8,
+            "end_hour": 13
+          },
+          {
+            "day": "sunday",
+            "start_hour": 8,
+            "end_hour": 13
           }
         ]
       }
     ]
-  },
-  "playlist_artist_repeat_window": 3,
-  "tts_provider": "openai",
-  "script_provider": "openai",
-  "openai_text_model": "gpt-4o-mini",
-  "openai_text_temperature": 1.2,
-  "openai_tts_model": "gpt-4o-mini-tts",
-  "openai_tts_voice": "verse"
+  }
 }

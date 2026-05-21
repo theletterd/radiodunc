@@ -354,12 +354,50 @@ def test_media_dj_icon_serves_file(monkeypatch, tmp_path):
 
 
 def test_media_dj_icon_missing_raises_404(monkeypatch, tmp_path):
-    """A DJ with no generated avatar yet returns 404 (so the front-end
-    falls back to the coloured-initial placeholder)."""
+    """A DJ with no generated AND no seed avatar returns 404 (so the
+    front-end falls back to the coloured-initial placeholder)."""
     monkeypatch.setattr("app.main.DJ_AVATAR_DIR", tmp_path)
+    monkeypatch.setattr("app.main.DJ_AVATAR_SEED_DIR", tmp_path / "no-seed-here")
     with pytest.raises(HTTPException) as exc:
         media_dj_icon("never-generated")
     assert exc.value.status_code == 404
+
+
+def test_media_dj_icon_falls_back_to_seed_when_generated_missing(monkeypatch, tmp_path):
+    """Fresh clones don't have anything in generated/ yet. The seed dir
+    (committed alongside example-radio_config.json's roster) provides a
+    default avatar for every DJ that ships with the repo, so the UI
+    isn't a sea of coloured placeholders on first run."""
+    generated_dir = tmp_path / "generated"
+    seed_dir = tmp_path / "seed"
+    generated_dir.mkdir()
+    seed_dir.mkdir()
+    # Only the seed file exists.
+    (seed_dir / "dj-shipped.png").write_bytes(b"\x89PNG\r\n\x1a\nseed-pixels")
+    monkeypatch.setattr("app.main.DJ_AVATAR_DIR", generated_dir)
+    monkeypatch.setattr("app.main.DJ_AVATAR_SEED_DIR", seed_dir)
+
+    resp = media_dj_icon("dj-shipped")
+    assert resp.path == str(seed_dir / "dj-shipped.png")
+    assert resp.media_type == "image/png"
+
+
+def test_media_dj_icon_generated_shadows_seed(monkeypatch, tmp_path):
+    """When a user regenerates a seed DJ's avatar, the new generated/
+    file takes precedence over the bundled seed copy — same DJ id,
+    fresher pixels."""
+    generated_dir = tmp_path / "generated"
+    seed_dir = tmp_path / "seed"
+    generated_dir.mkdir()
+    seed_dir.mkdir()
+    (seed_dir / "dj-1.png").write_bytes(b"old-seed-bytes")
+    (generated_dir / "dj-1.png").write_bytes(b"freshly-regenerated-bytes")
+    monkeypatch.setattr("app.main.DJ_AVATAR_DIR", generated_dir)
+    monkeypatch.setattr("app.main.DJ_AVATAR_SEED_DIR", seed_dir)
+
+    resp = media_dj_icon("dj-1")
+    # FileResponse points at the generated copy, not the seed.
+    assert resp.path == str(generated_dir / "dj-1.png")
 
 
 def test_generate_dj_avatar_endpoint_unknown_dj_returns_404(monkeypatch):
@@ -1473,7 +1511,7 @@ def test_player_stinger_url_returns_null_when_pool_empty():
 
 def test_player_stinger_url_returns_station_id_clip_url():
     db = _make_db_session()
-    _seed_station_id_clip(db, script_hash="stingerhash1", audio_path="generated_audio/station_ids/stingerhash1.mp3")
+    _seed_station_id_clip(db, script_hash="stingerhash1", audio_path="generated/station_ids/stingerhash1.mp3")
     result = player_stinger_url(db)
     assert result.clip_url == "/media/dj-clip/stingerhash1"
 
@@ -1481,9 +1519,9 @@ def test_player_stinger_url_returns_station_id_clip_url():
 def test_player_stinger_url_ignores_clips_outside_station_ids_subdir():
     db = _make_db_session()
     # A regular transition clip — should NOT be picked.
-    _seed_station_id_clip(db, script_hash="djhash1", audio_path="generated_audio/transitions/djhash1.mp3")
+    _seed_station_id_clip(db, script_hash="djhash1", audio_path="generated/transitions/djhash1.mp3")
     # An ad clip — should NOT be picked either.
-    _seed_station_id_clip(db, script_hash="adhash1", audio_path="generated_audio/ads/adhash1.mp3")
+    _seed_station_id_clip(db, script_hash="adhash1", audio_path="generated/ads/adhash1.mp3")
     result = player_stinger_url(db)
     assert result.clip_url is None
 
@@ -1493,7 +1531,7 @@ def test_player_stinger_url_picks_from_multiple_station_id_clips():
     db = _make_db_session()
     hashes = ["sid1", "sid2", "sid3"]
     for h in hashes:
-        _seed_station_id_clip(db, script_hash=h, audio_path=f"generated_audio/station_ids/{h}.mp3")
+        _seed_station_id_clip(db, script_hash=h, audio_path=f"generated/station_ids/{h}.mp3")
     seen = set()
     for _ in range(20):
         url = player_stinger_url(db).clip_url
@@ -1522,7 +1560,7 @@ def test_warm_caches_runs_phrases_and_news_and_seeds_stinger(monkeypatch):
         nonlocal seeded_clip
         seeded_clip = DJClip(
             script_text=kwargs.get("script_text", "x"),
-            audio_path="generated_audio/station_ids/warmedhash.mp3",
+            audio_path="generated/station_ids/warmedhash.mp3",
             voice="verse",
             script_hash="warmedhash",
         )
@@ -1549,7 +1587,7 @@ def test_warm_caches_skips_stinger_when_pool_already_has_one(monkeypatch):
     db = _make_db_session()
     # Pre-seed the pool — warmup should NOT generate another clip.
     db.add(DJClip(
-        script_text="existing", audio_path="generated_audio/station_ids/x.mp3",
+        script_text="existing", audio_path="generated/station_ids/x.mp3",
         voice="verse", script_hash="existinghash",
     ))
     db.commit()
@@ -1588,7 +1626,7 @@ def test_tts_preview_returns_clip_url_on_success(monkeypatch):
     monkeypatch.setattr("app.main.load_config", lambda: AppConfig())
     monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
     fake_clip = DJClip(
-        script_text="Hello", audio_path="generated_audio/previews/abc.mp3",
+        script_text="Hello", audio_path="generated/previews/abc.mp3",
         voice="verse", script_hash="abc",
     )
     monkeypatch.setattr("app.main.get_or_create_dj_clip",

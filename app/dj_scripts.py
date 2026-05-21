@@ -734,7 +734,7 @@ def generate_dj_script(
 # control. ~$0.011 per image at "low" quality, which is plenty for the
 # 32–120 px sizes the UI displays them at.
 
-DJ_AVATAR_DIR = Path("generated_audio/dj_icons")
+DJ_AVATAR_DIR = Path("generated/dj_icons")
 
 # Step-1 prompt: ask the text model to translate the DJ's personality (which
 # is written for *voice* — often playful, suggestive, character-laden) into a
@@ -809,7 +809,7 @@ def generate_dj_avatar(dj: "DJ", config: "AppConfig") -> Path | None:
     when the artistic intent is innocent.
 
     Step 2: image model (gpt-image-1) renders the brief into a stylised
-    portrait. Saves to ``generated_audio/dj_icons/{dj_id}.png`` (overwriting
+    portrait. Saves to ``generated/dj_icons/{dj_id}.png`` (overwriting
     any previous avatar — each DJ has a single current image).
 
     Returns the absolute path on success, ``None`` on failure (no API key,
