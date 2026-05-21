@@ -778,9 +778,18 @@ def generate_dj_avatar(dj: "DJ", config: "AppConfig") -> Path | None:
         elapsed = round(time.perf_counter() - t0, 2)
     except urllib.error.HTTPError as exc:
         elapsed = round(time.perf_counter() - t0, 2)
+        # Capture the response body — OpenAI's 400s explain *what* went wrong
+        # (prompt rejected by safety filter, parameter combination invalid,
+        # org not verified for gpt-image-1, etc.) and the bare status code
+        # leaves us guessing. Truncate to keep one bad call from spamming
+        # the log; first 500 chars is plenty for the error JSON.
+        try:
+            body = exc.read().decode("utf-8", errors="replace")[:500]
+        except Exception:  # noqa: BLE001
+            body = "<could not read response body>"
         logger.warning(
-            "DJ avatar generation HTTP error dj_id=%s status=%s elapsed_s=%s",
-            dj.id, exc.code, elapsed,
+            "DJ avatar generation HTTP error dj_id=%s status=%s elapsed_s=%s body=%s",
+            dj.id, exc.code, elapsed, body,
         )
         return None
     except (urllib.error.URLError, TimeoutError) as exc:
