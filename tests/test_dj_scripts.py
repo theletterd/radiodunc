@@ -1035,11 +1035,22 @@ def test_dj_persona_silently_drops_legacy_voice_gain_offset_db():
 # ── DJ avatar generation ────────────────────────────────────────────────────
 
 def test_generate_dj_avatar_writes_png_on_success(monkeypatch, tmp_path):
-    """Happy path: OpenAI returns base64 PNG bytes, we decode and write to
-    generated_audio/dj_icons/{dj_id}.png."""
+    """Happy path for the two-step pipeline: text model returns a SFW visual
+    brief, image model returns base64 PNG bytes, we decode and write to
+    generated_audio/dj_icons/{dj_id}.png. The image prompt contains the
+    text-step's brief, NOT the raw personality (which is exactly what we
+    want — that's the point of the two-step pipeline)."""
     import base64 as _b64
     from app.dj_scripts import generate_dj_avatar
     monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    # Stub the text step. Capture inputs so we can assert the brief prompt
+    # included personality + voice + name.
+    text_calls = []
+    def fake_call_openai_text(prompt, config, *, temperature=None):
+        text_calls.append({"prompt": prompt, "temperature": temperature})
+        return "Stylised vintage radio host in a dim studio, headphones around neck, warm amber lighting."
+    monkeypatch.setattr("app.dj_scripts._call_openai_text", fake_call_openai_text)
 
     fake_png = b"\x89PNG\r\n\x1a\nsome-pixels"
     fake_response = {"data": [{"b64_json": _b64.b64encode(fake_png).decode()}]}
@@ -1063,13 +1074,66 @@ def test_generate_dj_avatar_writes_png_on_success(monkeypatch, tmp_path):
 
     assert out == tmp_path / "dj-test.png"
     assert out.read_bytes() == fake_png
-    # Prompt was assembled with name + personality + voice instructions.
-    assert "Test Sam" in captured["body"]["prompt"]
-    assert "warm and witty" in captured["body"]["prompt"]
-    assert "slow and low" in captured["body"]["prompt"]
+
+    # Step 1: text model called once with a brief prompt that embeds the
+    # raw personality + voice + name (so it can rephrase them).
+    assert len(text_calls) == 1
+    text_prompt = text_calls[0]["prompt"]
+    assert "Test Sam" in text_prompt
+    assert "warm and witty" in text_prompt
+    assert "slow and low" in text_prompt
+    # Low temperature — we want a focused brief, not creative variance.
+    assert text_calls[0]["temperature"] == 0.5
+
+    # Step 2: image model called with the rephrased brief, NOT the raw
+    # personality. That's the whole point of the two-step pipeline — the
+    # personality string never reaches the image moderator directly.
+    image_prompt = captured["body"]["prompt"]
+    assert "Test Sam" in image_prompt
+    assert "vintage radio host" in image_prompt
+    assert "warm amber lighting" in image_prompt
+    # Crucially: the raw personality string should NOT be in the image prompt.
+    assert "warm and witty" not in image_prompt
     # And we hit the right endpoint with the right model.
     assert captured["url"] == "https://api.openai.com/v1/images/generations"
     assert captured["body"]["model"] == "gpt-image-1"
+
+
+def test_generate_dj_avatar_aborts_when_text_step_fails(monkeypatch, tmp_path):
+    """If the visual-brief text call fails (no API key, network blip, etc.),
+    we abort the whole pipeline rather than falling back to raw personality —
+    falling back would defeat the point (raw personality is the input that
+    trips the image moderator)."""
+    from app.dj_scripts import generate_dj_avatar
+    monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+
+    monkeypatch.setattr("app.dj_scripts._call_openai_text",
+                        lambda prompt, config, *, temperature=None: None)
+    # Image step would error if reached.
+    def explode(*a, **kw):
+        raise AssertionError("image step should not run when text step failed")
+    monkeypatch.setattr("app.dj_scripts.urllib.request.urlopen", explode)
+
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-text-fail", name="Sam", personality="x")
+    assert generate_dj_avatar(dj, cfg) is None
+    # No partial file written.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_personality_to_visual_brief_strips_wrapping_quotes(monkeypatch):
+    """The text model sometimes wraps its single-sentence output in quotes
+    ('"A stylised vintage host..."'); strip them so the image prompt doesn't
+    end up with awkward stray punctuation."""
+    from app.dj_scripts import _personality_to_visual_brief
+    monkeypatch.setattr(
+        "app.dj_scripts._call_openai_text",
+        lambda prompt, config, *, temperature=None: '  "A stylised vintage host with headphones."  ',
+    )
+    cfg = AppConfig(openai_api_key="sk-fake")
+    dj = DJ(id="dj-q", name="Sam", personality="warm")
+    brief = _personality_to_visual_brief(dj, cfg)
+    assert brief == "A stylised vintage host with headphones."
 
 
 def test_generate_dj_avatar_returns_none_when_api_key_missing(monkeypatch, tmp_path):
@@ -1089,11 +1153,14 @@ def test_generate_dj_avatar_returns_none_when_api_key_missing(monkeypatch, tmp_p
 
 
 def test_generate_dj_avatar_returns_none_on_http_error(monkeypatch, tmp_path):
-    """HTTP errors (rate limit, quota, etc.) surface as None so the caller
-    can return a clean 502 — no half-written files left behind."""
+    """HTTP errors from the image step (rate limit, quota, etc.) surface as
+    None so the caller can return a clean 502 — no half-written files."""
     import urllib.error
     from app.dj_scripts import generate_dj_avatar
     monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+    # Text step succeeds so we reach the image step.
+    monkeypatch.setattr("app.dj_scripts._call_openai_text",
+                        lambda prompt, config, *, temperature=None: "a brief")
 
     def fake_urlopen(req, timeout=60):
         raise urllib.error.HTTPError(req.full_url, 429, "Rate limited", {}, None)
@@ -1115,6 +1182,9 @@ def test_generate_dj_avatar_http_error_logs_response_body(monkeypatch, tmp_path,
     import urllib.error
     from app.dj_scripts import generate_dj_avatar
     monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+    # Text step succeeds so we reach the image step.
+    monkeypatch.setattr("app.dj_scripts._call_openai_text",
+                        lambda prompt, config, *, temperature=None: "a brief")
 
     error_body = b'{"error": {"message": "Organization must be verified for gpt-image-1"}}'
 
@@ -1139,6 +1209,9 @@ def test_generate_dj_avatar_returns_none_on_empty_response(monkeypatch, tmp_path
     """Defensive: a malformed response (no b64_json) is treated like a failure."""
     from app.dj_scripts import generate_dj_avatar
     monkeypatch.setattr("app.dj_scripts.DJ_AVATAR_DIR", tmp_path)
+    # Text step succeeds so we reach the image step.
+    monkeypatch.setattr("app.dj_scripts._call_openai_text",
+                        lambda prompt, config, *, temperature=None: "a brief")
 
     class FakeResp:
         def read(self): return b'{"data": []}'

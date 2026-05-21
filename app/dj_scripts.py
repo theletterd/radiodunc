@@ -719,37 +719,104 @@ def generate_dj_script(
 
 DJ_AVATAR_DIR = Path("generated_audio/dj_icons")
 
+# Step-1 prompt: ask the text model to translate the DJ's personality (which
+# is written for *voice* — often playful, suggestive, character-laden) into a
+# clean visual brief that the image model's safety filter will accept. The
+# image moderator is much stricter than the text one; sending the raw
+# personality straight to gpt-image-1 reliably trips a 400 for any DJ with
+# even mildly risqué flavour ("flirty", "smoky", "teasing", etc.).
+DJ_VISUAL_BRIEF_PROMPT_TEMPLATE = """\
+You're a creative director sketching the look of a fictional radio DJ character for a stylised portrait.
+Translate the DJ's personality and voice description into a SHORT visual brief (1–2 sentences) that an image generator can run with.
+
+Focus on:
+- Overall aesthetic and mood (gothic, retro, polished, scrappy, etc.)
+- Era / setting cues (vintage radio booth, modern studio, neon-lit cabaret, sun-drenched cafe, etc.)
+- Clothing style hints
+- Accessories (headphones, microphone, glasses, hat, etc.)
+- Colour palette and lighting
+
+Do NOT include:
+- Personality adjectives passed through verbatim ("flirty", "teasing", "sultry", etc.) — translate them into visual cues instead.
+- Body shape, age, ethnicity, or anything potentially sensitive.
+- Anything an image-generation safety filter would reject.
+
+Output the brief only — no preamble, no headings, no commentary.
+
+DJ name: {name}
+Personality: {personality}
+{voice_block}"""
+
 DJ_AVATAR_PROMPT_TEMPLATE = """\
-A small square portrait illustration of a fictional radio DJ named '{name}'.
-Personality: {personality}.
-{voice_block}\
+A square portrait illustration of a fictional radio DJ named '{name}'.
+{visual_brief}
 Style: stylised vector portrait, flat colours, clean lines, music/radio-themed background elements. \
 Centred head-and-shoulders composition. No text, no watermark, transparent background."""
 
 
+def _personality_to_visual_brief(dj: "DJ", config: "AppConfig") -> str | None:
+    """Step 1 of the avatar pipeline: ask the text model for a SFW visual brief.
+
+    Returns the brief on success, ``None`` if the text call fails. Caller
+    aborts the whole pipeline on None — falling back to the raw personality
+    would defeat the point (that's the input that trips moderation in the
+    first place).
+
+    Costs ~$0.0001/call at gpt-4o-mini pricing — negligible next to the
+    ~$0.011 image generation it precedes.
+    """
+    voice_block = (
+        f"Voice direction: {dj.voice_instructions}\n" if dj.voice_instructions else ""
+    )
+    prompt = DJ_VISUAL_BRIEF_PROMPT_TEMPLATE.format(
+        name=dj.name,
+        personality=dj.personality,
+        voice_block=voice_block,
+    )
+    # Low temperature: we want a predictable, focused brief — creative variance
+    # belongs in the image step, not the rephrasing step.
+    brief = _call_openai_text(prompt, config, temperature=0.5)
+    if not brief:
+        return None
+    # Strip surrounding whitespace + any stray quote marks the model sometimes
+    # wraps its output in.
+    return brief.strip().strip('"').strip("'")
+
+
 def generate_dj_avatar(dj: "DJ", config: "AppConfig") -> Path | None:
-    """Generate a stylised portrait via OpenAI gpt-image-1.
+    """Generate a stylised portrait via a two-step OpenAI pipeline.
 
-    Saves to ``generated_audio/dj_icons/{dj_id}.png`` (overwriting any
-    previous avatar — each DJ has a single current image). Returns the
-    absolute path on success, ``None`` on failure (no API key, HTTP error,
-    timeout, malformed response).
+    Step 1: text model (gpt-4o-mini) translates the DJ's personality into a
+    SFW visual brief — image moderation is much stricter than text moderation
+    and rejects personalities written for voice ("flirty", "smoky", etc.) even
+    when the artistic intent is innocent.
 
-    Cost: low-quality 1024x1024 ≈ $0.011/call as of writing. We default to
-    low because the UI renders these at 32–120 px and higher quality is
-    invisible at that size.
+    Step 2: image model (gpt-image-1) renders the brief into a stylised
+    portrait. Saves to ``generated_audio/dj_icons/{dj_id}.png`` (overwriting
+    any previous avatar — each DJ has a single current image).
+
+    Returns the absolute path on success, ``None`` on failure (no API key,
+    HTTP error in either step, timeout, malformed response).
+
+    Cost: ~$0.011/call dominated by the image step at low quality. The text
+    step adds ~$0.0001 — negligible.
     """
     if not config.openai_api_key:
         logger.warning("Skipping DJ avatar generation: OPENAI_API_KEY missing")
         return None
 
-    voice_block = (
-        f"Voice direction: {dj.voice_instructions}.\n" if dj.voice_instructions else ""
-    )
+    visual_brief = _personality_to_visual_brief(dj, config)
+    if not visual_brief:
+        logger.warning(
+            "DJ avatar generation aborted dj_id=%s: visual-brief step failed "
+            "(see preceding text-API log for details)", dj.id,
+        )
+        return None
+    logger.debug("DJ avatar visual brief dj_id=%s brief=%s", dj.id, visual_brief)
+
     prompt = DJ_AVATAR_PROMPT_TEMPLATE.format(
         name=dj.name,
-        personality=dj.personality,
-        voice_block=voice_block,
+        visual_brief=visual_brief,
     )
 
     req = urllib.request.Request(
