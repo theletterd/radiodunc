@@ -5,6 +5,8 @@ import json
 
 import uuid
 
+import pytest
+
 from app.config import (
     AppConfig,
     AdBreakPreferences,
@@ -23,6 +25,7 @@ from app.dj_scripts import (
     STATION_ID_VIBES,
     _build_prompt,
     _parse_phrase_lines,
+    _reset_handoff_state,
     active_station,
     generate_ad_script,
     generate_news_script,
@@ -31,6 +34,17 @@ from app.dj_scripts import (
 )
 from app.models import Track
 from app.schemas import DJScriptGenerateRequest
+
+
+@pytest.fixture(autouse=True)
+def _clean_handoff_state():
+    """_build_prompt mutates module-level handoff memory as a side effect.
+    Reset it before every test in this module so order-of-execution can't
+    cause one test's (dj_id, show_id) tuple to bleed into the next and
+    surprise-fire (or surprise-suppress) handoff logic downstream."""
+    _reset_handoff_state()
+    yield
+    _reset_handoff_state()
 
 
 def _make_config(template: str | None = None, **station_kwargs) -> AppConfig:
@@ -1323,3 +1337,190 @@ def test_custom_template_can_reference_self_id_block_placeholder(monkeypatch):
     assert prompt.startswith("START ")
     assert prompt.endswith("END")
     assert "Self-ID this round" in prompt
+
+
+# ── Show-takeover handoff (DJ reacts when their show just started) ─────────
+
+def _build_prompt_for_show(*, dj_id, show_id, dj_name, show_name=None):
+    """Like _build_prompt_with_show but exposes the DJ id and Show id so a
+    test can stage a transition between two distinct (dj_id, show_id)
+    tuples. All-day shifts so the active-show lookup matches regardless of
+    when the suite happens to run."""
+    from app.config import DJ, DJShift, Show, StationConfig, WEEKDAYS
+    djx = DJ(id=dj_id, name=dj_name, personality="warm")
+    show = Show(
+        id=show_id, dj_id=djx.id, name=show_name,
+        shifts=[DJShift(day=d, start_hour=0, end_hour=23) for d in WEEKDAYS],
+    )
+    station = StationConfig(
+        djs=[djx], shows=[show], dj_roster=[],
+        dj_name="The Ghost", personality="spectral",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg)
+    return _build_prompt(
+        eff, DJScriptGenerateRequest(max_sentences=2), None, None, cfg,
+    )
+
+
+def test_handoff_block_absent_on_bootstrap(monkeypatch):
+    """First prompt after process start (or after a state reset) is a
+    bootstrap — we don't know whether a takeover happened, so we never
+    fabricate one. Pinning random high so self-ID can't fire either and
+    accidentally match the assertion."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    prompt = _build_prompt_for_show(
+        dj_id="dj-1", show_id="show-1",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    assert "Show takeover this round" not in prompt
+
+
+def test_handoff_block_absent_when_dj_and_show_unchanged(monkeypatch):
+    """Two consecutive prompts within the same shift shouldn't trigger a
+    handoff — nothing's changed on air."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    _build_prompt_for_show(
+        dj_id="dj-1", show_id="show-1",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    prompt = _build_prompt_for_show(
+        dj_id="dj-1", show_id="show-1",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    assert "Show takeover this round" not in prompt
+
+
+def test_handoff_block_fires_on_dj_change_with_previous_name(monkeypatch):
+    """When the DJ id changes between prompts, the new DJ gets a warm
+    handoff directive that names the outgoing DJ ('thanks Sammy, you're
+    with Mel now…') — the whole point of the feature."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    _build_prompt_for_show(
+        dj_id="dj-sammy", show_id="show-drivetime",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    prompt = _build_prompt_for_show(
+        dj_id="dj-mel", show_id="show-latenight",
+        dj_name="Mel Ann-Cholia", show_name="Late Night Sessions",
+    )
+    assert "Show takeover this round" in prompt
+    assert "Sammy Jacobs" in prompt
+    assert "Mel Ann-Cholia" in prompt
+    assert "Late Night Sessions" in prompt
+
+
+def test_handoff_block_fires_on_show_change_with_same_dj(monkeypatch):
+    """One DJ hosting back-to-back shows still triggers a handoff so the
+    show identity gets acknowledged on air ('you're with Sammy on Late
+    Night Sessions now'). Without this the listener would never hear that
+    a new show started."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    _build_prompt_for_show(
+        dj_id="dj-sammy", show_id="show-drivetime",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    prompt = _build_prompt_for_show(
+        dj_id="dj-sammy", show_id="show-evening",
+        dj_name="Sammy Jacobs", show_name="Evening Mix",
+    )
+    # Same DJ name on both sides → cold-takeover branch, not the warm
+    # "thanks <prev>" branch (we don't want "thanks Sammy, you're with
+    # Sammy now"). New show name still surfaces.
+    assert "Show takeover this round" in prompt
+    assert "Evening Mix" in prompt
+    assert "thanks Sammy Jacobs" not in prompt
+
+
+def test_handoff_block_suppresses_self_id_block(monkeypatch):
+    """Handoff already self-IDs by construction. If both blocks fired in
+    the same prompt we'd get 'thanks Sammy, you're with Mel… this is Mel,
+    you're listening to <show>' — exactly the over-announcing the self-ID
+    cap is there to avoid. Roll set to always-fire to prove suppression
+    isn't an accidental side effect of the random."""
+    monkeypatch.setattr("random.random", lambda: 0.0)  # would normally fire
+    _reset_handoff_state()
+    _build_prompt_for_show(
+        dj_id="dj-sammy", show_id="show-drivetime",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    prompt = _build_prompt_for_show(
+        dj_id="dj-mel", show_id="show-latenight",
+        dj_name="Mel Ann-Cholia", show_name="Late Night Sessions",
+    )
+    assert "Show takeover this round" in prompt
+    assert "Self-ID this round" not in prompt
+
+
+def test_handoff_block_fires_when_ghost_takes_over(monkeypatch):
+    """Real DJ → no active Show (Ghost on air via station-level fallback)
+    is a real handoff and should be acknowledged ('everyone's gone home,
+    you've got The Ghost now'). Modeled by building the second prompt
+    against a station with no shows at all, so active_dj resolves to
+    None and the (dj_id, show_id) tuple becomes (None, None)."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    _build_prompt_for_show(
+        dj_id="dj-sammy", show_id="show-drivetime",
+        dj_name="Sammy Jacobs", show_name="Drivetime",
+    )
+    # Second prompt: no shows configured → Ghost falls through to station
+    # defaults. Build directly so we exercise the (None, None) tuple path.
+    station = StationConfig(
+        djs=[], shows=[], dj_roster=[],
+        dj_name="The Ghost", personality="spectral",
+    )
+    cfg = AppConfig(station=station)
+    eff = active_station(station, cfg)
+    prompt = _build_prompt(
+        eff, DJScriptGenerateRequest(max_sentences=2), None, None, cfg,
+    )
+    assert "Show takeover this round" in prompt
+    assert "Sammy Jacobs" in prompt  # prev DJ named in the warm branch
+    assert "The Ghost" in prompt
+
+
+def test_handoff_block_placeholder_works_in_custom_template(monkeypatch):
+    """Custom dj_prompt_template overrides can reference {handoff_block}
+    just like {self_id_block}. Locks in the field exposure."""
+    monkeypatch.setattr("random.random", lambda: 0.99)
+    _reset_handoff_state()
+    from app.config import DJ, DJShift, Show, StationConfig, WEEKDAYS
+    dj_a = DJ(id="dj-a", name="Alpha", personality="warm")
+    dj_b = DJ(id="dj-b", name="Beta", personality="cool")
+    show_a = Show(
+        id="show-a", dj_id=dj_a.id, name="Morning",
+        shifts=[DJShift(day=d, start_hour=0, end_hour=23) for d in WEEKDAYS],
+    )
+    show_b = Show(
+        id="show-b", dj_id=dj_b.id, name="Afternoon",
+        shifts=[DJShift(day=d, start_hour=0, end_hour=23) for d in WEEKDAYS],
+    )
+    # First prompt: Alpha on. Second prompt: Beta takes over — handoff fires.
+    station_a = StationConfig(
+        djs=[dj_a], shows=[show_a], dj_roster=[],
+        dj_name="The Ghost", personality="spectral",
+        dj_prompt_template="START {handoff_block}END",
+    )
+    cfg_a = AppConfig(station=station_a)
+    _build_prompt(
+        active_station(station_a, cfg_a),
+        DJScriptGenerateRequest(max_sentences=2), None, None, cfg_a,
+    )
+    station_b = StationConfig(
+        djs=[dj_b], shows=[show_b], dj_roster=[],
+        dj_name="The Ghost", personality="spectral",
+        dj_prompt_template="START {handoff_block}END",
+    )
+    cfg_b = AppConfig(station=station_b)
+    prompt = _build_prompt(
+        active_station(station_b, cfg_b),
+        DJScriptGenerateRequest(max_sentences=2), None, None, cfg_b,
+    )
+    assert prompt.startswith("START ")
+    assert prompt.endswith("END")
+    assert "Show takeover this round" in prompt
