@@ -43,7 +43,7 @@ const EXPORTED_NAMES = [
   '_renderRosterList', '_openDJEditor', '_renderDJEditorForm',
   '_saveDJEdit', '_deleteDJ', '_previewDJVoice',
   '_readFormIntoWorkingDJ', '_fmtShiftReadable',
-  '_regenerateDJAvatar', '_djAvatarUrl',
+  '_regenerateDJAvatar', '_djAvatarUrl', '_refreshDjColourCache', '_djColourFor',
   // station settings
   '_openSettings', '_setSettingsMode', '_renderSettingsForm',
   '_saveSettings', '_applySettingsForm',

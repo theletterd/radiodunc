@@ -110,8 +110,13 @@ function setOnAirMode(mode, label = null) {
     const dj   = serverState?.station?.dj_name;
     const djId = serverState?.station?.active_dj_id;
     if (dj && djId) {
+      // Background colour matches the DJ's schedule-grid + roster colour
+      // so the placeholder circle (shown briefly while the image loads, or
+      // permanently for DJs without a generated avatar) reads as the same
+      // DJ across every surface.
+      const colour = _djColourFor(djId);
       const html =
-        `<span class="badge-avatar dj-avatar dj-avatar-xs">` +
+        `<span class="badge-avatar dj-avatar dj-avatar-xs" style="background:${colour};">` +
         `<img src="${_djAvatarUrl(djId)}" alt="" onerror="this.remove()" />` +
         `</span>🎙️ On air with ${_escapeText(dj)}`;
       animateLabel(el, html, { html: true });
@@ -1651,6 +1656,7 @@ async function _saveDJCreate() {
   config.station.djs.push(newDJ);
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    _refreshDjColourCache(config);  // new DJ → fresh index → fresh colour
   } catch (err) {
     status.textContent = `Save failed: ${err.message}`;
     return;
@@ -1832,6 +1838,24 @@ const _djAvatarTs = new Map();   // dj_id -> server-side generated_at (integer s
 function _djAvatarUrl(djId) {
   const ts = _djAvatarTs.get(djId) ?? _DJ_AVATAR_PAGE_TS;
   return `/media/dj-icon/${djId}?v=${ts}`;
+}
+
+// DJ palette-colour lookup. Populated lazily from /config so the on-air
+// badge avatar's placeholder circle picks up the same colour the DJ uses on
+// the schedule grid + roster row — otherwise a brief flash of pink during
+// the image load looks disconnected. Refreshed on init() and after every
+// PUT /config (settings save / DJ create / DJ edit).
+const _djColourById = new Map();
+function _refreshDjColourCache(config) {
+  _djColourById.clear();
+  const djs = config?.station?.djs || [];
+  djs.forEach((dj, i) => _djColourById.set(dj.id, _personaColor(i)));
+}
+function _djColourFor(djId) {
+  // Fallback for the brief window before init's /config arrives, or for
+  // genuinely-unknown ids (deleted DJs). Slate matches the existing
+  // default-block treatment on the schedule grid.
+  return _djColourById.get(djId) ?? '#334155';
 }
 
 function _setRosterMode(on) {
@@ -2154,6 +2178,9 @@ async function _saveDJEdit(event) {
   status.textContent = 'Saving…';
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    // djs[] mutated → refresh the colour cache so the on-air badge
+    // (and anything else that reads _djColourFor) picks up the new ordering.
+    _refreshDjColourCache(config);
     status.textContent = '';
     _setRosterSubView('list');
     await _renderRosterList();
@@ -2195,6 +2222,7 @@ async function _deleteDJ() {
 
   try {
     await api('/config', { method: 'PUT', body: JSON.stringify(config) });
+    _refreshDjColourCache(config);  // djs[] shrank → indices shift → colour map stale
     _setRosterSubView('list');
     await _renderRosterList();
   } catch (err) {
@@ -2543,6 +2571,7 @@ async function init() {
 
   const config = await api('/config');
   document.getElementById('libraryPath').value = config.music_folder || '';
+  _refreshDjColourCache(config);
   serverState = await api('/player/status');
   renderAll();
   // Light polling — client drives playback now, so we don't need frequent syncs.
