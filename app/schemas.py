@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -144,6 +146,12 @@ class QueuePreviewResponse(BaseModel):
 
 class QueueInjectRequest(BaseModel):
     track_id: int
+    # "next" — insert right after the currently-playing track (caller wants
+    #          it heard next). Default; matches the historical behaviour.
+    # "end"  — append to the tail of the queue (caller wants it heard
+    #          eventually, no rush). Useful for browsing-and-piling-up
+    #          tracks without disrupting what's coming next.
+    position: Literal["next", "end"] = "next"
 
 
 class QueueInjectResponse(BaseModel):

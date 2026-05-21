@@ -346,16 +346,32 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Queue is empty")
 
     label = _track_label(track)
+    # `requested: True` regardless of position — both "next" and "end" are
+    # caller-initiated additions; when the queue eventually advances to the
+    # track, the DJ banter should mention it was a request.
     item = {"type": "track", "track_id": track.id, "label": label, "requested": True}
-    insert_at = state.queue_index + 1
+    if payload.position == "end":
+        insert_at = len(queue)
+    else:
+        insert_at = state.queue_index + 1
     queue.insert(insert_at, item)
     state.queue_json = json.dumps(queue)
     db.commit()
 
-    with _prefetch_lock:
-        _prefetch_cache.clear()
+    # The prefetch cache holds a clip for the *next* track. A "next"-position
+    # insert displaces what was queued at idx+1 — the prefetched clip is now
+    # stale (it was generated for what's now at idx+2). An "end"-position
+    # insert leaves the immediate next-track untouched, so the prefetch stays
+    # valid and the user doesn't pay for a re-synthesis they don't need.
+    if payload.position == "next":
+        with _prefetch_lock:
+            _prefetch_cache.clear()
 
-    _log_event("queue.inject", level=logging.DEBUG, track_id=track.id, position=insert_at, queue_depth=len(queue))
+    _log_event(
+        "queue.inject", level=logging.DEBUG,
+        track_id=track.id, position=insert_at, queue_depth=len(queue),
+        placement=payload.position,
+    )
     return QueueInjectResponse(position=insert_at, label=label, queue_depth=len(queue))
 
 

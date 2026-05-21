@@ -2520,22 +2520,40 @@ function _renderSearchResults(tracks) {
     li.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding:4px 0; border-bottom:1px solid #eee;';
     const span = document.createElement('span');
     span.textContent = label;
-    const btn = document.createElement('button');
-    btn.textContent = 'Add next';
-    btn.style.cssText = 'margin-left:8px; padding:2px 8px; font-size:0.85em;';
-    btn.onclick = async () => {
-      try {
-        await api('/player/queue/inject', { method: 'POST', body: JSON.stringify({ track_id: track.id }) });
-        document.getElementById('trackSearch').value = '';
-        document.getElementById('searchResults').innerHTML = '';
-        serverState = await api('/player/status');
-        renderAll();
-      } catch (err) {
-        alert(`Could not add track: ${err.message}`);
-      }
+
+    // Two adders: "Add next" jumps the track to the front of the queue
+    // (heard immediately after whatever's playing now); "Add to playlist"
+    // tail-appends (heard eventually, doesn't disrupt what's coming next).
+    // Both flag the item requested=True so the DJ banter acknowledges
+    // the request when the queue eventually reaches it.
+    const actions = document.createElement('span');
+    actions.style.cssText = 'display:flex; gap:6px; margin-left:8px;';
+
+    const mkBtn = (label, position) => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.style.cssText = 'padding:2px 8px; font-size:0.85em;';
+      btn.onclick = async () => {
+        try {
+          await api('/player/queue/inject', {
+            method: 'POST',
+            body: JSON.stringify({ track_id: track.id, position }),
+          });
+          document.getElementById('trackSearch').value = '';
+          document.getElementById('searchResults').innerHTML = '';
+          serverState = await api('/player/status');
+          renderAll();
+        } catch (err) {
+          alert(`Could not add track: ${err.message}`);
+        }
+      };
+      return btn;
     };
+    actions.appendChild(mkBtn('Add next', 'next'));
+    actions.appendChild(mkBtn('Add to playlist', 'end'));
+
     li.appendChild(span);
-    li.appendChild(btn);
+    li.appendChild(actions);
     list.appendChild(li);
   });
 }
