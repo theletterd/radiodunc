@@ -414,13 +414,18 @@ class StationConfig(BaseModel):
             "{station_era}, {station_genre_focus}, {dj_name}, {personality}, "
             "{show_name}, {show_block}, "
             "{previous_track}, {next_track}, {current_time}, {current_weekday}, "
-            "{weather_block}, {news_block}, {ad_block}, {reason_block}. "
+            "{weather_block}, {news_block}, {ad_block}, {reason_block}, "
+            "{self_id_block}. "
             "({dj_style} is kept as an alias for {personality} for backwards compatibility.) "
             "{show_name} is the raw active show name (empty string when no Show matches "
             "or the matching Show has no name). {show_block} is a pre-formatted hint "
             "sentence that includes the show name and prompts the LLM to play with the "
             "contrast against the DJ persona — empty when no show is active. "
-            "Leave null to use the built-in default."
+            "{self_id_block} is a pre-formatted directive that fires on ~1 in 3 "
+            "transitions, nudging the LLM to weave a classic radio self-ID into the "
+            "patter (\"You're listening to <show>, with yours truly, <dj>\"). Empty on "
+            "the other 2/3 so the DJ doesn't sound like they're constantly announcing "
+            "themselves. Leave null to use the built-in default."
         ),
     )
     djs: list[DJ] = Field(
