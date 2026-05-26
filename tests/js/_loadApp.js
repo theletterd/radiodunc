@@ -90,6 +90,7 @@ function _appSource() {
       `globalThis.__setOnAirModeVar = (m) => { onAirMode = m; };`,
       `globalThis.__getOnAirMode = () => onAirMode;`,
       `globalThis.__getAutoTriggerTimer = () => autoTriggerTimer;`,
+      `globalThis.__bumpAutoTriggerGen = () => { _autoTriggerGen++; };`,
       `globalThis.__getAutoTriggerRemaining = () => _autoTriggerRemaining;`,
       `globalThis.__getStingerTimer = () => _stingerTimer;`,
       `globalThis.__getPrefetchTimer = () => _prefetchTimer;`,

@@ -53,6 +53,18 @@ function swapSlot() { activeSlot = activeSlot === 'A' ? 'B' : 'A'; }
 // ── Transition guard ─────────────────────────────────────────────────────────
 let transitioning    = false;
 let autoTriggerTimer = null;
+// Generation token for autoTriggerTimer. Bumped on every clear and every
+// schedule so a setTimeout callback can detect "I'm stale" and bail. Catches
+// two real bugs we've seen: (1) Chrome throttles background timers when the
+// tab is hidden (lid close); when the tab wakes, queued timers fire long
+// after the audio context has been suspended through the same period, so
+// they'd fire a transition while the actual track is still mid-play.
+// (2) The post-transition setup (line ~600) queues a setTimeout that calls
+// scheduleAutoTrigger after the new track's metadata loads — if a pause
+// arrives in that window, the queued setTimeout re-arms the timer that
+// pause just cancelled. Both are stale-timer races, both caught by the
+// same token.
+let _autoTriggerGen  = 0;
 let _prefetchTimer   = null;
 let _stingerTimer    = null;
 // AudioContext time when the in-flight skip-stinger ends; 0 if none. Used to
@@ -283,6 +295,12 @@ function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ
 function clearAutoTrigger() {
   clearTimeout(autoTriggerTimer);
   autoTriggerTimer = null;
+  // Bump the generation so any callback already in the macrotask queue —
+  // including ones that escaped clearTimeout due to a race — finds itself
+  // stale on entry and bails. clearTimeout alone is not enough for the
+  // "queued setTimeout re-arms after pause" race (see _autoTriggerGen
+  // comment above).
+  _autoTriggerGen++;
 }
 
 function scheduleAutoTrigger(trackDurationSec) {
@@ -291,7 +309,28 @@ function scheduleAutoTrigger(trackDurationSec) {
   const elapsed  = curSlot().el.currentTime || 0;
   const delaySec = Math.max(0, trackDurationSec - elapsed - AUTO_PREROLL_S);
   console.log(`[audio] auto-trigger in ${delaySec.toFixed(1)}s (dur=${trackDurationSec.toFixed(1)}s)`);
+  const gen = _autoTriggerGen;
   autoTriggerTimer = setTimeout(() => {
+    // Generation check: a newer schedule/clear has invalidated us.
+    if (gen !== _autoTriggerGen) {
+      _logPlayback('autoTrigger.stale', { gen, current: _autoTriggerGen });
+      return;
+    }
+    // Position check: if the AudioContext was suspended for a long time
+    // (lid-close), wall-clock advanced but the track didn't. Fire only
+    // when the track is actually near its end. AUTO_PREROLL_S + 5 gives
+    // a small tolerance for ordinary jitter; anything further out is
+    // a stale timer firing late and we reschedule from real position.
+    const cur = curSlot();
+    const remaining = (cur?.el?.duration ?? 0) - (cur?.el?.currentTime ?? 0);
+    if (Number.isFinite(remaining) && remaining > AUTO_PREROLL_S + 5) {
+      _logPlayback('autoTrigger.deferred', {
+        remaining: remaining.toFixed(1),
+        reason: 'audio position lagged wall clock — likely lid-wake',
+      });
+      scheduleAutoTrigger(cur.el.duration);
+      return;
+    }
     _logPlayback('autoTrigger.fired');
     triggerTransition('auto');
   }, delaySec * 1000);
@@ -411,9 +450,20 @@ async function triggerTransition(reason) {
   // Defensive: triggerTransition should NEVER fire when the server says we're
   // stopped. If it does, a stale timer survived stopPlayback (or some other
   // path snuck through) — log loudly and bail rather than starting playback
-  // the user didn't ask for. Suspected source of the lid-wake bug.
+  // the user didn't ask for.
   if (!serverState?.is_playing) {
     console.warn(`[playback ${_ts()}] triggerTransition blocked — serverState says not playing`, { reason });
+    return;
+  }
+  // Same protection for paused playback. Pause is client-side only —
+  // serverState.is_playing stays true — so the previous guard doesn't catch
+  // it. Without this, a queued setTimeout from the post-transition setup
+  // can re-arm the autoTrigger after pause cancelled it, and the resulting
+  // fire walks straight past the is_playing guard. User-initiated reasons
+  // ('user', 'request') are exempt — those imply intent to play through
+  // pause (the Next button explicitly clears `paused` before calling us).
+  if (paused && reason === 'auto') {
+    console.warn(`[playback ${_ts()}] triggerTransition blocked — playback is paused`, { reason });
     return;
   }
   transitioning = true;

@@ -25,25 +25,6 @@ block under `AppConfig` (probably `audio_levels: {dj, news, ads, stingers}`)
 so future tweaks don't need a code edit + reload. Hot-reload via the
 existing `/config` change hook would pick this up cleanly.
 
-## Monitoring (not actionable until something changes)
-
-### Spurious unprompted playback after lid-close / wake
-
-Original repro: hit Stop, close laptop lid, walk away — on lid-open, the
-player started playing on its own.
-
-Instrumentation + a defensive guard shipped in PR #119: every playback
-entry point logs through `_logPlayback(event, fields)` with full state
-context, and `triggerTransition` bails with a `console.warn` if
-`serverState?.is_playing` is false. So the symptom is suppressed (the
-guard catches it before any audio plays) and the next repro will name
-the offending entry point in the console.
-
-No fix until a fresh repro. Likely suspect: a stale `autoTrigger`
-setTimeout that survived `stopPlayback`. If confirmed, fix is to give
-timers a generation token or have the autoTrigger callback re-check
-`serverState.is_playing` itself.
-
 ## ☐ Future ideas (not committed yet)
 
 - **Like / dislike signal** — heart/x buttons in the player that bias the

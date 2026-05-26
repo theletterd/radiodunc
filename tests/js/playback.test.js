@@ -277,6 +277,12 @@ describe('scheduleAutoTrigger', () => {
     vi.advanceTimersByTime(289_000);
     expect(globalThis.__getAutoTriggerTimer()).not.toBeNull();
 
+    // Simulate the track actually progressing alongside wall clock — the
+    // post-fire position check now defers if the audio lagged way behind
+    // (lid-wake guard). For a normal not-lid-wake fire we want
+    // currentTime ≈ elapsed wall clock.
+    stubActiveSlot({ currentTime: 291, duration: 300 });
+
     // Advance past the trigger point.
     vi.advanceTimersByTime(2_000);
     // triggerTransition calls clearAutoTrigger() as its first action,
@@ -300,6 +306,11 @@ describe('scheduleAutoTrigger', () => {
     // without calling stopPlayback's timer cleanup).
     globalThis.__setServerState({ is_playing: false });
 
+    // Simulate the track progressing alongside wall clock so the timer
+    // callback's lid-wake position check doesn't bail before the is_playing
+    // guard fires — this test is specifically for the is_playing guard.
+    stubActiveSlot({ currentTime: 291, duration: 300 });
+
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.advanceTimersByTime(291_000);  // fire the timer
 
@@ -309,6 +320,88 @@ describe('scheduleAutoTrigger', () => {
     // playback-shaped.
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('triggerTransition blocked'),
+      expect.objectContaining({ reason: 'auto' }),
+    );
+    warn.mockRestore();
+  });
+
+  it('lid-wake guard: timer firing late while audio position lags wall clock defers instead of transitioning', () => {
+    // Repro for Bug A in the logs: Chrome throttles background setTimeouts
+    // hard when the tab is hidden (lid close). When the tab wakes, the
+    // queued timer fires LONG after the audio has also been suspended —
+    // wall clock advanced 82 minutes but ctx.currentTime barely moved.
+    // Without the position check we'd fire a transition while the track
+    // is still audibly mid-play. With it, we defer and reschedule from
+    // real audio position.
+    globalThis.__setCtx(makeFakeCtx());
+    stubActiveSlot({ currentTime: 0, duration: 300 });
+    globalThis.__setServerState({ is_playing: true });
+
+    globalThis.scheduleAutoTrigger(300);
+
+    // The track DIDN'T progress (audio context was suspended through the
+    // lid-close window) but wall-clock did, so the timer fires.
+    vi.advanceTimersByTime(291_000);
+
+    // Position check should have rescheduled rather than transitioning —
+    // timer ID is non-null again because scheduleAutoTrigger ran inside
+    // the callback. The fresh schedule's delay is computed from the still-
+    // at-zero currentTime, so we're back to ~290s from now.
+    expect(globalThis.__getAutoTriggerTimer()).not.toBeNull();
+  });
+
+  it('generation token: a queued setTimeout that re-arms after pause cancelled it cannot fire transition', () => {
+    // Repro for Bug B in the logs: pausePlayback runs clearAutoTrigger, but
+    // a setTimeout queued inside the previous transition's post-setup then
+    // fires and calls scheduleAutoTrigger, re-arming the timer pause just
+    // killed. The newly-armed timer eventually fires and (before this fix)
+    // walked past the is_playing guard because pause is client-side only.
+    //
+    // We model the race directly: schedule, clear, schedule again, then
+    // bump the generation as if some external "cancel everything" event
+    // ran between schedule #2 and its fire. The fire should detect itself
+    // as stale and log autoTrigger.stale rather than calling transition.
+    globalThis.__setCtx(makeFakeCtx());
+    stubActiveSlot({ currentTime: 291, duration: 300 });
+    globalThis.__setServerState({ is_playing: true });
+
+    globalThis.scheduleAutoTrigger(300);
+    // Something cancels the timer (e.g. another scheduleAutoTrigger
+    // elsewhere), bumping generation. The captured `gen` in our
+    // setTimeout closure is now stale.
+    globalThis.__bumpAutoTriggerGen();
+
+    // Spy on triggerTransition's side effect — the /player/next fetch.
+    // If transition fired, fetch would be called. It must not be.
+    const origFetch = globalThis.fetch;
+    let nextCalled = false;
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      if (String(url).includes('/player/next')) nextCalled = true;
+      return origFetch(url, opts);
+    });
+
+    vi.advanceTimersByTime(291_000);
+
+    expect(nextCalled).toBe(false);
+    globalThis.fetch = origFetch;
+  });
+
+  it('paused guard: triggerTransition with reason=auto bails when paused=true even though serverState.is_playing=true', () => {
+    // Repro for the second half of Bug B: even if a stale timer manages
+    // to fire and the generation check doesn't catch it, the paused
+    // state guard should stop the transition. Pause is client-side only,
+    // so the is_playing guard alone doesn't cover this case.
+    globalThis.__setCtx(makeFakeCtx());
+    stubActiveSlot({ currentTime: 291, duration: 300 });
+    globalThis.__setServerState({ is_playing: true });
+    globalThis.__setPaused(true);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    globalThis.scheduleAutoTrigger(300);
+    vi.advanceTimersByTime(291_000);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('paused'),
       expect.objectContaining({ reason: 'auto' }),
     );
     warn.mockRestore();
