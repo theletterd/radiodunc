@@ -25,6 +25,77 @@ block under `AppConfig` (probably `audio_levels: {dj, news, ads, stingers}`)
 so future tweaks don't need a code edit + reload. Hot-reload via the
 existing `/config` change hook would pick this up cleanly.
 
+## Architecture review findings (2026-05)
+
+Full review in the session that produced this section; ranked by how
+likely each is to actually bite. The headline was positive — the
+load-bearing decisions (browser-as-player / no broadcast layer,
+cache-everything cost design, prompt variance rolled in Python) are
+right and none of the debt is architectural. These are the follow-ups.
+
+### ☐ Split main.py along the cache seams
+
+`app/main.py` (~1,350 lines) holds migrations + logging setup + all
+routes + two in-memory cache subsystems with their own locks and
+threads (prefetch cache, news cache + state machine) + the warmup
+thread. The routes are fine; the smell is the cache subsystems living
+in the route namespace, which makes main.py the default landing zone
+for every new feature. Mechanical split, suite makes it low-risk:
+
+- `app/prefetch.py` — `_prefetch_cache`, `_prefetch_lock`,
+  `_prefetch_dj_clip`, `_take_prefetched`
+- `app/news_cache.py` — the main.py news-cache half (`get_news_clip`,
+  `_build_news_clip`, `_refresh_news_background`, `_spawn_news_refresh`,
+  `_wait_for_fresh_news`, lock + in-flight flag), possibly merged with
+  the headline cache in `app/news.py`
+- `app/migrations.py` — both `_migrate_*` functions + future siblings
+
+`tests/test_main.py` (~2,100 lines) splits to mirror whatever lands.
+
+### ☐ Single-worker assumption is silent — make it named
+
+`_prefetch_cache`, the news cache + `_news_refresh_in_flight`
+(`app/main.py`), and `_last_handoff_state` (`app/dj_scripts.py`) are
+process-local module globals. Correct under single-worker uvicorn;
+quietly wrong under `--workers 2` (split-brain caches, doubled news
+spend, double handoffs). Cheapest fix: one startup log line or
+assertion naming the constraint so nobody finds out the hard way.
+Dev side effect worth knowing: `--reload` restarts reset
+`_last_handoff_state`, so handoff bootstrap-suppression fires more
+often in dev than it would in prod.
+
+### ☐ Comment the queue read-modify-write race (acknowledge, don't fix)
+
+Eight call sites do `json.loads(state.queue_json)` → mutate → commit.
+Two overlapping requests (e.g. `queue_inject` racing `player_next`)
+can lose an update — last write wins, no error. Single-user UI makes
+it rare and the blast radius is "a queued track vanishes", so the
+right move is a comment at `_get_or_create_player_state` naming the
+race, not optimistic versioning. Revisit only if it's ever observed.
+
+### ☐ ES-module conversion for app.js (defer until the file fights us)
+
+`app/ui/app.js` (~2,700 lines) is a plain script, which forces the
+`tests/js/_loadApp.js` eval hack: every tested function needs an
+`EXPORTED_NAMES` entry, every private `let` needs a hand-written
+accessor, and the list grows with each feature. ES modules need no
+build step — `<script type="module">` in the browser, native imports
+in vitest — and would delete the loader while letting app.js split
+into audio / player / schedule / roster modules. One-time cost:
+converting accessor-based tests to real imports plus an explicit
+test-only export object for private state. Highest-leverage refactor
+available, but safely deferrable.
+
+### Known limits, deliberately accepted (do not "fix")
+
+- **Sync OpenAI calls in sync handlers** — `player_next` blocks a
+  threadpool thread for seconds during LLM + TTS. Non-issue at one
+  listener; first thing that melts if multi-listener ever happens.
+- **JSON-blob PlayerState, inline SQL migrations (no Alembic),
+  read-whole-file media serving, scheduler loading the full library** —
+  all correct at this scale. Revisit only if the scale assumption
+  breaks, not before.
+
 ## ☐ Future ideas (not committed yet)
 
 - **Like / dislike signal** — heart/x buttons in the player that bias the
