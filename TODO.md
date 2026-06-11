@@ -33,29 +33,6 @@ load-bearing decisions (browser-as-player / no broadcast layer,
 cache-everything cost design, prompt variance rolled in Python) are
 right and none of the debt is architectural. These are the follow-ups.
 
-### ☐ Single-worker assumption is silent — make it named
-
-`_prefetch_cache` (`app/prefetch.py`), the news cache +
-`_news_refresh_in_flight` (`app/news_cache.py`), and
-`_last_handoff_state` (`app/dj_scripts.py`) are process-local module
-globals (the cache modules' docstrings now say so, but nothing
-enforces it). Correct under single-worker uvicorn;
-quietly wrong under `--workers 2` (split-brain caches, doubled news
-spend, double handoffs). Cheapest fix: one startup log line or
-assertion naming the constraint so nobody finds out the hard way.
-Dev side effect worth knowing: `--reload` restarts reset
-`_last_handoff_state`, so handoff bootstrap-suppression fires more
-often in dev than it would in prod.
-
-### ☐ Comment the queue read-modify-write race (acknowledge, don't fix)
-
-Eight call sites do `json.loads(state.queue_json)` → mutate → commit.
-Two overlapping requests (e.g. `queue_inject` racing `player_next`)
-can lose an update — last write wins, no error. Single-user UI makes
-it rare and the blast radius is "a queued track vanishes", so the
-right move is a comment at `_get_or_create_player_state` naming the
-race, not optimistic versioning. Revisit only if it's ever observed.
-
 ### ☐ ES-module conversion for app.js (defer until the file fights us)
 
 `app/ui/app.js` (~2,700 lines) is a plain script, which forces the
