@@ -10,11 +10,14 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func
 
+from . import migrations, news_cache, prefetch
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
+from .logging_setup import configure_logging, log_event as _log_event
 from .models import DJClip, PlayerState, Track
+from .news_cache import NEWS_BLOCK_ON_MISS_S, get_news_clip, wait_for_fresh_news
 from .dj_scripts import (
     DJ_AVATAR_DIR,
     active_dj,
@@ -22,7 +25,6 @@ from .dj_scripts import (
     generate_ad_script,
     generate_dj_avatar,
     generate_dj_script,
-    generate_news_script,
     get_station_id_phrases,
 )
 from .scanner import scan_library
@@ -36,7 +38,6 @@ from .schemas import (
     PlayerActionResponse,
     PlayerNextRequest,
     DJScriptGenerateRequest,
-    DJScriptResponse,
     StingerUrlResponse,
     TTSPreviewRequest,
     TTSPreviewResponse,
@@ -55,113 +56,11 @@ from .tts import build_tts_provider, get_or_create_dj_clip
 
 Base.metadata.create_all(bind=engine)
 
-
-def _migrate_drop_legacy_schema() -> None:
-    """Drop legacy multi-station tables and obsolete PlayerState columns."""
-    with engine.begin() as conn:
-        for table in ("stations", "favorite_stations", "recent_stations"):
-            conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
-        columns = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(player_state)")).fetchall()
-        }
-        legacy_columns = [
-            "current_station_id",
-            "timeline_started_at_epoch",
-            "current_item_started_at_epoch",
-            "current_item_expected_end_at_epoch",
-            "current_sequence_id",
-            "playout_mode",
-        ]
-        for col in legacy_columns:
-            if col in columns:
-                try:
-                    conn.execute(text(f"ALTER TABLE player_state DROP COLUMN {col}"))
-                except Exception:  # noqa: BLE001
-                    pass  # SQLite < 3.35; leave the column in place
-
-        # Add is_ad column to dj_clips if missing.
-        dj_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(dj_clips)")).fetchall()}
-        if "is_ad" not in dj_cols:
-            conn.execute(text("ALTER TABLE dj_clips ADD COLUMN is_ad BOOLEAN NOT NULL DEFAULT 0"))
-
-
-def _migrate_dj_clip_paths_after_generated_rename() -> None:
-    """Rewrite ``dj_clips.audio_path`` from the old ``generated_audio/``
-    prefix to the new ``generated/`` one introduced in PR #159.
-
-    That rename moved the cache directory on disk but didn't migrate
-    existing DB rows, so every clip generated before the rename
-    (stingers, ads, news, transitions, previews) 404'd at serve time
-    because ``_safe_media_path`` resolved against ``generated_audio/``
-    which no longer existed. Symptom: skip-stingers stopped playing.
-
-    Idempotent — the WHERE clause filters to only rows with the legacy
-    prefix, so re-running on a clean DB is a no-op.
-    """
-    with engine.begin() as conn:
-        result = conn.execute(text(
-            "UPDATE dj_clips "
-            "SET audio_path = 'generated/' || substr(audio_path, length('generated_audio/') + 1) "
-            "WHERE audio_path LIKE 'generated_audio/%'"
-        ))
-        rewritten = result.rowcount
-    if rewritten:
-        logging.getLogger(__name__).info(
-            "migrated %d dj_clip audio_path(s) from generated_audio/ → generated/",
-            rewritten,
-        )
-
-
-_migrate_drop_legacy_schema()
-_migrate_dj_clip_paths_after_generated_rename()
+migrations.run_all()
 
 logger = logging.getLogger(__name__)
 
-# Capture reserved fields both before and after a format call so that
-# attributes set as side-effects of format() (e.g. `message`) are excluded.
-_RESERVED_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys()) | {"message"}
-
-
-class ContextFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        base = super().format(record)
-        extras = {
-            key: value
-            for key, value in record.__dict__.items()
-            if key not in _RESERVED_LOG_RECORD_FIELDS and not key.startswith("_")
-        }
-        if not extras:
-            return base
-        extra_text = " ".join(f"{key}={value}" for key, value in sorted(extras.items()))
-        return f"{base} {extra_text}"
-
-
-def _configure_logging() -> None:
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
-    formatter = ContextFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-
-    if not root_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(formatter)
-        root_logger.addHandler(handler)
-        return
-
-    for handler in root_logger.handlers:
-        handler.setLevel(level)
-        handler.setFormatter(formatter)
-
-
-def _log_event(event: str, *, level: int = logging.INFO, **fields: object) -> None:
-    details = " ".join(f"{key}={value}" for key, value in fields.items())
-    logger.log(level, "%s %s", event, details)
-
-
-_configure_logging()
+configure_logging()
 
 app = FastAPI(title="RadioDunc", version="0.3.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
@@ -250,8 +149,7 @@ def _on_config_changed(old: AppConfig, new: AppConfig) -> None:
             or old_alerts != new_alerts
         )
         if prefetch_inputs_changed:
-            with _prefetch_lock:
-                _prefetch_cache.clear()
+            prefetch.clear()
             _log_event("config.cache.invalidated", cache="prefetch")
 
         # ── News bulletin cache ──────────────────────────────────────────
@@ -270,9 +168,7 @@ def _on_config_changed(old: AppConfig, new: AppConfig) -> None:
             "news": new_alerts.get("news"),
         }
         if generation_changed or news_relevant_old != news_relevant_new:
-            global _news_cache
-            with _news_cache_lock:
-                _news_cache = None
+            news_cache.invalidate()
             _log_event("config.cache.invalidated", cache="news")
     except Exception:  # noqa: BLE001
         logger.exception("Config-change cache invalidation hook raised; ignoring")
@@ -392,8 +288,7 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
     # insert leaves the immediate next-track untouched, so the prefetch stays
     # valid and the user doesn't pay for a re-synthesis they don't need.
     if payload.position == "next":
-        with _prefetch_lock:
-            _prefetch_cache.clear()
+        prefetch.clear()
 
     _log_event(
         "queue.inject", level=logging.DEBUG,
@@ -485,8 +380,7 @@ def delete_queue_item(
     queue.pop(position)
     state.queue_json = json.dumps(queue)
     db.commit()
-    with _prefetch_lock:
-        _prefetch_cache.clear()
+    prefetch.clear()
 
 
 @app.post("/player/queue/reorder", status_code=204)
@@ -503,8 +397,7 @@ def reorder_queue_item(payload: QueueReorderRequest, db: Session = Depends(get_d
     queue.insert(payload.to_position, item)
     state.queue_json = json.dumps(queue)
     db.commit()
-    with _prefetch_lock:
-        _prefetch_cache.clear()
+    prefetch.clear()
     _log_event("queue.reorder", level=logging.DEBUG, from_position=payload.from_position, to_position=payload.to_position)
 
 
@@ -732,252 +625,6 @@ def player_play(payload: PlayerPlayRequest, db: Session = Depends(get_db)):
     return PlayerActionResponse(state=_build_player_state_response(db, state), action="play")
 
 
-# ── DJ clip prefetch ──────────────────────────────────────────────────────────
-# After each player_next, we kick off a background thread that pre-generates
-# the *following* DJ clip. If the user presses Next again (or the track auto-
-# advances), player_next finds the cached clip and skips the 1–3s TTS round trip.
-#
-# Key by target queue position. Cache entries are popped on use (so a stale
-# prefetch from a previous play session can't collide).
-_prefetch_cache: dict[int, dict] = {}
-_prefetch_lock = threading.Lock()
-
-
-def _prefetch_dj_clip(target_idx: int, queue: list, base_idx: int) -> None:
-    """Background-thread job: build script + synthesize DJ clip for transition to target_idx."""
-    try:
-        if target_idx >= len(queue):
-            return
-        target_item = queue[target_idx]
-        if target_item.get("type") != "track" or target_item.get("track_id") is None:
-            return
-
-        db = SessionLocal()
-        try:
-            config = load_config()
-            previous_item = queue[base_idx] if 0 <= base_idx < len(queue) else None
-            previous_track = None
-            if previous_item and previous_item.get("type") == "track":
-                previous_track = db.query(Track).filter(Track.id == previous_item["track_id"]).first()
-            next_track = db.query(Track).filter(Track.id == target_item["track_id"]).first()
-            if next_track is None:
-                return
-
-            station = active_station(config.station, config)
-
-            def _on_cadence(every: int) -> bool:
-                return every > 0 and target_idx % every == 0
-
-            include_weather = config.alerts.weather.enabled and _on_cadence(config.alerts.weather.every_n_breaks)
-            news_break_follows = config.alerts.news.enabled and _on_cadence(config.alerts.news.every_n_breaks)
-            ad_break_follows = config.alerts.ads.enabled and _on_cadence(config.alerts.ads.every_n_breaks)
-            # Default to "auto" because prefetch assumes a natural track-end
-            # advance. If the upcoming track was queued via the search bar
-            # (requested=True on the queue item), use reason="request" so the
-            # generated banter actually mentions it — otherwise the DJ greets
-            # a caller-requested track as if it were just another auto-advance,
-            # silently dropping the request acknowledgement. The skip path
-            # invalidates the prefetch cache entirely (different prompt
-            # context) so we never need to handle "skip" here.
-            reason = "request" if target_item.get("requested") else "auto"
-
-            script_response = generate_dj_script(
-                station,
-                DJScriptGenerateRequest(
-                    max_sentences=3,
-                    reason=reason,
-                    include_weather=include_weather,
-                    news_break_follows=news_break_follows,
-                    ad_break_follows=ad_break_follows,
-                ),
-                previous_track,
-                next_track,
-                config=config,
-            )
-
-            try:
-                provider = build_tts_provider(config)
-            except ValueError:
-                provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-
-            voice = station.voice or None
-            instructions = station.voice_instructions or None
-            t0 = time.perf_counter()
-            try:
-                clip, _path, dj_cached = get_or_create_dj_clip(
-                    db, script_text=script_response.script_text, voice=voice, provider=provider,
-                    voice_instructions=instructions, clip_type="transitions",
-                )
-            except RuntimeError:
-                clip, _path, dj_cached = get_or_create_dj_clip(
-                    db, script_text=script_response.script_text, voice=None, provider=provider,
-                    clip_type="transitions",
-                )
-            elapsed = time.perf_counter() - t0
-            logger.debug("DJ clip ready", extra={"elapsed_s": round(elapsed, 2), "cached": dj_cached})
-            if clip is None:
-                return
-
-            with _prefetch_lock:
-                _prefetch_cache[target_idx] = {
-                    "script_text": script_response.script_text,
-                    "clip_hash": clip.script_hash,
-                }
-            _log_event("player.next.prefetched", level=logging.DEBUG, target_idx=target_idx)
-        finally:
-            db.close()
-    except Exception:  # noqa: BLE001
-        logger.exception("DJ clip prefetch failed for target_idx=%s", target_idx)
-
-
-def _take_prefetched(target_idx: int) -> dict | None:
-    with _prefetch_lock:
-        return _prefetch_cache.pop(target_idx, None)
-
-
-# ── News clip cache ───────────────────────────────────────────────────────────
-# News bulletins are expensive to produce (LLM + TTS, ~5 s). We keep one ready
-# at all times: hand back the cached clip immediately, and refresh in the
-# background once it crosses the "stale" threshold so the next request still
-# gets something recent without paying the latency. get_news_clip itself never
-# blocks — on miss it returns None and queues a refresh. The caller
-# (_attach_news) is where we trade latency for delivery: it waits up to
-# NEWS_BLOCK_ON_MISS_S on the just-spawned refresh before skipping, so
-# sparse-cadence stations don't go ages without news whenever the cache
-# expires between hits. The warmup that fires on player_play still seeds
-# the cache so the typical fast path hits the fresh branch.
-NEWS_STALE_AFTER_S  = 20 * 60   # spawn background refresh after this
-NEWS_EXPIRE_AFTER_S = 30 * 60   # past this, the cached clip is too old to serve
-# When a cadence hit finds the cache empty/expired, _attach_news will briefly
-# block waiting on the just-spawned refresh rather than skipping outright.
-# Capped tight: this runs inside an API request, and the alternative (skip)
-# is already acceptable. 8 s comfortably covers a ~5 s build with margin.
-NEWS_BLOCK_ON_MISS_S = 8.0
-
-_news_cache: dict | None = None
-_news_cache_lock = threading.Lock()
-_news_refresh_in_flight = False
-# Cleared when a refresh starts, set when it finishes (success OR failure).
-# _attach_news uses this to wait briefly on an in-flight refresh before giving up.
-_news_refresh_done = threading.Event()
-_news_refresh_done.set()  # no refresh running at startup
-
-
-def _build_news_clip(config: AppConfig) -> dict | None:
-    """Generate a fresh news script + TTS clip. Returns the cache entry or None."""
-    news_cfg = config.alerts.news
-    news_voice_cfg = random.choice(news_cfg.voices) if news_cfg.voices else None
-    voice = news_voice_cfg.voice if news_voice_cfg else None
-    instructions = news_voice_cfg.voice_instructions if news_voice_cfg else None
-    name = news_voice_cfg.name if news_voice_cfg else None
-
-    script = generate_news_script(config, newsreader_name=name)
-    if not script:
-        return None
-
-    try:
-        provider = build_tts_provider(config)
-    except ValueError:
-        provider = build_tts_provider(config.model_copy(update={"tts_provider": "tone"}))
-
-    db = SessionLocal()
-    try:
-        try:
-            clip, _, _ = get_or_create_dj_clip(
-                db, script_text=script, voice=voice,
-                voice_instructions=instructions, provider=provider,
-                clip_type="news",
-            )
-        except RuntimeError:
-            logger.warning("News clip synthesis failed with voice=%r; retrying with default", voice)
-            clip, _, _ = get_or_create_dj_clip(
-                db, script_text=script, voice=None, provider=provider, clip_type="news",
-            )
-        if clip is None:
-            return None
-        return {
-            "generated_at": time.time(),
-            "clip_hash": clip.script_hash,
-            "script_text": script,
-        }
-    finally:
-        db.close()
-
-
-def _refresh_news_background(config: AppConfig) -> None:
-    global _news_cache, _news_refresh_in_flight
-    try:
-        entry = _build_news_clip(config)
-        if entry:
-            with _news_cache_lock:
-                _news_cache = entry
-            _log_event("news.cache.refreshed")
-    except Exception:  # noqa: BLE001
-        logger.exception("Background news refresh failed")
-    finally:
-        with _news_cache_lock:
-            _news_refresh_in_flight = False
-        _news_refresh_done.set()
-
-
-def _spawn_news_refresh(config: AppConfig, reason: str, age_s: int | None = None) -> None:
-    """Kick off a background refresh of the news cache if one isn't already
-    in flight. Lock is held just long enough to flip the in-flight flag —
-    the thread is started OUTSIDE the lock so _refresh_news_background can
-    re-acquire it without contending (and so a test's synchronous fake
-    Thread can't deadlock here)."""
-    global _news_refresh_in_flight
-    should_spawn = False
-    with _news_cache_lock:
-        if not _news_refresh_in_flight:
-            _news_refresh_in_flight = True
-            should_spawn = True
-            _news_refresh_done.clear()
-    if should_spawn:
-        threading.Thread(
-            target=_refresh_news_background, args=(config,), daemon=True,
-        ).start()
-        fields = {"reason": reason}
-        if age_s is not None:
-            fields["age_s"] = age_s
-        _log_event("news.cache.refresh_scheduled", **fields)
-
-
-def get_news_clip(config: AppConfig) -> dict | None:
-    """Return a usable cached news clip, or None if the cache is missing/expired.
-
-    Never blocks on regeneration. Strategy:
-      - fresh (< NEWS_STALE_AFTER_S): return cached
-      - aging (NEWS_STALE_AFTER_S .. NEWS_EXPIRE_AFTER_S): return cached AND
-        spawn a background refresh
-      - expired (> NEWS_EXPIRE_AFTER_S): return None AND spawn a refresh —
-        the caller skips the news segment this round; next cadence has fresh
-      - empty: same as expired — return None, queue a refresh
-
-    The warmup that fires on player_play seeds the cache so the user's first
-    news transition almost always hits the fresh path.
-    """
-    now = time.time()
-    with _news_cache_lock:
-        cached = _news_cache
-    age = (now - cached["generated_at"]) if cached else None
-
-    if cached is None:
-        _log_event("news.cache.miss", reason="empty")
-        _spawn_news_refresh(config, reason="empty")
-        return None
-
-    if age > NEWS_EXPIRE_AFTER_S:
-        _log_event("news.cache.miss", reason="expired", age_s=round(age))
-        _spawn_news_refresh(config, reason="expired", age_s=round(age))
-        return None
-
-    if age > NEWS_STALE_AFTER_S:
-        _spawn_news_refresh(config, reason="stale", age_s=round(age))
-
-    return cached
-
-
 # ── Segment attachment helpers ────────────────────────────────────────────────
 # Each returns the data needed by PlayerNextResponse for one optional segment.
 # They keep player_next focused on orchestration: cadence checks and assembly.
@@ -993,44 +640,13 @@ def _attach_news(config: AppConfig) -> tuple[str | None, str | None]:
     """
     entry = get_news_clip(config)
     if not entry:
-        entry = _wait_for_fresh_news(NEWS_BLOCK_ON_MISS_S)
+        entry = wait_for_fresh_news(NEWS_BLOCK_ON_MISS_S)
         if not entry:
             return None, None
         _log_event("news.cache.block_on_miss.satisfied", age_s=round(time.time() - entry["generated_at"]))
     age_s = round(time.time() - entry["generated_at"])
     _log_event("player.next.news_attached", level=logging.DEBUG, source=config.alerts.news.rss_url, age_s=age_s)
     return f"/media/dj-clip/{entry['clip_hash']}", entry["script_text"]
-
-
-def _wait_for_fresh_news(timeout_s: float) -> dict | None:
-    """Block up to `timeout_s` for an in-flight news refresh to finish.
-
-    Returns the cache entry if it lands fresh (not expired) within the
-    timeout, otherwise None. Callers should only invoke this after a
-    get_news_clip miss, which guarantees a refresh has been spawned (or one
-    was already running) — so the wait actually has something to wait on.
-    """
-    deadline = time.time() + timeout_s
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            _log_event("news.cache.block_on_miss.timeout", timeout_s=timeout_s)
-            return None
-        _news_refresh_done.wait(timeout=remaining)
-        with _news_cache_lock:
-            cached = _news_cache
-            in_flight = _news_refresh_in_flight
-        if cached:
-            age = time.time() - cached["generated_at"]
-            if age <= NEWS_EXPIRE_AFTER_S:
-                return cached
-        if not in_flight:
-            # Refresh completed but yielded nothing usable (RSS down, build
-            # failed). No point waiting further — the done event has been set
-            # and no other thread will reset it without our spawning a new
-            # refresh, which we shouldn't do from here.
-            _log_event("news.cache.block_on_miss.empty_after_refresh")
-            return None
 
 
 def _attach_ad(
@@ -1146,7 +762,7 @@ def player_next(payload: PlayerNextRequest | None = None, db: Session = Depends(
     voice = station.voice or None
 
     # Try the prefetch cache first (skip invalidates it — different prompt context).
-    cached_prefetch = _take_prefetched(next_idx) if reason != "skip" else None
+    cached_prefetch = prefetch.take_prefetched(next_idx) if reason != "skip" else None
     clip = None
     script_text: str | None = None
     dj_cached = False
@@ -1264,7 +880,7 @@ def player_prefetch(db: Session = Depends(get_db)):
     if prefetch_target >= len(queue):
         return {"status": "end_of_queue"}
     threading.Thread(
-        target=_prefetch_dj_clip,
+        target=prefetch.prefetch_dj_clip,
         args=(prefetch_target, list(queue), current_idx),
         daemon=True,
     ).start()

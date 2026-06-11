@@ -21,7 +21,6 @@ from app.main import (
     update_player_state,
     player_play,
     player_next,
-    player_prefetch,
     player_stinger_url,
     player_stop,
     player_queue,
@@ -33,7 +32,6 @@ from app.main import (
 )
 from app.models import DJClip, PlayerState, Track
 from app.schemas import (
-    DJScriptGenerateRequest,
     DJScriptResponse,
     LibraryScanRequest,
     PlayerPlayRequest,
@@ -630,7 +628,7 @@ def test_queue_inject_appends_at_end_when_position_is_end(monkeypatch, tmp_path)
     eventually) rather than slotting it right after the currently-playing
     one. The track is still flagged requested=True so the DJ banter
     acknowledges it when the queue gets there."""
-    from app.main import _prefetch_cache, _prefetch_lock
+    from app.prefetch import _prefetch_cache, _prefetch_lock
     db = _make_db_session()
     t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
     t2 = Track(file_path="/m/2.mp3", title="Already Queued", artist="B")
@@ -683,7 +681,7 @@ def test_queue_inject_position_next_still_clears_prefetch_cache(monkeypatch):
     """Counterpart: the default position='next' DOES clear the prefetch
     cache because what was queue[idx+1] is no longer next — the prefetched
     clip is for the wrong track now."""
-    from app.main import _prefetch_cache, _prefetch_lock
+    from app.prefetch import _prefetch_cache, _prefetch_lock
     db = _make_db_session()
     t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
     t2 = Track(file_path="/m/2.mp3", title="Was Next", artist="B")
@@ -760,7 +758,7 @@ def test_queue_inject_empty_queue_raises_400():
 # ── DJ clip prefetch ──────────────────────────────────────────────────────────
 
 def test_player_next_uses_prefetched_clip_when_available(monkeypatch, tmp_path):
-    from app.main import _prefetch_cache
+    from app.prefetch import _prefetch_cache
 
     db = _make_db_session()
     t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
@@ -803,7 +801,7 @@ def test_player_next_uses_prefetched_clip_when_available(monkeypatch, tmp_path):
 
 
 def test_player_next_skip_bypasses_prefetch_cache(monkeypatch, tmp_path):
-    from app.main import _prefetch_cache
+    from app.prefetch import _prefetch_cache
     from app.schemas import PlayerNextRequest
 
     db = _make_db_session()
@@ -830,580 +828,6 @@ def test_player_next_skip_bypasses_prefetch_cache(monkeypatch, tmp_path):
     # Cache entry remains (we only pop on hit, not on skip-bypass)
     assert _prefetch_cache.get(1) == {"script_text": "stale", "clip_hash": "shouldnotuse"}
     _prefetch_cache.pop(1, None)  # cleanup
-
-
-# ── News cache ──
-
-import time as _time_mod
-
-
-@pytest.fixture
-def _reset_news_cache():
-    """Reset the module-level news cache state before and after each test."""
-    import app.main as _m
-    _m._news_cache = None
-    _m._news_refresh_in_flight = False
-    yield
-    _m._news_cache = None
-    _m._news_refresh_in_flight = False
-
-
-def _news_entry(generated_at, hash_suffix="abc"):
-    return {
-        "generated_at": generated_at,
-        "clip_hash": f"hash-{hash_suffix}",
-        "script_text": "Top of the hour news...",
-    }
-
-
-class _ImmediateThread:
-    """Fake threading.Thread that runs the target synchronously on .start()."""
-
-    instances: list = []
-
-    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
-        self.target = target
-        self.args = args
-        self.kwargs = kwargs or {}
-        self.started = False
-        _ImmediateThread.instances.append(self)
-
-    def start(self):
-        self.started = True
-        self.target(*self.args, **self.kwargs)
-
-
-def _news_config():
-    return AppConfig(station=StationConfig(name="News FM", dj_name="DJ News"))
-
-
-def test_news_cache_empty_returns_none_and_queues_refresh(monkeypatch, _reset_news_cache):
-    """get_news_clip never blocks on cold start — it returns None and queues
-    the cache to be warmed in the background. The caller (_attach_news) treats
-    None as 'skip the news segment this round'."""
-    import app.main as m
-
-    build_calls = []
-    monkeypatch.setattr(
-        "app.main._build_news_clip",
-        lambda config: build_calls.append(config) or _news_entry(_time_mod.time(), "new"),
-    )
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    cfg = _news_config()
-    result = m.get_news_clip(cfg)
-
-    assert result is None
-    # A background refresh was queued (and ran synchronously via the fake Thread),
-    # so the NEXT call will hit a populated cache.
-    assert len(_ImmediateThread.instances) == 1
-    assert _ImmediateThread.instances[0].started is True
-    assert build_calls == [cfg]
-    assert m._news_cache is not None  # populated by the refresh
-
-
-def test_news_cache_fresh_returns_cached_without_build(monkeypatch, _reset_news_cache):
-    import app.main as m
-
-    cached = _news_entry(generated_at=_time_mod.time() - 60, hash_suffix="cached")
-    m._news_cache = cached
-
-    calls = []
-    monkeypatch.setattr(
-        "app.main._build_news_clip",
-        lambda config: calls.append(config) or _news_entry(_time_mod.time(), "new"),
-    )
-
-    result = m.get_news_clip(_news_config())
-
-    assert result is cached
-    assert calls == []
-
-
-def test_news_cache_aging_returns_cached_and_spawns_refresh(monkeypatch, _reset_news_cache):
-    import app.main as m
-
-    cached = _news_entry(generated_at=_time_mod.time() - 25 * 60, hash_suffix="stale")
-    m._news_cache = cached
-
-    refreshed = _news_entry(generated_at=_time_mod.time(), hash_suffix="refreshed")
-    build_calls = []
-
-    def fake_build(config):
-        build_calls.append(config)
-        return refreshed
-
-    monkeypatch.setattr("app.main._build_news_clip", fake_build)
-
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    cfg = _news_config()
-    result = m.get_news_clip(cfg)
-
-    # Caller gets the stale cached entry…
-    assert result is cached
-    # …but a background refresh ran (synchronously, via the fake thread) and
-    # updated the cache for the next call.
-    assert len(_ImmediateThread.instances) == 1
-    assert _ImmediateThread.instances[0].started is True
-    assert build_calls == [cfg]
-    assert m._news_cache is refreshed
-    # The background helper clears the in-flight flag in its finally clause.
-    assert m._news_refresh_in_flight is False
-
-
-def test_news_cache_aging_skips_refresh_when_already_in_flight(monkeypatch, _reset_news_cache):
-    import app.main as m
-
-    cached = _news_entry(generated_at=_time_mod.time() - 25 * 60, hash_suffix="stale")
-    m._news_cache = cached
-    m._news_refresh_in_flight = True
-
-    build_calls = []
-    monkeypatch.setattr(
-        "app.main._build_news_clip",
-        lambda config: build_calls.append(config) or _news_entry(_time_mod.time(), "new"),
-    )
-
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    result = m.get_news_clip(_news_config())
-
-    assert result is cached
-    assert _ImmediateThread.instances == []
-    assert build_calls == []
-
-
-def test_news_cache_expired_returns_none_and_queues_refresh(monkeypatch, _reset_news_cache):
-    """A cache older than NEWS_EXPIRE_AFTER_S (30 min) is treated as missing —
-    don't serve stale-stale news. Same path as the empty-cache case: return
-    None so the segment is skipped this round, refresh in the background."""
-    import app.main as m
-
-    cached = _news_entry(generated_at=_time_mod.time() - 35 * 60, hash_suffix="old")
-    m._news_cache = cached
-
-    fresh = _news_entry(generated_at=_time_mod.time(), hash_suffix="fresh")
-    build_calls = []
-    monkeypatch.setattr(
-        "app.main._build_news_clip",
-        lambda config: build_calls.append(config) or fresh,
-    )
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    cfg = _news_config()
-    result = m.get_news_clip(cfg)
-
-    # Caller gets nothing (skip this transition's news segment) …
-    assert result is None
-    # … but the background refresh fires immediately and warms the cache for next time.
-    assert len(_ImmediateThread.instances) == 1
-    assert build_calls == [cfg]
-    assert m._news_cache is fresh
-
-
-def test_attach_news_blocks_on_miss_and_uses_fresh_entry(monkeypatch, _reset_news_cache):
-    """On cache miss, _attach_news waits briefly on the just-spawned refresh
-    rather than skipping immediately. Here the refresh runs synchronously via
-    the fake Thread, so the wait returns instantly with a fresh entry."""
-    import app.main as m
-
-    fresh = _news_entry(_time_mod.time(), "freshly-built")
-    monkeypatch.setattr("app.main._build_news_clip", lambda config: fresh)
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    cfg = _news_config()
-    cfg.alerts.news.rss_url = "https://example.test/rss"
-    clip_url, script_text = m._attach_news(cfg)
-
-    assert clip_url == f"/media/dj-clip/{fresh['clip_hash']}"
-    assert script_text == fresh["script_text"]
-    assert m._news_cache is fresh
-
-
-def test_attach_news_returns_none_when_refresh_yields_nothing(monkeypatch, _reset_news_cache):
-    """RSS down / build fails — refresh completes with no entry. _attach_news
-    should bail out (None, None) without waiting the full timeout."""
-    import app.main as m
-
-    monkeypatch.setattr("app.main._build_news_clip", lambda config: None)
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    cfg = _news_config()
-    cfg.alerts.news.rss_url = "https://example.test/rss"
-
-    t0 = _time_mod.time()
-    clip_url, script_text = m._attach_news(cfg)
-    elapsed = _time_mod.time() - t0
-
-    assert (clip_url, script_text) == (None, None)
-    # Should return ~immediately (the in-flight flag clears synchronously via
-    # the fake thread); definitely not the full NEWS_BLOCK_ON_MISS_S window.
-    assert elapsed < 1.0
-
-
-def test_attach_news_block_on_miss_respects_timeout(monkeypatch, _reset_news_cache):
-    """If no refresh ever signals done, _wait_for_fresh_news must give up at
-    the deadline rather than hanging the request forever."""
-    import app.main as m
-
-    # Pretend a refresh is already in flight (so _attach_news won't spawn a
-    # new one) and the done event stays clear. The wait should hit timeout.
-    m._news_refresh_in_flight = True
-    m._news_refresh_done.clear()
-    monkeypatch.setattr("app.main.NEWS_BLOCK_ON_MISS_S", 0.05)
-
-    cfg = _news_config()
-    cfg.alerts.news.rss_url = "https://example.test/rss"
-
-    t0 = _time_mod.time()
-    clip_url, script_text = m._attach_news(cfg)
-    elapsed = _time_mod.time() - t0
-
-    assert (clip_url, script_text) == (None, None)
-    assert 0.05 <= elapsed < 1.0
-
-
-def test_news_cache_expired_when_refresh_already_in_flight(monkeypatch, _reset_news_cache):
-    """Don't pile up parallel refreshes when one is already running."""
-    import app.main as m
-
-    cached = _news_entry(generated_at=_time_mod.time() - 35 * 60, hash_suffix="old")
-    m._news_cache = cached
-    m._news_refresh_in_flight = True
-
-    build_calls = []
-    monkeypatch.setattr(
-        "app.main._build_news_clip",
-        lambda config: build_calls.append(config) or _news_entry(_time_mod.time(), "x"),
-    )
-    _ImmediateThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _ImmediateThread)
-
-    result = m.get_news_clip(_news_config())
-
-    assert result is None  # skip this round regardless
-    assert _ImmediateThread.instances == []  # no second refresh queued
-    assert build_calls == []
-
-
-# ── Prefetch endpoint and worker ──────────────────────────────────────────────
-
-@pytest.fixture
-def _reset_prefetch_cache():
-    """Reset the module-level prefetch cache before and after each test."""
-    import app.main as _m
-    _m._prefetch_cache.clear()
-    yield
-    _m._prefetch_cache.clear()
-
-
-class _FakeThread:
-    """Captures construction args; .start() is a no-op so no real thread runs."""
-    instances: list["_FakeThread"] = []
-
-    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
-        self.target = target
-        self.args = args
-        self.kwargs = kwargs or {}
-        self.daemon = daemon
-        self.started = False
-        _FakeThread.instances.append(self)
-
-    def start(self):
-        self.started = True
-
-
-@pytest.fixture
-def _fake_thread(monkeypatch):
-    _FakeThread.instances = []
-    monkeypatch.setattr("app.main.threading.Thread", _FakeThread)
-    return _FakeThread
-
-
-def test_player_prefetch_returns_idle_when_not_playing(_reset_prefetch_cache, _fake_thread):
-    db = _make_db_session()
-    state = PlayerState(is_playing=False, queue_json='[{"type":"track","track_id":1}]', queue_index=0)
-    db.add(state)
-    db.commit()
-
-    result = player_prefetch(db)
-
-    assert result == {"status": "idle"}
-    assert _fake_thread.instances == []
-
-
-def test_player_prefetch_returns_idle_when_queue_empty(_reset_prefetch_cache, _fake_thread):
-    db = _make_db_session()
-    # is_playing=True but queue_json is empty string -> falsy
-    state = PlayerState(is_playing=True, queue_json="", queue_index=0)
-    db.add(state)
-    db.commit()
-
-    result = player_prefetch(db)
-
-    assert result == {"status": "idle"}
-    assert _fake_thread.instances == []
-
-
-def test_player_prefetch_returns_end_of_queue_at_last_item(_reset_prefetch_cache, _fake_thread):
-    db = _make_db_session()
-    queue = [{"type": "track", "track_id": 1}, {"type": "track", "track_id": 2}]
-    state = PlayerState(is_playing=True, queue_json=json.dumps(queue), queue_index=1)
-    db.add(state)
-    db.commit()
-
-    result = player_prefetch(db)
-
-    assert result == {"status": "end_of_queue"}
-    assert _fake_thread.instances == []
-
-
-def test_player_prefetch_schedules_thread_with_correct_args(_reset_prefetch_cache, _fake_thread):
-    from app.main import _prefetch_dj_clip
-
-    db = _make_db_session()
-    queue = [
-        {"type": "track", "track_id": 1},
-        {"type": "track", "track_id": 2},
-        {"type": "track", "track_id": 3},
-    ]
-    state = PlayerState(is_playing=True, queue_json=json.dumps(queue), queue_index=0)
-    db.add(state)
-    db.commit()
-
-    result = player_prefetch(db)
-
-    assert result == {"status": "scheduled"}
-    assert len(_fake_thread.instances) == 1
-    t = _fake_thread.instances[0]
-    assert t.started is True
-    assert t.target is _prefetch_dj_clip
-    assert t.args == (1, queue, 0)
-    assert t.daemon is True
-
-
-def _patch_session_local(monkeypatch, db):
-    """Make _prefetch_dj_clip's SessionLocal() return our test session."""
-    monkeypatch.setattr("app.main.SessionLocal", lambda: _NonClosingSession(db))
-
-
-class _NonClosingSession:
-    """Wraps a Session so that .close() is a no-op (the test owns the lifecycle)."""
-    def __init__(self, session):
-        self._session = session
-
-    def __getattr__(self, name):
-        return getattr(self._session, name)
-
-    def close(self):
-        pass
-
-
-def test_prefetch_worker_bails_when_target_idx_out_of_range(_reset_prefetch_cache):
-    from app.main import _prefetch_dj_clip, _prefetch_cache
-
-    queue = [{"type": "track", "track_id": 1}]
-    _prefetch_dj_clip(target_idx=5, queue=queue, base_idx=0)
-
-    assert _prefetch_cache == {}
-
-
-def test_prefetch_worker_bails_when_target_not_track(_reset_prefetch_cache):
-    from app.main import _prefetch_dj_clip, _prefetch_cache
-
-    queue = [{"type": "track", "track_id": 1}, {"type": "news"}]
-    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
-
-    assert _prefetch_cache == {}
-
-
-class _FakeClip:
-    def __init__(self, script_hash):
-        self.script_hash = script_hash
-
-
-def test_prefetch_worker_populates_cache_on_success(monkeypatch, _reset_prefetch_cache):
-    from app.main import _prefetch_dj_clip, _prefetch_cache
-
-    db = _make_db_session()
-    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
-    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
-    db.add_all([t1, t2])
-    db.commit()
-    db.refresh(t1); db.refresh(t2)
-
-    _patch_session_local(monkeypatch, db)
-    monkeypatch.setattr(
-        "app.main.load_config",
-        lambda: AppConfig(station=StationConfig(name="Pre FM", dj_name="DJ Pre")),
-    )
-    monkeypatch.setattr(
-        "app.main.generate_dj_script",
-        lambda *_a, **_k: DJScriptResponse(
-            station_name="Pre FM", dj_name="DJ Pre",
-            sentences=["Hi"], script_text="Hi there.",
-        ),
-    )
-    monkeypatch.setattr(
-        "app.main.get_or_create_dj_clip",
-        lambda *_a, **_k: (_FakeClip(script_hash="abc123"), "/path/clip.wav", False),
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
-
-    queue = [
-        {"type": "track", "track_id": t1.id},
-        {"type": "track", "track_id": t2.id},
-    ]
-    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
-
-    assert _prefetch_cache[1] == {"script_text": "Hi there.", "clip_hash": "abc123"}
-
-
-def test_prefetch_worker_uses_request_reason_for_requested_track(monkeypatch, _reset_prefetch_cache):
-    """Regression: the prefetch path used to always pass reason='auto' to
-    generate_dj_script, so caller-requested tracks (queued via the search
-    bar with requested=True) lost their "audience request" framing if the
-    prefetch happened to fire on them. The DJ would greet a requested
-    track exactly like a natural-advance one — no "we've got a request
-    coming in" framing — because the prefetch baked the wrong reason
-    into the cached clip.
-
-    Now the prefetch reads target_item.get("requested") and switches to
-    reason="request" accordingly, so the cached clip is the right kind of
-    banter from the start.
-    """
-    from app.main import _prefetch_dj_clip
-
-    db = _make_db_session()
-    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
-    t2 = Track(file_path="/m/2.mp3", title="Requested", artist="B")
-    db.add_all([t1, t2])
-    db.commit()
-    db.refresh(t1); db.refresh(t2)
-
-    _patch_session_local(monkeypatch, db)
-    monkeypatch.setattr(
-        "app.main.load_config",
-        lambda: AppConfig(station=StationConfig(name="Req FM", dj_name="DJ Req")),
-    )
-
-    captured = {}
-    def _capture_script(_station, payload, _prev, _next, *, config=None):
-        captured["reason"] = payload.reason
-        return DJScriptResponse(
-            station_name="Req FM", dj_name="DJ Req",
-            sentences=["Hi"], script_text="Hi.",
-        )
-    monkeypatch.setattr("app.main.generate_dj_script", _capture_script)
-    monkeypatch.setattr(
-        "app.main.get_or_create_dj_clip",
-        lambda *_a, **_k: (_FakeClip(script_hash="reqhash"), "/path/clip.wav", False),
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
-
-    # Critically: target is the requested-flag track.
-    queue = [
-        {"type": "track", "track_id": t1.id},
-        {"type": "track", "track_id": t2.id, "requested": True},
-    ]
-    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
-
-    assert captured.get("reason") == "request"
-
-
-def test_prefetch_worker_uses_auto_reason_for_natural_advance(monkeypatch, _reset_prefetch_cache):
-    """Counterpart to the above: ordinary queue items (no requested flag)
-    still take the reason='auto' path, so we don't regress the default
-    natural-advance banter into something more elaborate than it needs."""
-    from app.main import _prefetch_dj_clip
-
-    db = _make_db_session()
-    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
-    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
-    db.add_all([t1, t2])
-    db.commit()
-    db.refresh(t1); db.refresh(t2)
-
-    _patch_session_local(monkeypatch, db)
-    monkeypatch.setattr(
-        "app.main.load_config",
-        lambda: AppConfig(station=StationConfig(name="Auto FM", dj_name="DJ Auto")),
-    )
-
-    captured = {}
-    def _capture_script(_station, payload, _prev, _next, *, config=None):
-        captured["reason"] = payload.reason
-        return DJScriptResponse(
-            station_name="Auto FM", dj_name="DJ Auto",
-            sentences=["Hi"], script_text="Hi.",
-        )
-    monkeypatch.setattr("app.main.generate_dj_script", _capture_script)
-    monkeypatch.setattr(
-        "app.main.get_or_create_dj_clip",
-        lambda *_a, **_k: (_FakeClip(script_hash="autohash"), "/path/clip.wav", False),
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
-
-    queue = [
-        {"type": "track", "track_id": t1.id},
-        {"type": "track", "track_id": t2.id},  # no `requested` key at all
-    ]
-    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
-
-    assert captured.get("reason") == "auto"
-
-
-def test_prefetch_worker_retries_with_voice_none_on_runtime_error(monkeypatch, _reset_prefetch_cache):
-    from app.main import _prefetch_dj_clip, _prefetch_cache
-
-    db = _make_db_session()
-    t1 = Track(file_path="/m/1.mp3", title="One", artist="A")
-    t2 = Track(file_path="/m/2.mp3", title="Two", artist="B")
-    db.add_all([t1, t2])
-    db.commit()
-    db.refresh(t1); db.refresh(t2)
-
-    _patch_session_local(monkeypatch, db)
-    monkeypatch.setattr(
-        "app.main.load_config",
-        lambda: AppConfig(station=StationConfig(name="Retry FM", dj_name="DJ Retry", voice="alloy")),
-    )
-    monkeypatch.setattr(
-        "app.main.generate_dj_script",
-        lambda *_a, **_k: DJScriptResponse(
-            station_name="Retry FM", dj_name="DJ Retry",
-            sentences=["Hi"], script_text="Retry script.",
-        ),
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda _cfg: object())
-
-    calls = []
-
-    def fake_get_or_create(_db, *, script_text, voice, provider, clip_type, voice_instructions=None):
-        calls.append({"voice": voice, "voice_instructions": voice_instructions})
-        if len(calls) == 1:
-            raise RuntimeError("voice rejected")
-        return (_FakeClip(script_hash="retryhash"), "/path/clip.wav", False)
-
-    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_get_or_create)
-
-    queue = [
-        {"type": "track", "track_id": t1.id},
-        {"type": "track", "track_id": t2.id},
-    ]
-    _prefetch_dj_clip(target_idx=1, queue=queue, base_idx=0)
-
-    assert len(calls) == 2
-    assert calls[0]["voice"] == "alloy"
-    assert calls[1]["voice"] is None
-    assert _prefetch_cache[1] == {"script_text": "Retry script.", "clip_hash": "retryhash"}
 
 
 # ── Segment attachment helpers ──
@@ -1598,80 +1022,6 @@ def test_attach_station_id_returns_none_on_runtime_error(monkeypatch):
     monkeypatch.setattr("app.main.get_or_create_dj_clip", boom)
 
     assert _attach_station_id(db, cfg.station, voice="echo", config=cfg, provider=None) is None
-
-
-# _build_news_clip
-
-
-def test_build_news_clip_returns_none_when_script_missing(monkeypatch):
-    from app.main import _build_news_clip
-
-    monkeypatch.setattr("app.main.generate_news_script", lambda config, newsreader_name=None: None)
-    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: None)
-    monkeypatch.setattr(
-        "app.main.get_or_create_dj_clip",
-        lambda *a, **k: pytest.fail("should not synthesize when script is None"),
-    )
-
-    assert _build_news_clip(_attach_config()) is None
-
-
-def test_build_news_clip_happy_path(monkeypatch):
-    from app.main import _build_news_clip
-
-    monkeypatch.setattr(
-        "app.main.generate_news_script",
-        lambda config, newsreader_name=None: "Top stories today...",
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: "fake-provider")
-    session = _make_db_session()
-    monkeypatch.setattr("app.main.SessionLocal", lambda: session)
-
-    clip = _FakeClip(script_hash="newsclip1", script_text="Top stories today...")
-    captured = {}
-
-    def fake_create(db, **kwargs):
-        captured.update(kwargs)
-        return clip, "", False
-
-    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_create)
-
-    entry = _build_news_clip(_attach_config())
-    assert entry is not None
-    assert entry["clip_hash"] == "newsclip1"
-    assert entry["script_text"] == "Top stories today..."
-    assert isinstance(entry["generated_at"], float)
-    assert captured["clip_type"] == "news"
-
-
-def test_build_news_clip_retries_with_default_voice_on_runtime_error(monkeypatch):
-    from app.main import _build_news_clip
-
-    monkeypatch.setattr(
-        "app.main.generate_news_script",
-        lambda config, newsreader_name=None: "Top stories today...",
-    )
-    monkeypatch.setattr("app.main.build_tts_provider", lambda cfg: "fake-provider")
-    session = _make_db_session()
-    monkeypatch.setattr("app.main.SessionLocal", lambda: session)
-
-    calls = []
-    clip = _FakeClip(script_hash="retrynews", script_text="Top stories today...")
-
-    def fake_create(db, **kwargs):
-        calls.append(kwargs.get("voice"))
-        if len(calls) == 1:
-            raise RuntimeError("voice unsupported")
-        return clip, "", False
-
-    monkeypatch.setattr("app.main.get_or_create_dj_clip", fake_create)
-
-    entry = _build_news_clip(_attach_config())
-    assert entry is not None
-    assert entry["clip_hash"] == "retrynews"
-    assert len(calls) == 2
-    assert calls[1] is None
-
 
 
 # ── Skip-stinger endpoint ─────────────────────────────────────────────────────
@@ -1875,63 +1225,67 @@ def _wire_update_config(monkeypatch, old_cfg: AppConfig):
 
 
 def test_config_change_station_name_clears_news_and_prefetch(monkeypatch):
-    import app.main as m
+    import app.news_cache as nc
+    from app.prefetch import _prefetch_cache
 
     old = AppConfig(station=StationConfig(name="Old FM"))
     new = old.model_copy(update={"station": StationConfig(name="New FM")})
 
     _wire_update_config(monkeypatch, old)
-    m._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
-    m._prefetch_cache[5] = {"script_text": "stale", "clip_hash": "h"}
+    nc._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
+    _prefetch_cache[5] = {"script_text": "stale", "clip_hash": "h"}
 
     update_config(new)
 
-    assert m._news_cache is None
-    assert m._prefetch_cache == {}
+    assert nc._news_cache is None
+    assert _prefetch_cache == {}
 
 
 def test_config_change_no_change_invalidates_nothing(monkeypatch):
     """Saving the same config back (e.g. a no-op PUT from the settings UI)
     should be a complete no-op for every cache."""
-    import app.main as m
+    import app.news_cache as nc
+    from app.prefetch import _prefetch_cache
 
     cfg = AppConfig()
     _wire_update_config(monkeypatch, cfg)
     cached_news = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
-    m._news_cache = cached_news
-    m._prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
+    nc._news_cache = cached_news
+    _prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
 
     update_config(cfg.model_copy(deep=True))
 
-    assert m._news_cache is cached_news
-    assert m._prefetch_cache == {1: {"script_text": "x", "clip_hash": "h"}}
+    assert nc._news_cache is cached_news
+    assert _prefetch_cache == {1: {"script_text": "x", "clip_hash": "h"}}
     # cleanup
-    m._news_cache = None
-    m._prefetch_cache.clear()
+    nc._news_cache = None
+    _prefetch_cache.clear()
 
 
 def test_config_change_tts_voice_invalidates_news_and_prefetch(monkeypatch):
     """Switching openai_tts_voice changes how every generated clip SOUNDS, so
     any pre-synthesised audio in memory is stale."""
-    import app.main as m
+    import app.news_cache as nc
+    from app.prefetch import _prefetch_cache
 
     old = AppConfig(openai_tts_voice="verse")
     new = old.model_copy(update={"openai_tts_voice": "sage"})
 
     _wire_update_config(monkeypatch, old)
-    m._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
-    m._prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
+    nc._news_cache = {"generated_at": 0, "clip_hash": "h", "script_text": "s"}
+    _prefetch_cache[1] = {"script_text": "x", "clip_hash": "h"}
 
     update_config(new)
 
-    assert m._news_cache is None
-    assert m._prefetch_cache == {}
+    assert nc._news_cache is None
+    assert _prefetch_cache == {}
 
 
 def test_config_change_hook_failure_does_not_break_put(monkeypatch):
     """If the cache-invalidation hook raises, the PUT still returns the new config —
     the on-disk save already succeeded and we must not 500 over a cache flush."""
-    import app.main as m
+    import app.news_cache as nc
+    from app.prefetch import _prefetch_cache
 
     old = AppConfig()
     new = old.model_copy(update={"openai_tts_voice": "sage"})
@@ -1947,8 +1301,8 @@ def test_config_change_hook_failure_does_not_break_put(monkeypatch):
     result = update_config(new)
     assert result.openai_tts_voice == "sage"
     # cleanup
-    m._news_cache = None
-    m._prefetch_cache.clear()
+    nc._news_cache = None
+    _prefetch_cache.clear()
 
 
 # ── On-air avatar plumbing ─────────────────────────────────────────────────
@@ -2010,85 +1364,3 @@ def test_active_dj_returns_none_for_default_dj_slot():
     cfg = AppConfig(station=station)
     monday_noon = datetime(2026, 5, 18, 12, 0)
     assert active_dj(station, cfg, now=monday_noon) is None
-
-
-# ── DB migration: rewrite legacy generated_audio/ paths to generated/ ─────────
-
-def _seed_clip(session, script_hash: str, audio_path: str) -> None:
-    """Insert a DJClip via the ORM so server-side defaults (created_at,
-    is_ad) fill in automatically."""
-    from app.models import DJClip
-    session.add(DJClip(
-        script_text="x", audio_path=audio_path,
-        voice="default", script_hash=script_hash,
-    ))
-    session.commit()
-
-
-def test_migrate_dj_clip_paths_rewrites_generated_audio_to_generated(tmp_path, monkeypatch):
-    """PR #159 renamed the cache dir on disk but left dj_clips.audio_path
-    rows pointing at the old prefix. The startup migration rewrites them
-    so DJClip serve-time path resolution finds the files."""
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import sessionmaker
-    from app.database import Base
-
-    db_path = tmp_path / "migrate.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        for hsh, path in [
-            ("stalehash1", "generated_audio/station_ids/aaa.mp3"),
-            ("stalehash2", "generated_audio/transitions/bbb.mp3"),
-            ("freshhash1", "generated/station_ids/ccc.mp3"),       # already migrated
-            ("absolutepath", "/Volumes/external/music/track.mp3"),  # untouched
-        ]:
-            _seed_clip(session, hsh, path)
-    finally:
-        session.close()
-
-    monkeypatch.setattr("app.main.engine", engine)
-    from app.main import _migrate_dj_clip_paths_after_generated_rename
-    _migrate_dj_clip_paths_after_generated_rename()
-
-    paths_by_hash = {
-        row[0]: row[1]
-        for row in engine.connect().execute(
-            text("SELECT script_hash, audio_path FROM dj_clips")
-        )
-    }
-    # Stale rows rewritten with the new prefix; subdir + filename preserved.
-    assert paths_by_hash["stalehash1"] == "generated/station_ids/aaa.mp3"
-    assert paths_by_hash["stalehash2"] == "generated/transitions/bbb.mp3"
-    # Already-migrated row untouched (no double-prefix).
-    assert paths_by_hash["freshhash1"] == "generated/station_ids/ccc.mp3"
-    # Untouched: paths that aren't under generated_audio/ at all.
-    assert paths_by_hash["absolutepath"] == "/Volumes/external/music/track.mp3"
-
-
-def test_migrate_dj_clip_paths_is_idempotent(tmp_path, monkeypatch):
-    """Re-running the migration on a DB where everything's already at
-    generated/ should be a no-op (no double-rewrites, no errors)."""
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.orm import sessionmaker
-    from app.database import Base
-
-    db_path = tmp_path / "idempotent.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    session = SessionLocal()
-    try:
-        _seed_clip(session, "h", "generated/transitions/already.mp3")
-    finally:
-        session.close()
-
-    monkeypatch.setattr("app.main.engine", engine)
-    from app.main import _migrate_dj_clip_paths_after_generated_rename
-    _migrate_dj_clip_paths_after_generated_rename()
-    _migrate_dj_clip_paths_after_generated_rename()  # twice for good measure
-
-    row = engine.connect().execute(text("SELECT audio_path FROM dj_clips")).fetchone()
-    assert row[0] == "generated/transitions/already.mp3"
