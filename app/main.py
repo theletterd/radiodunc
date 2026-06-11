@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from . import migrations, news_cache, prefetch
+from . import migrations, news_cache, prefetch, single_worker
 from .config import AppConfig, StationConfig, load_config, save_config
 from .database import Base, SessionLocal, engine, get_db
 from .logging_setup import configure_logging, log_event as _log_event
@@ -61,6 +61,9 @@ migrations.run_all()
 logger = logging.getLogger(__name__)
 
 configure_logging()
+
+# After configure_logging so the CRITICAL actually reaches a handler.
+single_worker.ensure_single_worker()
 
 app = FastAPI(title="RadioDunc", version="0.3.0")
 app.mount("/ui", StaticFiles(directory="app/ui", html=True), name="ui")
@@ -299,6 +302,14 @@ def queue_inject(payload: QueueInjectRequest, db: Session = Depends(get_db)):
 
 
 def _get_or_create_player_state(db: Session) -> PlayerState:
+    # Known race, deliberately unguarded: every queue mutation does
+    # json.loads(state.queue_json) → modify → json.dumps → commit, so two
+    # overlapping requests (e.g. queue_inject racing player_next) can lose
+    # an update — last write wins, silently. The single-user UI makes
+    # overlap rare and the blast radius is one queued track vanishing, so
+    # a comment is the right amount of fix. If it's ever actually observed,
+    # the remedy is optimistic versioning (a version column checked at
+    # commit), not a lock.
     state = db.query(PlayerState).order_by(PlayerState.id.asc()).first()
     if state:
         return state

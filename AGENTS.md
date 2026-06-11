@@ -185,6 +185,7 @@ When adding a new top-level function and wanting to test it: add its name to `EX
 - `news_cache.py` — the news bulletin clip cache (`get_news_clip`, `build_news_clip`, `wait_for_fresh_news`, `invalidate`) with its TTL state machine and refresh thread. The upstream RSS *headline* cache is separate, in `news.py`.
 - `migrations.py` — inline DB migrations (below).
 - `logging_setup.py` — `ContextFormatter`, `configure_logging`, `log_event`. Exists so the cache modules can log without importing main (circular).
+- `single_worker.py` — pidfile guard run at main.py module load. The prefetch cache, news cache, and DJ handoff state are all process-local, so the app must run as exactly one worker; the guard CRITICAL-logs (doesn't crash) when another live process holds `generated/radiodunc.pid`. Don't add per-process mutable state without remembering this constraint.
 
 Tests mirror the layout: `test_prefetch.py`, `test_news_cache.py`, `test_migrations.py` alongside `test_main.py`. When monkeypatching a dependency of moved code, patch it in the module that *calls* it (e.g. `app.prefetch.load_config`, not `app.main.load_config`).
 
