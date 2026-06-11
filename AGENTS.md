@@ -177,14 +177,25 @@ Per-DJ cache-bust: `_djAvatarTs` Map updates per DJ on regenerate so refetching 
 
 When adding a new top-level function and wanting to test it: add its name to `EXPORTED_NAMES`. When you need to read/write a private `let` binding: add an accessor in the suffix block.
 
+## Backend module layout
+
+`main.py` holds the FastAPI app, routes, and segment-attachment helpers. The subsystems that used to live there are their own modules:
+
+- `prefetch.py` — the DJ-clip prefetch cache + background worker (`prefetch_dj_clip`, `take_prefetched`, `clear`). main.py spawns the worker thread and consumes/invalidates the cache; the cache state and lock live here.
+- `news_cache.py` — the news bulletin clip cache (`get_news_clip`, `build_news_clip`, `wait_for_fresh_news`, `invalidate`) with its TTL state machine and refresh thread. The upstream RSS *headline* cache is separate, in `news.py`.
+- `migrations.py` — inline DB migrations (below).
+- `logging_setup.py` — `ContextFormatter`, `configure_logging`, `log_event`. Exists so the cache modules can log without importing main (circular).
+
+Tests mirror the layout: `test_prefetch.py`, `test_news_cache.py`, `test_migrations.py` alongside `test_main.py`. When monkeypatching a dependency of moved code, patch it in the module that *calls* it (e.g. `app.prefetch.load_config`, not `app.main.load_config`).
+
 ## DB migrations
 
-Done inline at module load in `main.py` using raw SQL via `engine.begin()`. No Alembic. Two functions today, each idempotent:
+Done in `migrations.py` using raw SQL via `engine.begin()`, run once at main.py module load through `migrations.run_all()`. No Alembic. Two functions today, each idempotent:
 
-- `_migrate_drop_legacy_schema()` — drops legacy multi-station tables (`stations`, `favorite_stations`, `recent_stations`), drops obsolete `player_state` columns from the old multi-station era, adds `dj_clips.is_ad` if missing.
-- `_migrate_dj_clip_paths_after_generated_rename()` — rewrites `dj_clips.audio_path` from `generated_audio/…` → `generated/…` for installs that pre-date the #159 rename. Without this, every clip cached before the rename 404s at serve time because `_safe_media_path` resolves against a directory that no longer exists.
+- `migrate_drop_legacy_schema()` — drops legacy multi-station tables (`stations`, `favorite_stations`, `recent_stations`), drops obsolete `player_state` columns from the old multi-station era, adds `dj_clips.is_ad` if missing.
+- `migrate_dj_clip_paths_after_generated_rename()` — rewrites `dj_clips.audio_path` from `generated_audio/…` → `generated/…` for installs that pre-date the #159 rename. Without this, every clip cached before the rename 404s at serve time because `_safe_media_path` resolves against a directory that no longer exists.
 
-Add new migrations as sibling functions invoked at module load, immediately after the existing two. Each should filter to only the rows that need touching so re-running on a fresh DB is a cheap no-op.
+Add new migrations as sibling functions called from `run_all()`. Each should filter to only the rows that need touching so re-running on a fresh DB is a cheap no-op.
 
 ## Logging
 

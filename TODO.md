@@ -33,30 +33,13 @@ load-bearing decisions (browser-as-player / no broadcast layer,
 cache-everything cost design, prompt variance rolled in Python) are
 right and none of the debt is architectural. These are the follow-ups.
 
-### ☐ Split main.py along the cache seams
-
-`app/main.py` (~1,350 lines) holds migrations + logging setup + all
-routes + two in-memory cache subsystems with their own locks and
-threads (prefetch cache, news cache + state machine) + the warmup
-thread. The routes are fine; the smell is the cache subsystems living
-in the route namespace, which makes main.py the default landing zone
-for every new feature. Mechanical split, suite makes it low-risk:
-
-- `app/prefetch.py` — `_prefetch_cache`, `_prefetch_lock`,
-  `_prefetch_dj_clip`, `_take_prefetched`
-- `app/news_cache.py` — the main.py news-cache half (`get_news_clip`,
-  `_build_news_clip`, `_refresh_news_background`, `_spawn_news_refresh`,
-  `_wait_for_fresh_news`, lock + in-flight flag), possibly merged with
-  the headline cache in `app/news.py`
-- `app/migrations.py` — both `_migrate_*` functions + future siblings
-
-`tests/test_main.py` (~2,100 lines) splits to mirror whatever lands.
-
 ### ☐ Single-worker assumption is silent — make it named
 
-`_prefetch_cache`, the news cache + `_news_refresh_in_flight`
-(`app/main.py`), and `_last_handoff_state` (`app/dj_scripts.py`) are
-process-local module globals. Correct under single-worker uvicorn;
+`_prefetch_cache` (`app/prefetch.py`), the news cache +
+`_news_refresh_in_flight` (`app/news_cache.py`), and
+`_last_handoff_state` (`app/dj_scripts.py`) are process-local module
+globals (the cache modules' docstrings now say so, but nothing
+enforces it). Correct under single-worker uvicorn;
 quietly wrong under `--workers 2` (split-brain caches, doubled news
 spend, double handoffs). Cheapest fix: one startup log line or
 assertion naming the constraint so nobody finds out the hard way.
