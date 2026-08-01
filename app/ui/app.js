@@ -248,6 +248,7 @@ function initAudio() {
   analyser.smoothingTimeConstant = 0.75;
   _analyserBins  = new Uint8Array(analyser.frequencyBinCount);
   _analyserPeaks = new Array(ANALYSER_BANDS).fill(0);
+  _analyserHolds = new Array(ANALYSER_BANDS).fill(0);
 
   masterGain.connect(analyser);
   analyser.connect(compressor);
@@ -316,24 +317,56 @@ const ANALYSER_BANDS    = 24;
 // reproduce anyway; above 16 kHz there's rarely enough energy to see.
 const ANALYSER_F_MIN    = 40;
 const ANALYSER_F_MAX    = 16000;
-// Peak-cap fall rate, in fraction-of-full-height per frame (~0.7 s top to
-// bottom at 60 fps). The slow fall is what makes it read as a graphic
-// equaliser rather than a generic visualiser.
-const ANALYSER_PEAK_FALL = 0.024;
 
-// Bar gradients keyed by on-air mode, matching the existing colour language in
+// ── Segmented LED look ──
+// Bars are drawn as a stack of discrete lit/unlit blocks rather than a solid
+// fill, the way a hardware bargraph does it. Unlit segments are painted too
+// (very dim) so the LED grid stays visible at rest — that faint grid is most
+// of what makes it read as an old display rather than a modern visualiser.
+const ANALYSER_SEG_H   = 3;   // CSS px, height of one segment
+const ANALYSER_SEG_GAP = 2;   // CSS px between segments
+
+// Level zones, as a fraction of full height. Classic bargraphs escalate
+// green → amber → red toward the top; we keep the station's on-air colour in
+// the low zone (where the bars sit most of the time, so the display still
+// reads pink/orange/blue at a glance) and escalate to amber and red above it.
+const ANALYSER_ZONE_MID = 0.62;
+const ANALYSER_ZONE_HOT = 0.86;
+const ANALYSER_MID_COLOUR   = '#fbbf24';  // amber
+const ANALYSER_HOT_COLOUR   = '#ef4444';  // red
+const ANALYSER_UNLIT_COLOUR = 'rgba(255, 255, 255, 0.055)';
+// Peak marker. Deliberately near-white rather than the zone colour: a red cap
+// would vanish against the red hot zone, and the whole point of the marker is
+// that you can always see where the last transient reached.
+const ANALYSER_PEAK_COLOUR  = 'rgba(255, 255, 255, 0.9)';
+
+// Low-zone colour by on-air mode, matching the existing colour language in
 // styles.css (#nowPlaying[data-mode=...]): pink for music/DJ, orange for ads,
-// blue for news. Each pair is [bottom, top] of a vertical gradient.
-const ANALYSER_PALETTE = {
-  track: ['#db2777', '#f472b6'],
-  dj:    ['#db2777', '#f472b6'],
-  ad:    ['#c2410c', '#fb923c'],
-  news:  ['#2563eb', '#60a5fa'],
+// blue for news.
+const ANALYSER_LOW_COLOUR = {
+  track: '#f472b6',
+  dj:    '#f472b6',
+  ad:    '#fb923c',
+  news:  '#60a5fa',
 };
+
+// Peak-marker behaviour: hold at the high-water mark for a beat, then sink.
+// The hold is what makes it read as a deliberate marker rather than lag —
+// without it the cap just trails the bar down and you never notice it.
+const ANALYSER_PEAK_HOLD_FRAMES = 30;    // ~0.5 s at 60 fps
+const ANALYSER_PEAK_FALL = 0.018;        // fraction of full height per frame
+
+/** Colour for a segment at `fraction` of the bar's full height (0 = bottom). */
+function analyserZoneColour(fraction, lowColour) {
+  if (fraction >= ANALYSER_ZONE_HOT) return ANALYSER_HOT_COLOUR;
+  if (fraction >= ANALYSER_ZONE_MID) return ANALYSER_MID_COLOUR;
+  return lowColour;
+}
 
 let analyser        = null;
 let _analyserBins   = null;   // Uint8Array, reused every frame
-let _analyserPeaks  = [];     // per-band peak-cap heights, 0..1
+let _analyserPeaks  = [];     // per-band peak-marker heights, 0..1
+let _analyserHolds  = [];     // per-band frames left before the marker sinks
 let _analyserRaf    = null;
 // Generation token, same discipline as _autoTriggerGen: a queued animation
 // frame that lands after stop/pause must not resurrect the loop.
@@ -403,28 +436,57 @@ function _drawAnalyserFrame() {
 
   c2d.clearRect(0, 0, w, h);
 
-  const [dim, bright] = ANALYSER_PALETTE[onAirMode] ?? ANALYSER_PALETTE.track;
+  const lowColour = ANALYSER_LOW_COLOUR[onAirMode] ?? ANALYSER_LOW_COLOUR.track;
+  const segH  = ANALYSER_SEG_H * dpr;
+  const step  = (ANALYSER_SEG_H + ANALYSER_SEG_GAP) * dpr;
+  const segs  = Math.max(1, Math.floor(h / step));
   const slot  = w / bands.length;
-  const barW  = Math.max(1, slot * 0.62);
-  const minH  = Math.max(1, dpr);       // always show a baseline sliver
-  const capH  = Math.max(1, dpr * 1.5);
+  const barW  = Math.max(1, slot * 0.7);
 
-  const grad = c2d.createLinearGradient(0, h, 0, 0);
-  grad.addColorStop(0, dim);
-  grad.addColorStop(1, bright);
+  // fillStyle assignment is the expensive part of a canvas fill loop, so only
+  // flip it when the colour actually changes. Segments run bottom-to-top
+  // through at most three zones, so this collapses ~250 assignments to ~100.
+  let fill = null;
+  const paint = (colour, x, y) => {
+    if (colour !== fill) { c2d.fillStyle = colour; fill = colour; }
+    c2d.fillRect(x, y, barW, segH);
+  };
 
-  // Bars first, then caps, so the fillStyle only flips once per frame.
-  c2d.fillStyle = grad;
   for (let i = 0; i < bands.length; i++) {
-    const barH = Math.max(minH, bands[i] * h);
-    c2d.fillRect(i * slot + (slot - barW) / 2, h - barH, barW, barH);
-    _analyserPeaks[i] = Math.max(bands[i], (_analyserPeaks[i] ?? 0) - ANALYSER_PEAK_FALL);
-  }
+    const level = bands[i];
 
-  c2d.fillStyle = bright;
-  for (let i = 0; i < bands.length; i++) {
-    const peakY = h - Math.max(minH, _analyserPeaks[i] * h);
-    c2d.fillRect(i * slot + (slot - barW) / 2, peakY, barW, capH);
+    // Peak marker: jump straight to a new high, hold it, then sink slowly.
+    if (level >= (_analyserPeaks[i] ?? 0)) {
+      _analyserPeaks[i] = level;
+      _analyserHolds[i] = ANALYSER_PEAK_HOLD_FRAMES;
+    } else if (_analyserHolds[i] > 0) {
+      _analyserHolds[i]--;
+    } else {
+      _analyserPeaks[i] = Math.max(0, _analyserPeaks[i] - ANALYSER_PEAK_FALL);
+    }
+
+    const x   = i * slot + (slot - barW) / 2;
+    const lit = Math.round(level * segs);
+    // -1 because segment indices are 0-based; a peak of exactly one segment's
+    // worth should mark segment 0.
+    const peakSeg = Math.round(_analyserPeaks[i] * segs) - 1;
+
+    for (let s = 0; s < segs; s++) {
+      const y = h - s * step - segH;
+      const fraction = segs === 1 ? 1 : s / (segs - 1);
+      let colour;
+      if (s === peakSeg && peakSeg >= lit) {
+        // Only mark the peak once it has detached from the bar. While the
+        // signal is still climbing the marker sits inside the lit stack, and
+        // painting it white there would just bleach the top of every bar.
+        colour = ANALYSER_PEAK_COLOUR;
+      } else if (s < lit) {
+        colour = analyserZoneColour(fraction, lowColour);
+      } else {
+        colour = ANALYSER_UNLIT_COLOUR;
+      }
+      paint(colour, x, y);
+    }
   }
 }
 
@@ -460,6 +522,7 @@ function stopAnalyser({ clear = false } = {}) {
     canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   }
   _analyserPeaks = new Array(ANALYSER_BANDS).fill(0);
+  _analyserHolds = new Array(ANALYSER_BANDS).fill(0);
 }
 
 // ── Auto-trigger scheduling ──────────────────────────────────────────────────

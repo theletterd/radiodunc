@@ -82,6 +82,45 @@ describe('computeBands', () => {
   });
 });
 
+// ── Level zones ──────────────────────────────────────────────────────────────
+// Classic bargraphs escalate colour toward the top of the scale. The station's
+// on-air colour holds the low zone so the display still reads pink/orange/blue
+// at normal levels; amber and red mark the hot end.
+
+describe('analyserZoneColour', () => {
+  beforeEach(() => { loadAppJs(); });
+
+  const AMBER = '#fbbf24';
+  const RED   = '#ef4444';
+  const PINK  = '#f472b6';
+
+  it('keeps the on-air colour through the low zone', () => {
+    expect(globalThis.analyserZoneColour(0, PINK)).toBe(PINK);
+    expect(globalThis.analyserZoneColour(0.3, PINK)).toBe(PINK);
+    expect(globalThis.analyserZoneColour(0.61, PINK)).toBe(PINK);
+  });
+
+  it('escalates to amber in the mid zone', () => {
+    expect(globalThis.analyserZoneColour(0.62, PINK)).toBe(AMBER);
+    expect(globalThis.analyserZoneColour(0.8, PINK)).toBe(AMBER);
+  });
+
+  it('escalates to red in the hot zone', () => {
+    expect(globalThis.analyserZoneColour(0.86, PINK)).toBe(RED);
+    expect(globalThis.analyserZoneColour(1, PINK)).toBe(RED);
+  });
+
+  it('escalates the same way regardless of the mode colour', () => {
+    // The hot end means "loud", not "which segment is on air" — so ads and
+    // news hit the same amber/red, only their low zone differs.
+    for (const low of ['#f472b6', '#fb923c', '#60a5fa']) {
+      expect(globalThis.analyserZoneColour(0.2, low)).toBe(low);
+      expect(globalThis.analyserZoneColour(0.7, low)).toBe(AMBER);
+      expect(globalThis.analyserZoneColour(0.95, low)).toBe(RED);
+    }
+  });
+});
+
 // ── Draw loop lifecycle ──────────────────────────────────────────────────────
 // Same failure class as the stale autoTrigger timers fixed in #166: a queued
 // animation frame that lands after stop must not resurrect the loop.
@@ -178,20 +217,41 @@ describe('analyser draw loop', () => {
     expect(canvas.classList.contains('live')).toBe(false);
   });
 
-  it('peak caps decay toward zero once the signal drops out', () => {
+  it('peak markers jump straight to a new high', () => {
     const analyser = globalThis.__getAnalyser();
-    // A loud frame to push the caps up…
     analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
     globalThis._drawAnalyserFrame();
-    const loud = [...globalThis.__getAnalyserPeaks()];
-    expect(Math.max(...loud)).toBeGreaterThan(0.9);
+    expect(Math.max(...globalThis.__getAnalyserPeaks())).toBeGreaterThan(0.9);
+  });
 
-    // …then silence. Caps should fall, but gradually — not snap to zero.
-    analyser.fakeSpectrum = new Uint8Array(1024);
+  it('peak markers hold at the high-water mark before sinking', () => {
+    // The hold is what makes the marker read as a deliberate indicator rather
+    // than the bar lagging: it parks at the transient's height for ~half a
+    // second, so you actually see where the signal got to.
+    const analyser = globalThis.__getAnalyser();
+    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
     globalThis._drawAnalyserFrame();
-    const afterOne = [...globalThis.__getAnalyserPeaks()];
-    expect(Math.max(...afterOne)).toBeLessThan(Math.max(...loud));
-    expect(Math.max(...afterOne)).toBeGreaterThan(0.8);
+    const high = Math.max(...globalThis.__getAnalyserPeaks());
+
+    analyser.fakeSpectrum = new Uint8Array(1024);   // signal drops out
+    for (let i = 0; i < 10; i++) globalThis._drawAnalyserFrame();
+
+    // Still parked at the high-water mark, even though the bars are at zero.
+    expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(high);
+  });
+
+  it('peak markers sink to zero once the hold expires', () => {
+    const analyser = globalThis.__getAnalyser();
+    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
+    globalThis._drawAnalyserFrame();
+    const high = Math.max(...globalThis.__getAnalyserPeaks());
+
+    analyser.fakeSpectrum = new Uint8Array(1024);
+    // Past the hold window but not far enough to have fallen all the way.
+    for (let i = 0; i < 40; i++) globalThis._drawAnalyserFrame();
+    const sinking = Math.max(...globalThis.__getAnalyserPeaks());
+    expect(sinking).toBeLessThan(high);
+    expect(sinking).toBeGreaterThan(0);
 
     for (let i = 0; i < 200; i++) globalThis._drawAnalyserFrame();
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(0);
