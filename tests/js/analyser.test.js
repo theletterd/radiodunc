@@ -7,8 +7,8 @@ import { loadAppJs } from './_loadApp.js';
 // mapping being right, and it needs no AudioContext to test.
 
 const SAMPLE_RATE = 48000;
-const BIN_COUNT = 1024;           // fftSize 2048 → 1024 bins
-const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 23.4375 Hz
+const BIN_COUNT = 4096;           // fftSize 8192 → 4096 bins
+const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 5.86 Hz
 
 /** Build a spectrum with a single loud bin at the bin covering `hz`. */
 function spectrumWithToneAt(hz, level = 255) {
@@ -67,11 +67,29 @@ describe('computeBands', () => {
   });
 
   it('gives the lowest bands at least one bin instead of dividing by zero', () => {
-    // Bands below ~23 Hz wide are narrower than a single 23.4 Hz bin. Those
-    // must still produce a finite number rather than NaN from a 0-width range.
+    // At a high band count the lowest bands are narrower than a single bin.
+    // Those must still produce a finite number rather than NaN from a
+    // zero-width bin range.
     const bands = globalThis.computeBands(new Uint8Array(BIN_COUNT).fill(128), SAMPLE_RATE, 64);
     expect(bands.every(v => Number.isFinite(v))).toBe(true);
     expect(bands.every(v => v > 0)).toBe(true);
+  });
+
+  it('takes the peak of a band, not the mean', () => {
+    // This is the fix for the display reading "flat" at the top end. The
+    // highest band spans ~2400 bins; averaging buries a single tonal peak
+    // under all the quiet bins around it, so the treble bars sat low and
+    // barely moved no matter what the music did. Peak-of-band tracks the
+    // loudest content instead — which is also what a hardware bargraph's
+    // band-pass-plus-peak-detector approximates.
+    const data = new Uint8Array(BIN_COUNT);
+    data[2500] = 255;   // 14.6 kHz — one loud bin inside the 441-bin top band
+
+    const bands = globalThis.computeBands(data, SAMPLE_RATE, 34);
+
+    // Peak-of-band lights it fully. The mean over those 441 bins would have
+    // been 0.0023 — under one pixel of a 90px display, i.e. invisible.
+    expect(bands[33]).toBe(1);
   });
 
   it('degrades to zeros on empty or nonsense input rather than throwing', () => {
@@ -147,11 +165,18 @@ describe('analyser draw loop', () => {
     return Boolean(cb);
   }
 
-  it('initAudio wires an analyser and sizes its bin buffer', () => {
+  it('initAudio wires an analyser and configures it for the display', () => {
     const a = globalThis.__getAnalyser();
     expect(a).not.toBeNull();
-    expect(a.fftSize).toBe(2048);
-    expect(a.frequencyBinCount).toBe(1024);
+    // 8192 is needed to keep the narrow low bands independent — see the
+    // ANALYSER_FFT_SIZE comment. Pinning it here so a future "2048 is the
+    // normal value" tidy-up has to argue with the measurement.
+    expect(a.fftSize).toBe(8192);
+    expect(a.frequencyBinCount).toBe(4096);
+    // Raised off the -100 dB default so quiet bands go dark instead of
+    // sitting permanently part-lit on the noise floor.
+    expect(a.minDecibels).toBe(-80);
+    expect(a.smoothingTimeConstant).toBeLessThan(0.75);
   });
 
   it('startAnalyser marks the canvas live and queues a frame', () => {
@@ -219,7 +244,7 @@ describe('analyser draw loop', () => {
 
   it('peak markers jump straight to a new high', () => {
     const analyser = globalThis.__getAnalyser();
-    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
     globalThis._drawAnalyserFrame();
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBeGreaterThan(0.9);
   });
@@ -229,11 +254,11 @@ describe('analyser draw loop', () => {
     // than the bar lagging: it parks at the transient's height for ~half a
     // second, so you actually see where the signal got to.
     const analyser = globalThis.__getAnalyser();
-    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
     globalThis._drawAnalyserFrame();
     const high = Math.max(...globalThis.__getAnalyserPeaks());
 
-    analyser.fakeSpectrum = new Uint8Array(1024);   // signal drops out
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);   // signal drops out
     for (let i = 0; i < 10; i++) globalThis._drawAnalyserFrame();
 
     // Still parked at the high-water mark, even though the bars are at zero.
@@ -242,11 +267,11 @@ describe('analyser draw loop', () => {
 
   it('peak markers sink to zero once the hold expires', () => {
     const analyser = globalThis.__getAnalyser();
-    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
     globalThis._drawAnalyserFrame();
     const high = Math.max(...globalThis.__getAnalyserPeaks());
 
-    analyser.fakeSpectrum = new Uint8Array(1024);
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);
     // Past the hold window but not far enough to have fallen all the way.
     for (let i = 0; i < 40; i++) globalThis._drawAnalyserFrame();
     const sinking = Math.max(...globalThis.__getAnalyserPeaks());

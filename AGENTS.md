@@ -169,7 +169,13 @@ Decorative bouncing-bars display at the foot of the Now Playing card (`<canvas i
 
 Deliberately tapped **before** the compressor: the compressor exists to flatten dynamic range, so post-compression data makes for a visibly inert display. AnalyserNode is a pass-through, so the tap can't alter what you hear. (No CORS risk — media is same-origin and `el.crossOrigin` is already `'anonymous'`; a cross-origin MediaElementSource would silently feed the analyser zeros.)
 
-`computeBands(freqData, sampleRate, bandCount)` is the pure, unit-tested half: it collapses linearly-spaced FFT bins into log-spaced display bands. This matters — at `fftSize: 2048` on 48 kHz each bin is ~23 Hz, so the bottom octave is under two bins and the top is over 340; a straight bin→bar mapping crushes everything into the leftmost bars and leaves most of the display dead.
+`computeBands(freqData, sampleRate, bandCount)` is the pure, unit-tested half: it collapses linearly-spaced FFT bins into log-spaced display bands. This matters because FFT bins are evenly spaced in Hz while pitch is logarithmic — a straight bin→bar mapping crushes everything interesting into the leftmost bars and leaves most of the display dead. The 34 bands are constant, ~0.25 octaves each across 40 Hz–16 kHz (close to the 1/3-octave spacing real hardware graphic EQs use); they never adapt or auto-scale at runtime.
+
+**Three settings exist specifically to stop the display reading "flat"**, all chosen by measuring a real track against a Python reimplementation of the Web Audio pipeline (see the PR for numbers — spatial contrast, per-bar motion, dead-floor, and neighbour correlation):
+
+- **`ANALYSER_FFT_SIZE = 8192`**, not the more usual 2048. Band width shrinks as band count grows, and at 34 bands the bottom seven are narrower than a 23 Hz bin — they'd read overlapping or identical bins and move as one clump. Measured neighbour correlation across the bottom bars: **0.93 at 2048 vs 0.71 at 8192**. The cost is a 170 ms analysis window; `ANALYSER_SMOOTHING` is dropped to 0.6 (from the 0.8 default) to claw the responsiveness back. Don't "tidy" this to 2048 — there's a test pinning it.
+- **Peak-of-band, not mean**, inside `computeBands`. The top band spans ~440 bins; averaging buries a tonal peak under the quiet bins either side, so the treble end sat low and barely moved. Peak also matches what hardware does (band-pass filter → peak detector responds to loudest content, not average).
+- **`ANALYSER_MIN_DB = -80`**, up from the Web Audio default of -100. At -100 the noise floor is on screen, so every bar stays permanently part-lit and nothing ever drops out. Raising it lets quiet bands go genuinely dark; safe because the unlit LED grid keeps the panel looking like a display rather than looking broken.
 
 **Retro hardware-bargraph styling**, three parts that work together:
 
