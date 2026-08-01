@@ -29,6 +29,8 @@ const EXPORTED_NAMES = [
   '_fmtHourBoundary', '_fmtShiftRange',
   '_autoResizeTextarea',
   'initAudio',
+  // spectrum analyser
+  'computeBands', 'startAnalyser', 'stopAnalyser', '_drawAnalyserFrame',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',
@@ -91,6 +93,12 @@ function _appSource() {
       `globalThis.__getOnAirMode = () => onAirMode;`,
       `globalThis.__getAutoTriggerTimer = () => autoTriggerTimer;`,
       `globalThis.__bumpAutoTriggerGen = () => { _autoTriggerGen++; };`,
+      `globalThis.__getAnalyser = () => analyser;`,
+      `globalThis.__setAnalyser = (a) => { analyser = a; };`,
+      `globalThis.__getAnalyserRaf = () => _analyserRaf;`,
+      `globalThis.__getAnalyserGen = () => _analyserGen;`,
+      `globalThis.__getAnalyserPeaks = () => _analyserPeaks;`,
+      `globalThis.__setAnalyserBins = (b) => { _analyserBins = b; };`,
       `globalThis.__getAutoTriggerRemaining = () => _autoTriggerRemaining;`,
       `globalThis.__getStingerTimer = () => _stingerTimer;`,
       `globalThis.__getPrefetchTimer = () => _prefetchTimer;`,

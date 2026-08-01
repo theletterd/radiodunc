@@ -236,7 +236,21 @@ function initAudio() {
   compressor.attack.value = 0.005;   // 5 ms — fast enough to catch peaks
   compressor.release.value = 0.1;    // 100 ms — releases between phrases, not syllables
 
-  masterGain.connect(compressor);
+  // Spectrum analyser tap. Deliberately placed BEFORE the compressor: the
+  // compressor's whole job is flattening dynamic range, so post-compression
+  // data makes for a noticeably inert display. Pre-compression is what the
+  // music actually looks like. AnalyserNode is a pass-through — it reads the
+  // signal without altering it, so inserting it here can't change what you hear.
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = ANALYSER_FFT_SIZE;
+  // Built-in exponential smoothing between frames. 0.75 keeps the bars lively
+  // without the jitter you get from raw per-frame FFT output.
+  analyser.smoothingTimeConstant = 0.75;
+  _analyserBins  = new Uint8Array(analyser.frequencyBinCount);
+  _analyserPeaks = new Array(ANALYSER_BANDS).fill(0);
+
+  masterGain.connect(analyser);
+  analyser.connect(compressor);
   compressor.connect(ctx.destination);
 
   for (const key of ['A', 'B']) {
@@ -289,6 +303,163 @@ function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ
   src.start(startAt);
   console.log(`[audio] ${label}: start=${startAt.toFixed(3)} dur=${buf.duration.toFixed(2)} gain=${gain.toFixed(2)} in=${inS.toFixed(2)}`);
   return startAt + buf.duration;
+}
+
+// ── Spectrum analyser ─────────────────────────────────────────────────────────
+// Decorative bouncing-bars display in the Now Playing card. Reads the master
+// bus (see initAudio) so every source — music, DJ banter, news, ads, stingers —
+// drives it without per-source wiring.
+
+const ANALYSER_FFT_SIZE = 2048;
+const ANALYSER_BANDS    = 24;
+// Display range. Below ~40 Hz is mostly rumble the laptop speakers won't
+// reproduce anyway; above 16 kHz there's rarely enough energy to see.
+const ANALYSER_F_MIN    = 40;
+const ANALYSER_F_MAX    = 16000;
+// Peak-cap fall rate, in fraction-of-full-height per frame (~0.7 s top to
+// bottom at 60 fps). The slow fall is what makes it read as a graphic
+// equaliser rather than a generic visualiser.
+const ANALYSER_PEAK_FALL = 0.024;
+
+// Bar gradients keyed by on-air mode, matching the existing colour language in
+// styles.css (#nowPlaying[data-mode=...]): pink for music/DJ, orange for ads,
+// blue for news. Each pair is [bottom, top] of a vertical gradient.
+const ANALYSER_PALETTE = {
+  track: ['#db2777', '#f472b6'],
+  dj:    ['#db2777', '#f472b6'],
+  ad:    ['#c2410c', '#fb923c'],
+  news:  ['#2563eb', '#60a5fa'],
+};
+
+let analyser        = null;
+let _analyserBins   = null;   // Uint8Array, reused every frame
+let _analyserPeaks  = [];     // per-band peak-cap heights, 0..1
+let _analyserRaf    = null;
+// Generation token, same discipline as _autoTriggerGen: a queued animation
+// frame that lands after stop/pause must not resurrect the loop.
+let _analyserGen    = 0;
+
+// Collapse linear FFT bins into log-spaced display bands.
+//
+// getByteFrequencyData hands back bins evenly spaced in Hz, but pitch — and
+// the way a graphic equaliser is drawn — is logarithmic. At fftSize 2048 on a
+// 48 kHz context each bin is ~23 Hz, so the bottom octave (40–80 Hz) is under
+// two bins while the top octave (8–16 kHz) is over 340. Mapping bins straight
+// to bars would crush everything interesting into the leftmost few and leave
+// most of the display dead.
+//
+// Pure function of its inputs so it can be unit-tested without a real
+// AudioContext. Returns `bandCount` values normalised to 0..1.
+function computeBands(freqData, sampleRate, bandCount = ANALYSER_BANDS,
+                      { fMin = ANALYSER_F_MIN, fMax = ANALYSER_F_MAX } = {}) {
+  const bands = new Array(Math.max(0, bandCount)).fill(0);
+  if (!freqData || !freqData.length || !sampleRate || bandCount <= 0) return bands;
+
+  // freqData spans DC..Nyquist across its full length.
+  const binWidth = (sampleRate / 2) / freqData.length;
+  if (!binWidth) return bands;
+  const ratio = fMax / fMin;
+
+  for (let i = 0; i < bandCount; i++) {
+    const fLo = fMin * Math.pow(ratio, i / bandCount);
+    const fHi = fMin * Math.pow(ratio, (i + 1) / bandCount);
+    let lo = Math.floor(fLo / binWidth);
+    let hi = Math.ceil(fHi / binWidth);
+    lo = Math.max(0, Math.min(lo, freqData.length - 1));
+    // Always at least one bin wide — the lowest bands are narrower than a
+    // single bin, and an empty range would divide by zero.
+    hi = Math.max(lo + 1, Math.min(hi, freqData.length));
+
+    let sum = 0;
+    for (let b = lo; b < hi; b++) sum += freqData[b];
+    bands[i] = sum / (hi - lo) / 255;
+  }
+  return bands;
+}
+
+function _drawAnalyserFrame() {
+  const canvas = document.getElementById('analyser');
+  if (!canvas || !analyser || !ctx || !_analyserBins) return;
+
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  if (!cssW || !cssH) return;  // card hidden / not laid out yet
+
+  // Match the backing store to the CSS box so bars stay crisp on HiDPI and
+  // after a window resize. Assigning width/height also clears the canvas.
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(cssW * dpr);
+  const h = Math.round(cssH * dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+
+  const c2d = canvas.getContext('2d');
+  if (!c2d) return;
+
+  analyser.getByteFrequencyData(_analyserBins);
+  const bands = computeBands(_analyserBins, ctx.sampleRate);
+
+  c2d.clearRect(0, 0, w, h);
+
+  const [dim, bright] = ANALYSER_PALETTE[onAirMode] ?? ANALYSER_PALETTE.track;
+  const slot  = w / bands.length;
+  const barW  = Math.max(1, slot * 0.62);
+  const minH  = Math.max(1, dpr);       // always show a baseline sliver
+  const capH  = Math.max(1, dpr * 1.5);
+
+  const grad = c2d.createLinearGradient(0, h, 0, 0);
+  grad.addColorStop(0, dim);
+  grad.addColorStop(1, bright);
+
+  // Bars first, then caps, so the fillStyle only flips once per frame.
+  c2d.fillStyle = grad;
+  for (let i = 0; i < bands.length; i++) {
+    const barH = Math.max(minH, bands[i] * h);
+    c2d.fillRect(i * slot + (slot - barW) / 2, h - barH, barW, barH);
+    _analyserPeaks[i] = Math.max(bands[i], (_analyserPeaks[i] ?? 0) - ANALYSER_PEAK_FALL);
+  }
+
+  c2d.fillStyle = bright;
+  for (let i = 0; i < bands.length; i++) {
+    const peakY = h - Math.max(minH, _analyserPeaks[i] * h);
+    c2d.fillRect(i * slot + (slot - barW) / 2, peakY, barW, capH);
+  }
+}
+
+function _analyserLoop(gen) {
+  // Stale frame: a newer start/stop superseded this loop. Bail rather than
+  // redraw (or, worse, keep a dead loop alive after stopPlayback).
+  if (gen !== _analyserGen) return;
+  _drawAnalyserFrame();
+  _analyserRaf = requestAnimationFrame(() => _analyserLoop(gen));
+}
+
+function startAnalyser() {
+  if (!analyser) return;
+  stopAnalyser({ clear: false });   // supersede any existing loop
+  document.getElementById('analyser')?.classList.add('live');
+  const gen = _analyserGen;
+  _analyserLoop(gen);
+}
+
+// clear:true wipes the canvas (playback stopped — no bars at all).
+// clear:false leaves the last frame painted, which is what pause should look
+// like: frozen mid-signal rather than blanked.
+function stopAnalyser({ clear = false } = {}) {
+  _analyserGen++;
+  if (_analyserRaf !== null) {
+    cancelAnimationFrame(_analyserRaf);
+    _analyserRaf = null;
+  }
+  if (!clear) return;
+  const canvas = document.getElementById('analyser');
+  canvas?.classList.remove('live');
+  if (canvas && canvas.width && canvas.height) {
+    canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  _analyserPeaks = new Array(ANALYSER_BANDS).fill(0);
 }
 
 // ── Auto-trigger scheduling ──────────────────────────────────────────────────
@@ -687,6 +858,7 @@ async function _playCurrentTrackFromServer() {
 
   scheduleAutoTrigger(cur.el.duration);
   schedulePrefetch(cur.el.duration);
+  startAnalyser();
 
   renderAll();
 }
@@ -725,6 +897,7 @@ async function stopPlayback() {
   clearAutoTrigger();
   clearPrefetchTimer();
   clearStingerTimer();
+  stopAnalyser({ clear: true });
   stingerEndTime = 0;
   clearModeTimers();
   onAirMode = 'track';
@@ -757,6 +930,11 @@ async function pausePlayback() {
   // Freeze the AudioContext — all scheduled audio and gain ramps freeze too.
   await ctx.suspend();
 
+  // Stop the draw loop but leave the last frame on screen: a suspended context
+  // returns frozen FFT data anyway, so redrawing would burn frames painting an
+  // identical picture, and a frozen display is what "paused" should look like.
+  stopAnalyser();
+
   // Cancel the auto-trigger timer; on resume we reschedule it from el.currentTime.
   if (autoTriggerTimer !== null) {
     clearAutoTrigger();
@@ -777,6 +955,7 @@ async function resumePlayback() {
   paused = false;
 
   await ctx.resume();
+  startAnalyser();
 
   // Reschedule mode timers based on how far the AudioContext is now vs. their targets.
   const nowAudio = ctx.currentTime;
