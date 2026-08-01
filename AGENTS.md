@@ -164,6 +164,17 @@ Per-DJ cache-bust: `_djAvatarTs` Map updates per DJ on regenerate so refetching 
 - Queue drag-and-drop uses HTML5 native events; reorder hits `POST /player/queue/reorder`
 - Volume is persisted to `localStorage`
 
+### Spectrum analyser
+Decorative bouncing-bars display at the foot of the Now Playing card (`<canvas id="analyser">`). One `AnalyserNode` tapped off the master bus in `initAudio` sees every source — music, DJ, news, ads, stingers — with no per-source wiring, because everything already funnels through `masterGain`.
+
+Deliberately tapped **before** the compressor: the compressor exists to flatten dynamic range, so post-compression data makes for a visibly inert display. AnalyserNode is a pass-through, so the tap can't alter what you hear. (No CORS risk — media is same-origin and `el.crossOrigin` is already `'anonymous'`; a cross-origin MediaElementSource would silently feed the analyser zeros.)
+
+`computeBands(freqData, sampleRate, bandCount)` is the pure, unit-tested half: it collapses linearly-spaced FFT bins into log-spaced display bands. This matters — at `fftSize: 2048` on 48 kHz each bin is ~23 Hz, so the bottom octave is under two bins and the top is over 340; a straight bin→bar mapping crushes everything into the leftmost bars and leaves most of the display dead. Bar colours come from `ANALYSER_PALETTE`, keyed by `onAirMode` to mirror the `#nowPlaying[data-mode=...]` colours in styles.css (pink music/DJ, orange ads, blue news).
+
+The draw loop carries a **generation token** (`_analyserGen`), the same discipline as `_autoTriggerGen` — a `requestAnimationFrame` callback already in the browser's frame queue when stop/pause fires must not redraw or re-arm. `stopAnalyser({clear: true})` wipes and hides the canvas (stop); plain `stopAnalyser()` leaves the last frame painted, which is what pause should look like since a suspended context returns frozen FFT data anyway.
+
+Test note: `tests/js/setup.js` overrides happy-dom's `requestAnimationFrame` with a queue-only stub (`__rafCallbacks`) — a self-firing implementation would recurse forever against a self-re-arming loop. It also stubs the canvas 2D context and `clientWidth`/`clientHeight`, since happy-dom has no layout and the draw bails on a zero-sized box.
+
 ### Playback instrumentation
 `_logPlayback(event, fields)` captures full state (`serverIsPlaying, paused, transitioning, hasCtx, onAirMode`) at every playback entry point — `triggerTransition`, `startPlayback`, `resumeAfterRefresh`, `stopPlayback`, `pausePlayback`, `resumePlayback`, the autoTrigger callback, and the visibilitychange handler. Used to diagnose intermittent bugs (e.g. spurious playback after laptop wake) from a console transcript.
 

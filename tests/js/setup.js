@@ -26,12 +26,29 @@ class FakeBufferSource {
   connect = vi.fn();
   start = vi.fn();
 }
+// Drives the spectrum analyser. getByteFrequencyData fills the caller's array
+// from `fakeSpectrum` so tests can pin what the bars are reading; the default
+// is silence. frequencyBinCount is fftSize/2, matching the real node.
+class FakeAnalyserNode {
+  fftSize = 2048;
+  smoothingTimeConstant = 0.8;
+  fakeSpectrum = null;
+  connect = vi.fn();
+  get frequencyBinCount() { return this.fftSize / 2; }
+  getByteFrequencyData(target) {
+    for (let i = 0; i < target.length; i++) {
+      target[i] = this.fakeSpectrum ? (this.fakeSpectrum[i] ?? 0) : 0;
+    }
+  }
+}
 globalThis.AudioContext = class FakeAudioContext {
   constructor() {
     this.currentTime = 0;
+    this.sampleRate = 48000;
     this.destination = {};
   }
   createGain() { return new FakeGainNode(); }
+  createAnalyser() { return new FakeAnalyserNode(); }
   createMediaElementSource() { return { connect: vi.fn() }; }
   createBufferSource() { return new FakeBufferSource(); }
   createDynamicsCompressor() {
@@ -62,6 +79,51 @@ if (typeof globalThis.Audio !== 'undefined') {
 if (typeof globalThis.Element !== 'undefined' && !globalThis.Element.prototype.animate) {
   globalThis.Element.prototype.animate = function () {
     return { finished: Promise.resolve(), cancel: () => {} };
+  };
+}
+
+// ── Canvas 2D context ───────────────────────────────────────────────────────
+// happy-dom has no canvas rendering, so getContext('2d') returns null and the
+// analyser's draw would bail before doing anything. Stub the handful of 2D
+// calls _drawAnalyserFrame makes; the drawing itself isn't asserted on (the
+// interesting logic is computeBands, which is pure), but the draw path has to
+// run without throwing so the loop/lifecycle tests are meaningful.
+if (typeof globalThis.HTMLCanvasElement !== 'undefined') {
+  globalThis.HTMLCanvasElement.prototype.getContext = function () {
+    return {
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      createLinearGradient: () => ({ addColorStop: vi.fn() }),
+      set fillStyle(_v) {},
+      get fillStyle() { return '#000'; },
+    };
+  };
+  // clientWidth/clientHeight are 0 in happy-dom (no layout). The draw bails on
+  // a zero-sized box, so give the canvas a plausible laid-out size.
+  Object.defineProperty(globalThis.HTMLCanvasElement.prototype, 'clientWidth', {
+    configurable: true, get() { return 480; },
+  });
+  Object.defineProperty(globalThis.HTMLCanvasElement.prototype, 'clientHeight', {
+    configurable: true, get() { return 56; },
+  });
+}
+
+// ── requestAnimationFrame ───────────────────────────────────────────────────
+// Overrides happy-dom's timer-backed implementation on purpose. The analyser
+// loop re-arms itself every frame, so anything that fires callbacks on its own
+// either recurses forever or leaks a live loop between test files. This
+// version only queues; tests pump frames explicitly via __rafCallbacks.
+// app.js's analyser loop is the only rAF user in the codebase.
+{
+  let _rafId = 0;
+  globalThis.__rafCallbacks = new Map();
+  globalThis.requestAnimationFrame = (cb) => {
+    const id = ++_rafId;
+    globalThis.__rafCallbacks.set(id, cb);
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    globalThis.__rafCallbacks.delete(id);
   };
 }
 
