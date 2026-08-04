@@ -310,23 +310,29 @@ function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ
 // bus (see initAudio) so every source — music, DJ banter, news, ads, stingers —
 // drives it without per-source wiring.
 
-// 8192 rather than the more usual 2048. Band width shrinks as band count
-// grows, and at 34 log-spaced bands the bottom seven are narrower than a
-// 23 Hz bin — they'd read overlapping (sometimes identical) bins and move as
-// one blurry clump. Measured against real audio, neighbouring low bars
-// correlate at 0.93 with 2048 bins versus 0.71 at 8192. The cost is a 170 ms
-// analysis window, so transients smear slightly; ANALYSER_SMOOTHING is
-// lowered to claw that responsiveness back.
-const ANALYSER_FFT_SIZE = 8192;
-const ANALYSER_BANDS    = 34;
+// These two are coupled — don't change one without rechecking the other.
+//
+// Band width shrinks as band count grows, and a band narrower than one FFT bin
+// can't be measured independently: neighbouring bars end up reading the same
+// bins and moving as one clump. Measured against real audio at 34 bands, the
+// bottom bars correlated at 0.93 with a 2048-point FFT (essentially the same
+// bar drawn seven times) versus 0.71 at 8192.
+//
+// At 20 bands every band is comfortably wider than an 11.7 Hz bin, so 4096 is
+// enough — and it's the cheaper choice, an 85 ms analysis window against
+// 8192's 170 ms, which means visibly snappier response to transients. Going
+// back above ~20 bands would require 8192 again.
+const ANALYSER_FFT_SIZE = 4096;
+const ANALYSER_BANDS    = 20;
 // Floor of the dB window mapped onto the 0..255 byte scale. The Web Audio
 // default of -100 dB puts the noise floor on screen, so every bar stays part-
 // lit and nothing ever drops out — a big part of why the display read as flat.
 // -80 dB lets quiet bands go genuinely dark. Safe to do here because the unlit
 // LED grid stays visible, so a dark display still looks like a display.
 const ANALYSER_MIN_DB   = -80;
-// Below the 0.8 default: the larger FFT already integrates over 170 ms, so
-// heavy frame smoothing on top of it is what tips the display into sluggish.
+// Below the 0.8 default. The FFT window already integrates over 85 ms; piling
+// heavy frame smoothing on top is what tips the display into sluggish. Raise
+// this if the bars ever look jittery rather than lively.
 const ANALYSER_SMOOTHING = 0.6;
 // Display range. Below ~40 Hz is mostly rumble the laptop speakers won't
 // reproduce anyway; above 16 kHz there's rarely enough energy to see.
@@ -441,7 +447,7 @@ function computeBands(freqData, sampleRate, bandCount = ANALYSER_BANDS,
     hi = Math.max(lo + 1, Math.min(hi, freqData.length));
 
     // Peak of the range, not the mean. The top bands span hundreds of bins
-    // (band 33 covers ~2400), and averaging buries a tonal peak under all the
+    // (the top band covers ~350), and averaging buries a tonal peak under the
     // quiet bins either side of it — so the treble end sat low and barely
     // moved regardless of what the music did. Taking the loudest bin in the
     // band is also what hardware bargraphs approximate, since a band-pass

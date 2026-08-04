@@ -7,8 +7,8 @@ import { loadAppJs } from './_loadApp.js';
 // mapping being right, and it needs no AudioContext to test.
 
 const SAMPLE_RATE = 48000;
-const BIN_COUNT = 4096;           // fftSize 8192 → 4096 bins
-const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 5.86 Hz
+const BIN_COUNT = 2048;           // fftSize 4096 → 2048 bins
+const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 11.72 Hz
 
 /** Build a spectrum with a single loud bin at the bin covering `hz`. */
 function spectrumWithToneAt(hz, level = 255) {
@@ -77,19 +77,19 @@ describe('computeBands', () => {
 
   it('takes the peak of a band, not the mean', () => {
     // This is the fix for the display reading "flat" at the top end. The
-    // highest band spans ~2400 bins; averaging buries a single tonal peak
+    // highest band spans ~350 bins; averaging buries a single tonal peak
     // under all the quiet bins around it, so the treble bars sat low and
     // barely moved no matter what the music did. Peak-of-band tracks the
     // loudest content instead — which is also what a hardware bargraph's
     // band-pass-plus-peak-detector approximates.
     const data = new Uint8Array(BIN_COUNT);
-    data[2500] = 255;   // 14.6 kHz — one loud bin inside the 441-bin top band
+    data[1195] = 255;   // 14 kHz — one loud bin inside the 353-bin top band
 
-    const bands = globalThis.computeBands(data, SAMPLE_RATE, 34);
+    const bands = globalThis.computeBands(data, SAMPLE_RATE, 20);
 
-    // Peak-of-band lights it fully. The mean over those 441 bins would have
-    // been 0.0023 — under one pixel of a 90px display, i.e. invisible.
-    expect(bands[33]).toBe(1);
+    // Peak-of-band lights it fully. The mean over those 353 bins would have
+    // been 0.0028 — under one pixel of a 90px display, i.e. invisible.
+    expect(bands[19]).toBe(1);
   });
 
   it('degrades to zeros on empty or nonsense input rather than throwing', () => {
@@ -168,11 +168,12 @@ describe('analyser draw loop', () => {
   it('initAudio wires an analyser and configures it for the display', () => {
     const a = globalThis.__getAnalyser();
     expect(a).not.toBeNull();
-    // 8192 is needed to keep the narrow low bands independent — see the
-    // ANALYSER_FFT_SIZE comment. Pinning it here so a future "2048 is the
-    // normal value" tidy-up has to argue with the measurement.
-    expect(a.fftSize).toBe(8192);
-    expect(a.frequencyBinCount).toBe(4096);
+    // fftSize is coupled to ANALYSER_BANDS: 4096 is only sufficient because
+    // there are 20 bands. Pinned here so raising the band count without
+    // revisiting the FFT size trips a test rather than quietly reintroducing
+    // the correlated-low-end problem.
+    expect(a.fftSize).toBe(4096);
+    expect(a.frequencyBinCount).toBe(2048);
     // Raised off the -100 dB default so quiet bands go dark instead of
     // sitting permanently part-lit on the noise floor.
     expect(a.minDecibels).toBe(-80);
