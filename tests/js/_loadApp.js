@@ -30,7 +30,8 @@ const EXPORTED_NAMES = [
   '_autoResizeTextarea',
   'initAudio',
   // spectrum analyser
-  'computeBands', 'startAnalyser', 'stopAnalyser', '_drawAnalyserFrame',
+  'computeBands', 'analyserZoneColour',
+  'startAnalyser', 'stopAnalyser', '_drawAnalyserFrame',
   // schedule rendering / mode
   'renderSchedule', '_attachBlockClickHandlers',
   '_setSchedulerMode', '_setSchedulerSubView',
@@ -98,6 +99,7 @@ function _appSource() {
       `globalThis.__getAnalyserRaf = () => _analyserRaf;`,
       `globalThis.__getAnalyserGen = () => _analyserGen;`,
       `globalThis.__getAnalyserPeaks = () => _analyserPeaks;`,
+      `globalThis.__getAnalyserHolds = () => _analyserHolds;`,
       `globalThis.__setAnalyserBins = (b) => { _analyserBins = b; };`,
       `globalThis.__getAutoTriggerRemaining = () => _autoTriggerRemaining;`,
       `globalThis.__getStingerTimer = () => _stingerTimer;`,

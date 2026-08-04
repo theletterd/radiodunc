@@ -7,8 +7,8 @@ import { loadAppJs } from './_loadApp.js';
 // mapping being right, and it needs no AudioContext to test.
 
 const SAMPLE_RATE = 48000;
-const BIN_COUNT = 1024;           // fftSize 2048 → 1024 bins
-const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 23.4375 Hz
+const BIN_COUNT = 2048;           // fftSize 4096 → 2048 bins
+const BIN_WIDTH = (SAMPLE_RATE / 2) / BIN_COUNT;  // 11.72 Hz
 
 /** Build a spectrum with a single loud bin at the bin covering `hz`. */
 function spectrumWithToneAt(hz, level = 255) {
@@ -67,11 +67,29 @@ describe('computeBands', () => {
   });
 
   it('gives the lowest bands at least one bin instead of dividing by zero', () => {
-    // Bands below ~23 Hz wide are narrower than a single 23.4 Hz bin. Those
-    // must still produce a finite number rather than NaN from a 0-width range.
+    // At a high band count the lowest bands are narrower than a single bin.
+    // Those must still produce a finite number rather than NaN from a
+    // zero-width bin range.
     const bands = globalThis.computeBands(new Uint8Array(BIN_COUNT).fill(128), SAMPLE_RATE, 64);
     expect(bands.every(v => Number.isFinite(v))).toBe(true);
     expect(bands.every(v => v > 0)).toBe(true);
+  });
+
+  it('takes the peak of a band, not the mean', () => {
+    // This is the fix for the display reading "flat" at the top end. The
+    // highest band spans ~350 bins; averaging buries a single tonal peak
+    // under all the quiet bins around it, so the treble bars sat low and
+    // barely moved no matter what the music did. Peak-of-band tracks the
+    // loudest content instead — which is also what a hardware bargraph's
+    // band-pass-plus-peak-detector approximates.
+    const data = new Uint8Array(BIN_COUNT);
+    data[1195] = 255;   // 14 kHz — one loud bin inside the 353-bin top band
+
+    const bands = globalThis.computeBands(data, SAMPLE_RATE, 20);
+
+    // Peak-of-band lights it fully. The mean over those 353 bins would have
+    // been 0.0028 — under one pixel of a 90px display, i.e. invisible.
+    expect(bands[19]).toBe(1);
   });
 
   it('degrades to zeros on empty or nonsense input rather than throwing', () => {
@@ -79,6 +97,45 @@ describe('computeBands', () => {
     expect(globalThis.computeBands(new Uint8Array(0), SAMPLE_RATE, 8).every(v => v === 0)).toBe(true);
     expect(globalThis.computeBands(new Uint8Array(BIN_COUNT), 0, 8).every(v => v === 0)).toBe(true);
     expect(globalThis.computeBands(new Uint8Array(BIN_COUNT), SAMPLE_RATE, 0)).toEqual([]);
+  });
+});
+
+// ── Level zones ──────────────────────────────────────────────────────────────
+// Classic bargraphs escalate colour toward the top of the scale. The station's
+// on-air colour holds the low zone so the display still reads pink/orange/blue
+// at normal levels; amber and red mark the hot end.
+
+describe('analyserZoneColour', () => {
+  beforeEach(() => { loadAppJs(); });
+
+  const AMBER = '#fbbf24';
+  const RED   = '#ef4444';
+  const PINK  = '#f472b6';
+
+  it('keeps the on-air colour through the low zone', () => {
+    expect(globalThis.analyserZoneColour(0, PINK)).toBe(PINK);
+    expect(globalThis.analyserZoneColour(0.3, PINK)).toBe(PINK);
+    expect(globalThis.analyserZoneColour(0.61, PINK)).toBe(PINK);
+  });
+
+  it('escalates to amber in the mid zone', () => {
+    expect(globalThis.analyserZoneColour(0.62, PINK)).toBe(AMBER);
+    expect(globalThis.analyserZoneColour(0.8, PINK)).toBe(AMBER);
+  });
+
+  it('escalates to red in the hot zone', () => {
+    expect(globalThis.analyserZoneColour(0.86, PINK)).toBe(RED);
+    expect(globalThis.analyserZoneColour(1, PINK)).toBe(RED);
+  });
+
+  it('escalates the same way regardless of the mode colour', () => {
+    // The hot end means "loud", not "which segment is on air" — so ads and
+    // news hit the same amber/red, only their low zone differs.
+    for (const low of ['#f472b6', '#fb923c', '#60a5fa']) {
+      expect(globalThis.analyserZoneColour(0.2, low)).toBe(low);
+      expect(globalThis.analyserZoneColour(0.7, low)).toBe(AMBER);
+      expect(globalThis.analyserZoneColour(0.95, low)).toBe(RED);
+    }
   });
 });
 
@@ -108,11 +165,19 @@ describe('analyser draw loop', () => {
     return Boolean(cb);
   }
 
-  it('initAudio wires an analyser and sizes its bin buffer', () => {
+  it('initAudio wires an analyser and configures it for the display', () => {
     const a = globalThis.__getAnalyser();
     expect(a).not.toBeNull();
-    expect(a.fftSize).toBe(2048);
-    expect(a.frequencyBinCount).toBe(1024);
+    // fftSize is coupled to ANALYSER_BANDS: 4096 is only sufficient because
+    // there are 20 bands. Pinned here so raising the band count without
+    // revisiting the FFT size trips a test rather than quietly reintroducing
+    // the correlated-low-end problem.
+    expect(a.fftSize).toBe(4096);
+    expect(a.frequencyBinCount).toBe(2048);
+    // Raised off the -100 dB default so quiet bands go dark instead of
+    // sitting permanently part-lit on the noise floor.
+    expect(a.minDecibels).toBe(-80);
+    expect(a.smoothingTimeConstant).toBeLessThan(0.75);
   });
 
   it('startAnalyser marks the canvas live and queues a frame', () => {
@@ -178,23 +243,66 @@ describe('analyser draw loop', () => {
     expect(canvas.classList.contains('live')).toBe(false);
   });
 
-  it('peak caps decay toward zero once the signal drops out', () => {
+  it('peak markers jump straight to a new high', () => {
     const analyser = globalThis.__getAnalyser();
-    // A loud frame to push the caps up…
-    analyser.fakeSpectrum = new Uint8Array(1024).fill(255);
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
     globalThis._drawAnalyserFrame();
-    const loud = [...globalThis.__getAnalyserPeaks()];
-    expect(Math.max(...loud)).toBeGreaterThan(0.9);
+    expect(Math.max(...globalThis.__getAnalyserPeaks())).toBeGreaterThan(0.9);
+  });
 
-    // …then silence. Caps should fall, but gradually — not snap to zero.
-    analyser.fakeSpectrum = new Uint8Array(1024);
-    globalThis._drawAnalyserFrame();
-    const afterOne = [...globalThis.__getAnalyserPeaks()];
-    expect(Math.max(...afterOne)).toBeLessThan(Math.max(...loud));
-    expect(Math.max(...afterOne)).toBeGreaterThan(0.8);
+  /** Push the markers to full scale, then let the signal drop out. */
+  function peakThenSilence() {
+    const analyser = globalThis.__getAnalyser();
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
+    globalThis._drawAnalyserFrame(0);
+    const high = Math.max(...globalThis.__getAnalyserPeaks());
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);
+    return high;
+  }
 
-    for (let i = 0; i < 200; i++) globalThis._drawAnalyserFrame();
+  /** Advance `ms` of wall time in `steps` frames. */
+  function advance(ms, steps = 10) {
+    for (let i = 0; i < steps; i++) globalThis._drawAnalyserFrame(ms / steps);
+  }
+
+  it('peak markers hold at the high-water mark before sinking', () => {
+    // The hold is what makes the marker read as a deliberate indicator rather
+    // than the bar lagging: it parks at the transient's height for the better
+    // part of a second, so you actually see where the signal got to.
+    const high = peakThenSilence();
+    advance(500);
+    // Still parked at the high-water mark, even though the bars are at zero.
+    expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(high);
+  });
+
+  it('peak markers sink to zero once the hold expires', () => {
+    const high = peakThenSilence();
+
+    advance(1000);   // past the hold, partway down
+    const sinking = Math.max(...globalThis.__getAnalyserPeaks());
+    expect(sinking).toBeLessThan(high);
+    expect(sinking).toBeGreaterThan(0);
+
+    advance(3000);
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(0);
+  });
+
+  it('decays on wall time, not frame count', () => {
+    // Regression for the 120 Hz bug: decay used to be a fixed drop per frame,
+    // so on a ProMotion display (twice the frames per second) the marker fell
+    // in half the time. The same elapsed time must produce the same fall
+    // regardless of how many frames it was split across.
+    const high = peakThenSilence();
+    advance(1400, 7);                       // 7 long frames
+    const fewFrames = Math.max(...globalThis.__getAnalyserPeaks());
+
+    globalThis.stopAnalyser({ clear: true });   // reset markers
+    const high2 = peakThenSilence();
+    advance(1400, 84);                      // same 1400 ms, 12x the frames
+    const manyFrames = Math.max(...globalThis.__getAnalyserPeaks());
+
+    expect(high2).toBe(high);
+    expect(manyFrames).toBeCloseTo(fewFrames, 5);
   });
 
   it('draws without throwing when the canvas is missing from the DOM', () => {
