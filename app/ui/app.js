@@ -383,11 +383,14 @@ const ANALYSER_NOMINAL_FRAME_MS = 16.7;
 // colour, unlike a single CSS drop-shadow. ctx.filter is a batched GPU blur,
 // far cheaper than per-rect shadowBlur across ~600 segments. Where it isn't
 // supported the glow pass is simply skipped and the display renders sharp.
-// Tuned so the halo lifts the gaps between segments without closing them:
-// lit rows stay ~3.5x brighter than the gaps, so the LED grid still reads as
-// discrete cells. Raise ALPHA for more bloom, lower it for a starker display.
-const ANALYSER_GLOW_PX    = 3;
-const ANALYSER_GLOW_ALPHA = 0.45;
+// [blurPx, alpha] passes, widest and faintest first. Two scales rather than
+// one: a wide ambient spill across the panel plus a tight halo hugging each
+// cell reads far more like a glowing display than a single blur does at any
+// strength — cranking one pass just makes the cells look out of focus.
+// Tuned by measurement so lit rows stay clearly brighter than the gaps
+// between them; if the grid ever stops reading as discrete cells, it's the
+// wide pass's alpha that's gone too far.
+const ANALYSER_GLOW_PASSES = [[9, 0.28], [3.5, 0.6]];
 
 /** Colour for a segment at `fraction` of the bar's full height (0 = bottom). */
 function analyserZoneColour(fraction, lowColour) {
@@ -557,9 +560,11 @@ function _drawAnalyserFrame(dtMs = ANALYSER_NOMINAL_FRAME_MS) {
   // single CSS drop-shadow on the canvas couldn't do. Skipped entirely where
   // ctx.filter is unsupported — the display just renders without the bloom.
   if ('filter' in c2d) {
-    c2d.filter = `blur(${ANALYSER_GLOW_PX * dpr}px)`;
-    c2d.globalAlpha = ANALYSER_GLOW_ALPHA;
-    drawCells();
+    for (const [blurPx, alpha] of ANALYSER_GLOW_PASSES) {
+      c2d.filter = `blur(${blurPx * dpr}px)`;
+      c2d.globalAlpha = alpha;
+      drawCells();
+    }
     c2d.filter = 'none';
     c2d.globalAlpha = 1;
   }
