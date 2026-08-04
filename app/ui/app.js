@@ -365,11 +365,29 @@ const ANALYSER_LOW_COLOUR = {
   news:  '#60a5fa',
 };
 
-// Peak-marker behaviour: hold at the high-water mark for a beat, then sink.
-// The hold is what makes it read as a deliberate marker rather than lag —
-// without it the cap just trails the bar down and you never notice it.
-const ANALYSER_PEAK_HOLD_FRAMES = 30;    // ~0.5 s at 60 fps
-const ANALYSER_PEAK_FALL = 0.018;        // fraction of full height per frame
+// Peak-marker behaviour: hold at the high-water mark, then sink. The hold is
+// what makes it read as a deliberate marker rather than lag — without it the
+// cap just trails the bar down and you never notice it.
+//
+// Both are in real time, NOT frames. Frame-counting silently doubles the decay
+// rate on a 120 Hz display (every ProMotion Mac), which is exactly the machine
+// this runs on — the marker fell twice as fast as intended and read as twitchy.
+const ANALYSER_PEAK_HOLD_MS   = 750;  // park at the high-water mark this long
+const ANALYSER_PEAK_FALL_PER_S = 0.9; // then sink this fraction of full height per second
+// Assumed frame interval when no real timestamp is available (the first frame,
+// and direct calls from tests) so decay stays deterministic.
+const ANALYSER_NOMINAL_FRAME_MS = 16.7;
+
+// Glow. Lit segments are drawn twice — once blurred and semi-transparent for
+// the halo, then sharp on top — which lets each segment's halo take its own
+// colour, unlike a single CSS drop-shadow. ctx.filter is a batched GPU blur,
+// far cheaper than per-rect shadowBlur across ~600 segments. Where it isn't
+// supported the glow pass is simply skipped and the display renders sharp.
+// Tuned so the halo lifts the gaps between segments without closing them:
+// lit rows stay ~3.5x brighter than the gaps, so the LED grid still reads as
+// discrete cells. Raise ALPHA for more bloom, lower it for a starker display.
+const ANALYSER_GLOW_PX    = 3;
+const ANALYSER_GLOW_ALPHA = 0.45;
 
 /** Colour for a segment at `fraction` of the bar's full height (0 = bottom). */
 function analyserZoneColour(fraction, lowColour) {
@@ -381,8 +399,9 @@ function analyserZoneColour(fraction, lowColour) {
 let analyser        = null;
 let _analyserBins   = null;   // Uint8Array, reused every frame
 let _analyserPeaks  = [];     // per-band peak-marker heights, 0..1
-let _analyserHolds  = [];     // per-band frames left before the marker sinks
+let _analyserHolds  = [];     // per-band ms left before the marker starts sinking
 let _analyserRaf    = null;
+let _analyserLastT  = null;   // rAF timestamp of the previous frame
 // Generation token, same discipline as _autoTriggerGen: a queued animation
 // frame that lands after stop/pause must not resurrect the loop.
 let _analyserGen    = 0;
@@ -432,7 +451,7 @@ function computeBands(freqData, sampleRate, bandCount = ANALYSER_BANDS,
   return bands;
 }
 
-function _drawAnalyserFrame() {
+function _drawAnalyserFrame(dtMs = ANALYSER_NOMINAL_FRAME_MS) {
   const canvas = document.getElementById('analyser');
   if (!canvas || !analyser || !ctx || !_analyserBins) return;
 
@@ -465,26 +484,42 @@ function _drawAnalyserFrame() {
   const slot  = w / bands.length;
   const barW  = Math.max(1, slot * 0.7);
 
-  // fillStyle assignment is the expensive part of a canvas fill loop, so only
-  // flip it when the colour actually changes. Segments run bottom-to-top
-  // through at most three zones, so this collapses ~250 assignments to ~100.
-  let fill = null;
-  const paint = (colour, x, y) => {
-    if (colour !== fill) { c2d.fillStyle = colour; fill = colour; }
-    c2d.fillRect(x, y, barW, segH);
-  };
+  // Unlit LED grid, painted underneath everything in one pass. Lit segments
+  // cover their own cell afterwards, so drawing the full grid is simpler than
+  // tracking which cells to skip and costs one fillStyle assignment.
+  c2d.fillStyle = ANALYSER_UNLIT_COLOUR;
+  for (let i = 0; i < bands.length; i++) {
+    const x = i * slot + (slot - barW) / 2;
+    for (let s = 0; s < segs; s++) c2d.fillRect(x, h - s * step - segH, barW, segH);
+  }
 
+  // Collect the lit cells rather than drawing immediately: they get painted
+  // twice (blurred halo, then sharp) and re-deriving them would mean running
+  // the zone logic twice.
+  const cells = [];
   for (let i = 0; i < bands.length; i++) {
     const level = bands[i];
 
-    // Peak marker: jump straight to a new high, hold it, then sink slowly.
+    // Peak marker: jump straight to a new high, hold, then sink. Both phases
+    // are in real time so the behaviour is identical at 60 and 120 Hz.
     if (level >= (_analyserPeaks[i] ?? 0)) {
       _analyserPeaks[i] = level;
-      _analyserHolds[i] = ANALYSER_PEAK_HOLD_FRAMES;
-    } else if (_analyserHolds[i] > 0) {
-      _analyserHolds[i]--;
+      _analyserHolds[i] = ANALYSER_PEAK_HOLD_MS;
     } else {
-      _analyserPeaks[i] = Math.max(0, _analyserPeaks[i] - ANALYSER_PEAK_FALL);
+      // Spend this frame's elapsed time on the hold first, then on falling,
+      // splitting it if the hold expires mid-frame. Letting a frame be wholly
+      // one or the other would make total hold+fall duration drift with frame
+      // rate — the very thing switching off frame-counting was meant to fix.
+      let remaining = dtMs;
+      const held = Math.min(_analyserHolds[i] ?? 0, remaining);
+      if (held > 0) {
+        _analyserHolds[i] -= held;
+        remaining -= held;
+      }
+      if (remaining > 0) {
+        const drop = ANALYSER_PEAK_FALL_PER_S * (remaining / 1000);
+        _analyserPeaks[i] = Math.max(0, _analyserPeaks[i] - drop);
+      }
     }
 
     const x   = i * slot + (slot - barW) / 2;
@@ -495,35 +530,70 @@ function _drawAnalyserFrame() {
 
     for (let s = 0; s < segs; s++) {
       const y = h - s * step - segH;
-      const fraction = segs === 1 ? 1 : s / (segs - 1);
-      let colour;
       if (s === peakSeg && peakSeg >= lit) {
         // Only mark the peak once it has detached from the bar. While the
         // signal is still climbing the marker sits inside the lit stack, and
         // painting it white there would just bleach the top of every bar.
-        colour = ANALYSER_PEAK_COLOUR;
+        cells.push([ANALYSER_PEAK_COLOUR, x, y]);
       } else if (s < lit) {
-        colour = analyserZoneColour(fraction, lowColour);
-      } else {
-        colour = ANALYSER_UNLIT_COLOUR;
+        const fraction = segs === 1 ? 1 : s / (segs - 1);
+        cells.push([analyserZoneColour(fraction, lowColour), x, y]);
       }
-      paint(colour, x, y);
     }
   }
+
+  // fillStyle assignment is the expensive part of a canvas fill loop, so only
+  // flip it when the colour actually changes. Cells are emitted bottom-to-top
+  // through at most three zones per bar, so consecutive runs share a colour.
+  const drawCells = () => {
+    let fill = null;
+    for (const [colour, x, y] of cells) {
+      if (colour !== fill) { c2d.fillStyle = colour; fill = colour; }
+      c2d.fillRect(x, y, barW, segH);
+    }
+  };
+
+  // Halo pass. Each segment's glow takes its own colour this way, which a
+  // single CSS drop-shadow on the canvas couldn't do. Skipped entirely where
+  // ctx.filter is unsupported — the display just renders without the bloom.
+  if ('filter' in c2d) {
+    c2d.filter = `blur(${ANALYSER_GLOW_PX * dpr}px)`;
+    c2d.globalAlpha = ANALYSER_GLOW_ALPHA;
+    drawCells();
+    c2d.filter = 'none';
+    c2d.globalAlpha = 1;
+  }
+  drawCells();
 }
 
-function _analyserLoop(gen) {
+function _analyserLoop(gen, now) {
   // Stale frame: a newer start/stop superseded this loop. Bail rather than
   // redraw (or, worse, keep a dead loop alive after stopPlayback).
   if (gen !== _analyserGen) return;
-  _drawAnalyserFrame();
-  _analyserRaf = requestAnimationFrame(() => _analyserLoop(gen));
+
+  // Real elapsed time drives the peak decay, so it behaves identically on a
+  // 60 Hz and a 120 Hz display. Falls back to a nominal frame on the first
+  // frame and whenever no timestamp is supplied (tests drive frames directly).
+  // Clamped so a backgrounded tab resuming after minutes doesn't teleport
+  // every marker to the floor in one step.
+  let dt = ANALYSER_NOMINAL_FRAME_MS;
+  if (Number.isFinite(now) && Number.isFinite(_analyserLastT)) {
+    dt = Math.min(100, Math.max(0, now - _analyserLastT));
+  }
+  if (Number.isFinite(now)) _analyserLastT = now;
+
+  _drawAnalyserFrame(dt);
+  _analyserRaf = requestAnimationFrame((t) => _analyserLoop(gen, t));
 }
 
 function startAnalyser() {
   if (!analyser) return;
   stopAnalyser({ clear: false });   // supersede any existing loop
   document.getElementById('analyser')?.classList.add('live');
+  // Drop the previous frame's timestamp: resuming after a pause (or a stint
+  // in a background tab) would otherwise measure the whole gap as one frame
+  // and drop every marker to the floor in a single step.
+  _analyserLastT = null;
   const gen = _analyserGen;
   _analyserLoop(gen);
 }

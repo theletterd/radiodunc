@@ -249,37 +249,59 @@ describe('analyser draw loop', () => {
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBeGreaterThan(0.9);
   });
 
-  it('peak markers hold at the high-water mark before sinking', () => {
-    // The hold is what makes the marker read as a deliberate indicator rather
-    // than the bar lagging: it parks at the transient's height for ~half a
-    // second, so you actually see where the signal got to.
+  /** Push the markers to full scale, then let the signal drop out. */
+  function peakThenSilence() {
     const analyser = globalThis.__getAnalyser();
     analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
-    globalThis._drawAnalyserFrame();
+    globalThis._drawAnalyserFrame(0);
     const high = Math.max(...globalThis.__getAnalyserPeaks());
+    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);
+    return high;
+  }
 
-    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);   // signal drops out
-    for (let i = 0; i < 10; i++) globalThis._drawAnalyserFrame();
+  /** Advance `ms` of wall time in `steps` frames. */
+  function advance(ms, steps = 10) {
+    for (let i = 0; i < steps; i++) globalThis._drawAnalyserFrame(ms / steps);
+  }
 
+  it('peak markers hold at the high-water mark before sinking', () => {
+    // The hold is what makes the marker read as a deliberate indicator rather
+    // than the bar lagging: it parks at the transient's height for the better
+    // part of a second, so you actually see where the signal got to.
+    const high = peakThenSilence();
+    advance(500);
     // Still parked at the high-water mark, even though the bars are at zero.
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(high);
   });
 
   it('peak markers sink to zero once the hold expires', () => {
-    const analyser = globalThis.__getAnalyser();
-    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT).fill(255);
-    globalThis._drawAnalyserFrame();
-    const high = Math.max(...globalThis.__getAnalyserPeaks());
+    const high = peakThenSilence();
 
-    analyser.fakeSpectrum = new Uint8Array(BIN_COUNT);
-    // Past the hold window but not far enough to have fallen all the way.
-    for (let i = 0; i < 40; i++) globalThis._drawAnalyserFrame();
+    advance(1000);   // past the hold, partway down
     const sinking = Math.max(...globalThis.__getAnalyserPeaks());
     expect(sinking).toBeLessThan(high);
     expect(sinking).toBeGreaterThan(0);
 
-    for (let i = 0; i < 200; i++) globalThis._drawAnalyserFrame();
+    advance(3000);
     expect(Math.max(...globalThis.__getAnalyserPeaks())).toBe(0);
+  });
+
+  it('decays on wall time, not frame count', () => {
+    // Regression for the 120 Hz bug: decay used to be a fixed drop per frame,
+    // so on a ProMotion display (twice the frames per second) the marker fell
+    // in half the time. The same elapsed time must produce the same fall
+    // regardless of how many frames it was split across.
+    const high = peakThenSilence();
+    advance(1400, 7);                       // 7 long frames
+    const fewFrames = Math.max(...globalThis.__getAnalyserPeaks());
+
+    globalThis.stopAnalyser({ clear: true });   // reset markers
+    const high2 = peakThenSilence();
+    advance(1400, 84);                      // same 1400 ms, 12x the frames
+    const manyFrames = Math.max(...globalThis.__getAnalyserPeaks());
+
+    expect(high2).toBe(high);
+    expect(manyFrames).toBeCloseTo(fewFrames, 5);
   });
 
   it('draws without throwing when the canvas is missing from the DOM', () => {
