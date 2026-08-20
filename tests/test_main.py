@@ -500,6 +500,88 @@ def test_player_queue_skips_non_track_items():
     assert result.items[0].track_id == 3
 
 
+def test_player_queue_includes_track_metadata_for_hover_card():
+    """The Up Next hover card needs more than the label — album/year/genre/
+    duration/bitrate plus the file path, which is the only field guaranteed
+    to exist on a sparsely-tagged rip."""
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
+    t2 = Track(
+        file_path="/m/penny.mp3", title="Penny Lane", artist="The Beatles",
+        album="Magical Mystery Tour", year="1967", genre="Rock",
+        duration_seconds=175.4, bitrate=320,
+    )
+    db.add_all([t1, t2])
+    db.commit()
+    for t in (t1, t2): db.refresh(t)
+
+    _make_queue_state(db, [
+        {"type": "track", "track_id": t1.id, "label": "A - Current"},
+        {"type": "track", "track_id": t2.id, "label": "The Beatles - Penny Lane"},
+    ], index=0)
+
+    item = player_queue(db).items[0]
+
+    assert item.track_id == t2.id
+    assert item.file_path == "/m/penny.mp3"
+    assert item.album == "Magical Mystery Tour"
+    assert item.year == "1967"
+    assert item.genre == "Rock"
+    assert item.duration_seconds == 175.4
+    assert item.bitrate == 320
+
+
+def test_player_queue_metadata_is_none_for_missing_track():
+    """A track deleted from the library since being queued should still appear
+    in the list (with its stored label) rather than vanishing — the hover card
+    just has nothing to show."""
+    db = _make_db_session()
+    t1 = Track(file_path="/m/1.mp3", title="Current", artist="A")
+    db.add(t1)
+    db.commit()
+    db.refresh(t1)
+
+    _make_queue_state(db, [
+        {"type": "track", "track_id": t1.id, "label": "A - Current"},
+        {"type": "track", "track_id": 9999, "label": "Since Deleted"},
+    ], index=0)
+
+    items = player_queue(db).items
+
+    assert len(items) == 1
+    assert items[0].label == "Since Deleted"
+    assert items[0].file_path is None
+    assert items[0].duration_seconds is None
+
+
+def test_player_queue_fetches_metadata_in_one_query(monkeypatch):
+    """Guard against an N+1: the queue is routinely 30+ deep and grows with
+    'Add more', so metadata must come from a single IN query."""
+    db = _make_db_session()
+    tracks = [Track(file_path=f"/m/{i}.mp3", title=f"T{i}", artist="A") for i in range(12)]
+    db.add_all(tracks)
+    db.commit()
+    for t in tracks: db.refresh(t)
+
+    _make_queue_state(db, [
+        {"type": "track", "track_id": t.id, "label": f"A - T{t.id}"} for t in tracks
+    ], index=0)
+
+    calls = {"n": 0}
+    real_query = db.query
+    def counting_query(model, *a, **k):
+        if model is Track:
+            calls["n"] += 1
+        return real_query(model, *a, **k)
+    monkeypatch.setattr(db, "query", counting_query)
+
+    result = player_queue(db)
+
+    assert len(result.items) == 11
+    assert all(i.file_path for i in result.items)
+    assert calls["n"] == 1
+
+
 def test_delete_queue_item_removes_future_track():
     db = _make_db_session()
     queue = [

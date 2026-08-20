@@ -136,6 +136,17 @@ class QueueItemOut(BaseModel):
     position: int
     track_id: int
     label: str
+    # Metadata for the hover card in the Up Next list. All optional because
+    # library tags are patchy — file_path is the only field guaranteed to be
+    # present, which is exactly why it's worth surfacing for sparse rips.
+    file_path: str | None = None
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    year: str | None = None
+    genre: str | None = None
+    duration_seconds: float | None = None
+    bitrate: int | None = None
 
 
 class QueuePreviewResponse(BaseModel):

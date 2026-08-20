@@ -144,6 +144,13 @@
         <p id="nowPlayingFile" class="muted" style="font-size:0.8rem; margin:0; font-family: monospace;"></p>
         <p id="playerFlags" class="muted">-</p>
         <canvas id="analyser" class="analyser" aria-hidden="true"></canvas>
+        <div class="progress-row">
+          <span class="progress-time" id="progressElapsed">0:00</span>
+          <div class="progress-track">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <span class="progress-time" id="progressTotal">0:00</span>
+        </div>
       </div>
 
       <div class="card">
@@ -159,6 +166,8 @@
 
     </main>
   </div>
+
+<div id="trackCard" class="track-card" hidden></div>
 
 <script src="/ui/app.js"></script>
 </body>
