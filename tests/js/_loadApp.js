@@ -29,6 +29,9 @@ const EXPORTED_NAMES = [
   '_fmtHourBoundary', '_fmtShiftRange',
   '_autoResizeTextarea',
   'initAudio',
+  // track progress + Up Next hover card
+  'fmtClock', 'renderProgress',
+  'trackCardHtml', 'showTrackCard', 'hideTrackCard',
   // spectrum analyser
   'computeBands', 'analyserZoneColour',
   'startAnalyser', 'stopAnalyser', '_drawAnalyserFrame',

@@ -214,6 +214,100 @@ h1#stationName {
   .analyser { transition: none; }
 }
 
+/* ── Track progress ── */
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.progress-time {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;  /* stops the row twitching each second */
+  flex-shrink: 0;
+  min-width: 3.2em;
+}
+
+.progress-time:last-child { text-align: right; }
+
+.progress-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface2);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--pink-dim), var(--pink));
+  /* scaleX rather than width so the per-frame update stays on the compositor
+     and never triggers layout. */
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
+}
+
+/* ── Up Next hover card ── */
+/* Fixed rather than absolute: #queueList is a scroll container, so a card
+   positioned inside it would be clipped at the list edges. JS positions it
+   from the row's bounding rect. */
+.track-card {
+  position: fixed;
+  z-index: 60;
+  max-width: 340px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-hi);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  font-size: 0.8rem;
+  pointer-events: none;   /* never steals the hover from the row beneath */
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.track-card.visible { opacity: 1; }
+
+.track-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.track-card dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.track-card dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.track-card .track-card-path {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-family: monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.track-card .track-card-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
 #playerFlags {
   font-size: 0.78rem;
   color: var(--muted);

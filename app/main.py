@@ -358,17 +358,42 @@ def player_queue(db: Session = Depends(get_db)):
     state = _get_or_create_player_state(db)
     queue = json.loads(state.queue_json) if state.queue_json else []
     current_pos = state.queue_index
+
+    upcoming = [
+        (i, queue[i])
+        for i in range(current_pos + 1, len(queue))
+        if queue[i].get("type") == "track" and queue[i].get("track_id") is not None
+    ]
+
+    # Fetch metadata for the whole upcoming window in one query rather than
+    # per item — the queue is routinely 30+ deep and grows with "Add more".
+    # Tracks deleted from the library since being queued simply come back
+    # without metadata rather than dropping out of the list.
+    track_ids = {item["track_id"] for _, item in upcoming}
+    tracks_by_id: dict[int, Track] = {}
+    if track_ids:
+        tracks_by_id = {
+            t.id: t for t in db.query(Track).filter(Track.id.in_(track_ids)).all()
+        }
+
     upcoming_items: list[QueueItemOut] = []
-    for i in range(current_pos + 1, len(queue)):
-        item = queue[i]
-        if item.get("type") == "track" and item.get("track_id") is not None:
-            upcoming_items.append(
-                QueueItemOut(
-                    position=i,
-                    track_id=item["track_id"],
-                    label=item.get("label", f"Track {item['track_id']}"),
-                )
+    for i, item in upcoming:
+        track = tracks_by_id.get(item["track_id"])
+        upcoming_items.append(
+            QueueItemOut(
+                position=i,
+                track_id=item["track_id"],
+                label=item.get("label", f"Track {item['track_id']}"),
+                file_path=track.file_path if track else None,
+                title=track.title if track else None,
+                artist=track.artist if track else None,
+                album=track.album if track else None,
+                year=track.year if track else None,
+                genre=track.genre if track else None,
+                duration_seconds=track.duration_seconds if track else None,
+                bitrate=track.bitrate if track else None,
             )
+        )
     return QueuePreviewResponse(
         items=upcoming_items,
         queue_position=current_pos,

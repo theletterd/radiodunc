@@ -305,6 +305,55 @@ function scheduleSegment(buf, startAt, label, { fadeIn = DJ_EDGE_S, fadeOut = DJ
   return startAt + buf.duration;
 }
 
+// ── Track progress ────────────────────────────────────────────────────────────
+// Read-only position display. Deliberately not seekable: autoTrigger and
+// prefetch are both scheduled from (duration - currentTime) at track start, so
+// a seek would need to tear down and reschedule both, and getting that wrong
+// reintroduces exactly the stale-timer class of bug fixed in #166.
+
+/** Seconds → "m:ss", or "h:mm:ss" past an hour (podcasts run long). */
+function fmtClock(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const total = Math.floor(seconds);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+// Last strings written, so the per-frame call only touches the DOM when the
+// displayed value actually changes — the bar moves every frame, the text
+// only once a second.
+let _progressShown = { elapsed: null, total: null };
+
+function renderProgress() {
+  const fill  = document.getElementById('progressFill');
+  const elEl  = document.getElementById('progressElapsed');
+  const totEl = document.getElementById('progressTotal');
+  if (!fill || !elEl || !totEl) return;
+
+  const audio    = curSlot()?.el;
+  const duration = audio?.duration;
+  // Duration is NaN until metadata loads, and there's no audio at all before
+  // the first play or after stop.
+  const known    = Number.isFinite(duration) && duration > 0;
+  const elapsed  = known ? Math.min(audio.currentTime || 0, duration) : 0;
+
+  fill.style.transform = `scaleX(${known ? elapsed / duration : 0})`;
+
+  const elapsedText = fmtClock(known ? elapsed : 0);
+  const totalText   = fmtClock(known ? duration : 0);
+  if (elapsedText !== _progressShown.elapsed) {
+    elEl.textContent = elapsedText;
+    _progressShown.elapsed = elapsedText;
+  }
+  if (totalText !== _progressShown.total) {
+    totEl.textContent = totalText;
+    _progressShown.total = totalText;
+  }
+}
+
 // ── Spectrum analyser ─────────────────────────────────────────────────────────
 // Decorative bouncing-bars display in the Now Playing card. Reads the master
 // bus (see initAudio) so every source — music, DJ banter, news, ads, stingers —
@@ -594,6 +643,9 @@ function _analyserLoop(gen, now) {
   if (Number.isFinite(now)) _analyserLastT = now;
 
   _drawAnalyserFrame(dt);
+  // Piggybacked on this loop deliberately — it already starts and stops with
+  // playback, so progress needs no timer of its own to keep in sync.
+  renderProgress();
   _analyserRaf = requestAnimationFrame((t) => _analyserLoop(gen, t));
 }
 
@@ -1189,12 +1241,95 @@ function renderPlayer() {
 
   const playBtn = document.getElementById('playBtn');
   playBtn.textContent = audioLive ? 'Pause' : 'Play';
+
+  // Covers the states the rAF loop doesn't run in — paused (frozen position),
+  // stopped (reset to zero), and ready-to-resume after a page refresh.
+  renderProgress();
+}
+
+// ── Up Next hover card ────────────────────────────────────────────────────────
+// Library tags are patchy, so the queue label alone ("Artist - Title", or a
+// bare filename stem when both are missing) often isn't enough to tell what a
+// track actually is. Hovering a row shows whatever else the scanner found,
+// falling back to the file path — the one field that always exists.
+
+/** Rows to show, in order. [label, formatter] against a queue item. */
+const TRACK_CARD_FIELDS = [
+  ['Title',   (t) => t.title],
+  ['Artist',  (t) => t.artist],
+  ['Album',   (t) => t.album],
+  ['Year',    (t) => t.year],
+  ['Genre',   (t) => t.genre],
+  ['Length',  (t) => (Number.isFinite(t.duration_seconds) ? fmtClock(t.duration_seconds) : null)],
+  ['Bitrate', (t) => (t.bitrate ? `${Math.round(t.bitrate / 1000)} kbps` : null)],
+];
+
+/** Build the hover card's inner HTML for one queue item. */
+function trackCardHtml(item) {
+  const rows = TRACK_CARD_FIELDS
+    .map(([label, get]) => [label, get(item)])
+    .filter(([, value]) => value !== null && value !== undefined && value !== '');
+
+  let html = '';
+  if (rows.length) {
+    html += '<dl>' + rows.map(([label, value]) =>
+      `<dt>${_escapeText(label)}</dt><dd>${_escapeText(String(value))}</dd>`
+    ).join('') + '</dl>';
+  } else {
+    html += '<div class="track-card-empty">No metadata for this file</div>';
+  }
+  if (item.file_path) {
+    html += `<div class="track-card-path">${_escapeText(item.file_path)}</div>`;
+  }
+  return html;
+}
+
+function hideTrackCard() {
+  const card = document.getElementById('trackCard');
+  if (!card) return;
+  card.classList.remove('visible');
+  card.hidden = true;
+}
+
+/** Show the card for `item`, anchored to the hovered row. */
+function showTrackCard(item, anchorEl) {
+  const card = document.getElementById('trackCard');
+  if (!card || !anchorEl) return;
+
+  card.innerHTML = trackCardHtml(item);
+  card.hidden = false;
+
+  // Measure after filling, then clamp into the viewport. Prefer sitting to the
+  // right of the row; flip to the left when there isn't room (narrow windows),
+  // and nudge vertically so a card near the bottom stays fully on screen.
+  const row = anchorEl.getBoundingClientRect();
+  const box = card.getBoundingClientRect();
+  const gap = 12;
+
+  let left = row.right + gap;
+  if (left + box.width > window.innerWidth - 8) {
+    left = Math.max(8, row.left - box.width - gap);
+  }
+  let top = row.top;
+  if (top + box.height > window.innerHeight - 8) {
+    top = Math.max(8, window.innerHeight - box.height - 8);
+  }
+
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top  = `${Math.round(top)}px`;
+  card.classList.add('visible');
 }
 
 async function renderQueue() {
   const list = document.getElementById('queueList');
   if (!list) return;
-  if (!serverState?.is_playing) { list.innerHTML = ''; return; }
+  if (!serverState?.is_playing) { list.innerHTML = ''; hideTrackCard(); return; }
+  // Fixed-position card would drift away from its row as the list scrolls.
+  // Registered once; re-registering on every render would stack listeners.
+  if (!list.dataset.cardScrollBound) {
+    list.addEventListener('scroll', hideTrackCard);
+    list.dataset.cardScrollBound = '1';
+  }
   let preview;
   try { preview = await api('/player/queue'); } catch (_) { list.innerHTML = ''; return; }
   list.innerHTML = '';
@@ -1234,7 +1369,13 @@ async function renderQueue() {
       }
     };
 
+    li.addEventListener('mouseenter', () => showTrackCard(item, li));
+    li.addEventListener('mouseleave', hideTrackCard);
+
     li.addEventListener('dragstart', e => {
+      // A card left hovering over the drag would obscure the drop targets,
+      // and its fixed position wouldn't follow the row anyway.
+      hideTrackCard();
       dragSrc = item.position;
       e.dataTransfer.effectAllowed = 'move';
       setTimeout(() => { li.style.opacity = '0.4'; }, 0);

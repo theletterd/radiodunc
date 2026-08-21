@@ -188,6 +188,20 @@ The draw loop carries a **generation token** (`_analyserGen`), the same discipli
 
 Test note: `tests/js/setup.js` overrides happy-dom's `requestAnimationFrame` with a queue-only stub (`__rafCallbacks`) — a self-firing implementation would recurse forever against a self-re-arming loop. It also stubs the canvas 2D context and `clientWidth`/`clientHeight`, since happy-dom has no layout and the draw bails on a zero-sized box.
 
+### Track progress
+Read-only position bar under the analyser. `renderProgress()` reads `curSlot().el.currentTime / .duration` and drives a `scaleX` transform (not `width`, so the per-frame update stays on the compositor and never triggers layout). Clock text is only written when the displayed string changes, so a 120 fps caller doesn't thrash the DOM for a value that ticks once a second. `fmtClock` switches to `h:mm:ss` past an hour — the library has podcast episodes in it.
+
+Driven from the analyser's rAF loop rather than its own timer: that loop already starts and stops exactly with playback, so progress stays in sync for free and there's no second timer to leak. `renderPlayer()` also calls it, which covers the states the loop doesn't run in — paused (frozen position), stopped (reset to zero), and ready-to-resume after a page refresh.
+
+**Deliberately not seekable.** `scheduleAutoTrigger` and `schedulePrefetch` are both computed from `duration - currentTime` at track start, so a seek would have to tear down and reschedule both — precisely the stale-timer class of bug fixed in #166. Adding seeking means handling that, not just wiring up a click handler.
+
+### Up Next hover card
+Hovering a queue row shows whatever metadata the scanner found (`trackCardHtml`). Library tags are patchy — in Duncan's library ~13% of tracks have no album and some have junk artist tags (one has a spam URL where the artist should be), so the queue label alone often can't identify a track. Rows with no value are omitted rather than shown empty, and the **file path is always shown** because it's the one field guaranteed to exist and is usually the real clue for a badly-tagged rip.
+
+`/player/queue` returns the metadata on `QueueItemOut`, fetched with a single `IN` query for the whole upcoming window — the queue is routinely 30+ deep and grows with "Add more", so per-item lookups would be an N+1. There's a test asserting exactly one `Track` query. A track deleted from the library since being queued still appears in the list with its stored label; the card just reports no metadata.
+
+The card is a **single `position: fixed` element at body level**, not one per row: `#queueList` is a scroll container (`overflow-y: auto`), so a card nested inside a row would be clipped at the list edges. JS positions it from the row's `getBoundingClientRect()`, preferring the right of the row and flipping left when the viewport is too narrow. It's hidden on list scroll (a fixed card would drift away from its row) and on dragstart (it would obscure the drop targets).
+
 ### Playback instrumentation
 `_logPlayback(event, fields)` captures full state (`serverIsPlaying, paused, transitioning, hasCtx, onAirMode`) at every playback entry point — `triggerTransition`, `startPlayback`, `resumeAfterRefresh`, `stopPlayback`, `pausePlayback`, `resumePlayback`, the autoTrigger callback, and the visibilitychange handler. Used to diagnose intermittent bugs (e.g. spurious playback after laptop wake) from a console transcript.
 
