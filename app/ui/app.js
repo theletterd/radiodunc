@@ -1320,6 +1320,72 @@ function showTrackCard(item, anchorEl) {
   card.classList.add('visible');
 }
 
+// ── Up Next right-click menu ──────────────────────────────────────────────────
+// Body-level fixed element, same reasoning as the hover card: #queueList is a
+// scroll container and a menu inside a row would be clipped at the list edges.
+
+function hideQueueMenu() {
+  const menu = document.getElementById('queueMenu');
+  if (!menu) return;
+  menu.classList.remove('visible');
+  menu.hidden = true;
+}
+
+/**
+ * Show the menu at (x, y).
+ * `entries` are `{ label, disabled?, onSelect }` — kept generic so adding
+ * further actions later is a matter of pushing another entry.
+ */
+function showQueueMenu(entries, x, y) {
+  const menu = document.getElementById('queueMenu');
+  if (!menu) return;
+
+  menu.innerHTML = '';
+  for (const entry of entries) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'context-menu-item';
+    btn.textContent = entry.label;
+    btn.setAttribute('role', 'menuitem');
+    if (entry.disabled) {
+      btn.disabled = true;
+    } else {
+      btn.addEventListener('click', () => {
+        hideQueueMenu();
+        entry.onSelect();
+      });
+    }
+    menu.appendChild(btn);
+  }
+
+  menu.hidden = false;
+  // Measure after filling so the clamp uses the real size, then keep it
+  // inside the viewport — right-clicking near an edge is common.
+  const box = menu.getBoundingClientRect();
+  let left = x;
+  let top = y;
+  if (left + box.width > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - box.width - 8);
+  }
+  if (top + box.height > window.innerHeight - 8) {
+    top = Math.max(8, window.innerHeight - box.height - 8);
+  }
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top  = `${Math.round(top)}px`;
+  menu.classList.add('visible');
+}
+
+// Dismissal wiring, bound once. Anything that moves the page under a fixed
+// menu, or signals the user is done with it, closes it.
+function _bindQueueMenuDismissers() {
+  const menu = document.getElementById('queueMenu');
+  if (!menu || menu.dataset.dismissBound) return;
+  menu.dataset.dismissBound = '1';
+  document.addEventListener('click', hideQueueMenu);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideQueueMenu(); });
+  window.addEventListener('scroll', hideQueueMenu, true);
+}
+
 async function renderQueue() {
   const list = document.getElementById('queueList');
   if (!list) return;
@@ -1328,8 +1394,14 @@ async function renderQueue() {
   // Registered once; re-registering on every render would stack listeners.
   if (!list.dataset.cardScrollBound) {
     list.addEventListener('scroll', hideTrackCard);
+    list.addEventListener('scroll', hideQueueMenu);
     list.dataset.cardScrollBound = '1';
   }
+  _bindQueueMenuDismissers();
+  // Menu entries capture queue positions, which this re-render may invalidate
+  // (the 10s status poll lands here too). Acting on a stale index would move
+  // the wrong track, so close rather than leave it pointing at old rows.
+  hideQueueMenu();
   let preview;
   try { preview = await api('/player/queue'); } catch (_) { list.innerHTML = ''; return; }
   list.innerHTML = '';
@@ -1371,6 +1443,40 @@ async function renderQueue() {
 
     li.addEventListener('mouseenter', () => showTrackCard(item, li));
     li.addEventListener('mouseleave', hideTrackCard);
+
+    li.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      hideTrackCard();   // would otherwise sit under the menu
+
+      // The first reorderable slot. Anything at or before the current index
+      // is already played, and the reorder endpoint rejects those.
+      const topPosition = preview.queue_position + 1;
+
+      showQueueMenu([
+        {
+          label: 'Move to top',
+          disabled: item.position === topPosition,
+          onSelect: async () => {
+            try {
+              await api('/player/queue/reorder', {
+                method: 'POST',
+                body: JSON.stringify({
+                  from_position: item.position,
+                  to_position: topPosition,
+                }),
+              });
+            } catch (err) {
+              // Most likely the track advanced between render and click, so
+              // these positions now refer to different items — the server
+              // rejects that rather than moving the wrong track. Re-rendering
+              // resyncs against reality either way.
+              console.warn('[queue] move to top failed:', err);
+            }
+            renderQueue();
+          },
+        },
+      ], e.clientX, e.clientY);
+    });
 
     li.addEventListener('dragstart', e => {
       // A card left hovering over the drag would obscure the drop targets,

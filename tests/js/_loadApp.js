@@ -32,6 +32,7 @@ const EXPORTED_NAMES = [
   // track progress + Up Next hover card
   'fmtClock', 'renderProgress',
   'trackCardHtml', 'showTrackCard', 'hideTrackCard',
+  'showQueueMenu', 'hideQueueMenu',
   // spectrum analyser
   'computeBands', 'analyserZoneColour',
   'startAnalyser', 'stopAnalyser', '_drawAnalyserFrame',
