@@ -308,6 +308,45 @@ h1#stationName {
   font-style: italic;
 }
 
+/* ── Right-click menu (Up Next rows) ── */
+/* Fixed and body-level for the same reason as .track-card: #queueList is a
+   scroll container, so a menu rendered inside a row would be clipped. */
+.context-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 170px;
+  padding: 4px;
+  border: 1px solid var(--border-hi);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.context-menu.visible { opacity: 1; }
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-item:hover:not(:disabled) { background: var(--surface2); }
+
+.context-menu-item:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 #playerFlags {
   font-size: 0.78rem;
   color: var(--muted);

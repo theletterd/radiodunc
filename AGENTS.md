@@ -202,6 +202,13 @@ Hovering a queue row shows whatever metadata the scanner found (`trackCardHtml`)
 
 The card is a **single `position: fixed` element at body level**, not one per row: `#queueList` is a scroll container (`overflow-y: auto`), so a card nested inside a row would be clipped at the list edges. JS positions it from the row's `getBoundingClientRect()`, preferring the right of the row and flipping left when the viewport is too narrow. It's hidden on list scroll (a fixed card would drift away from its row) and on dragstart (it would obscure the drop targets).
 
+### Up Next right-click menu
+Right-clicking a queue row opens a context menu; currently one entry, **Move to top**, which reorders the row to `queue_position + 1` — the first slot the server will accept, since anything at or before the current index is already played. No backend work was needed: `/player/queue/reorder` already handled the move and already clears the prefetch cache (the next-track changed, so a prefetched clip is for the wrong song).
+
+`showQueueMenu(entries, x, y)` takes `{label, disabled?, onSelect}` entries, so further actions are a matter of pushing another object. The entry is disabled when the row is already top rather than firing a no-op.
+
+Same body-level `position: fixed` element as the hover card, for the same scroll-clipping reason. It closes on Escape, outside click, either scroll — **and on every `renderQueue()`**. That last one matters: menu entries capture queue *positions*, and the 10 s status poll re-renders the list, so a menu left open could act on an index that now refers to a different track. Closing on re-render is why a screenshot of the open menu needs the auto-close stubbed out. The server validates positions too, so a stale click is rejected rather than moving the wrong track — the close is the first line of defence, not the only one.
+
 ### Playback instrumentation
 `_logPlayback(event, fields)` captures full state (`serverIsPlaying, paused, transitioning, hasCtx, onAirMode`) at every playback entry point — `triggerTransition`, `startPlayback`, `resumeAfterRefresh`, `stopPlayback`, `pausePlayback`, `resumePlayback`, the autoTrigger callback, and the visibilitychange handler. Used to diagnose intermittent bugs (e.g. spurious playback after laptop wake) from a console transcript.
 

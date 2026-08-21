@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { loadAppJs } from './_loadApp.js';
+import { loadAppJs, flush } from './_loadApp.js';
 
 // ── fmtClock ─────────────────────────────────────────────────────────────────
 
@@ -219,5 +219,176 @@ describe('showTrackCard / hideTrackCard', () => {
 
     expect(card.hidden).toBe(true);
     expect(card.classList.contains('visible')).toBe(false);
+  });
+});
+
+// ── Up Next right-click menu ─────────────────────────────────────────────────
+
+describe('showQueueMenu / hideQueueMenu', () => {
+  beforeEach(() => { loadAppJs(); });
+
+  const menu = () => document.getElementById('queueMenu');
+
+  it('renders one button per entry and fires its handler on click', () => {
+    const picked = [];
+    globalThis.showQueueMenu([
+      { label: 'Move to top', onSelect: () => picked.push('top') },
+    ], 100, 100);
+
+    const items = menu().querySelectorAll('.context-menu-item');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toBe('Move to top');
+
+    items[0].click();
+    expect(picked).toEqual(['top']);
+  });
+
+  it('closes itself when an entry is chosen', () => {
+    globalThis.showQueueMenu([{ label: 'Go', onSelect: () => {} }], 50, 50);
+    menu().querySelector('.context-menu-item').click();
+    expect(menu().hidden).toBe(true);
+  });
+
+  it('renders a disabled entry that does nothing when clicked', () => {
+    const picked = [];
+    globalThis.showQueueMenu([
+      { label: 'Move to top', disabled: true, onSelect: () => picked.push('top') },
+    ], 50, 50);
+
+    const btn = menu().querySelector('.context-menu-item');
+    expect(btn.disabled).toBe(true);
+    btn.click();
+    expect(picked).toEqual([]);
+  });
+
+  it('clamps into the viewport when opened near an edge', () => {
+    menu().getBoundingClientRect = () => ({ width: 200, height: 120 });
+    globalThis.showQueueMenu(
+      [{ label: 'Go', onSelect: () => {} }],
+      window.innerWidth - 5, window.innerHeight - 5,
+    );
+
+    expect(parseInt(menu().style.left, 10) + 200).toBeLessThanOrEqual(window.innerWidth);
+    expect(parseInt(menu().style.top, 10) + 120).toBeLessThanOrEqual(window.innerHeight);
+  });
+
+  it('opens at the cursor when there is room', () => {
+    menu().getBoundingClientRect = () => ({ width: 200, height: 120 });
+    globalThis.showQueueMenu([{ label: 'Go', onSelect: () => {} }], 120, 90);
+
+    expect(menu().style.left).toBe('120px');
+    expect(menu().style.top).toBe('90px');
+  });
+
+  it('replaces the previous entries rather than stacking them', () => {
+    globalThis.showQueueMenu([{ label: 'First', onSelect: () => {} }], 10, 10);
+    globalThis.showQueueMenu([{ label: 'Second', onSelect: () => {} }], 10, 10);
+
+    const items = menu().querySelectorAll('.context-menu-item');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toBe('Second');
+  });
+
+  it('hideQueueMenu hides it', () => {
+    globalThis.showQueueMenu([{ label: 'Go', onSelect: () => {} }], 10, 10);
+    globalThis.hideQueueMenu();
+    expect(menu().hidden).toBe(true);
+    expect(menu().classList.contains('visible')).toBe(false);
+  });
+});
+
+describe('queue row context menu', () => {
+  // Drives the real renderQueue path so the wiring is covered, not just the
+  // menu primitives.
+  const QUEUE = {
+    queue_position: 2,
+    queue_depth: 6,
+    items: [
+      { position: 3, track_id: 30, label: 'Next Up',  file_path: '/m/a.mp3' },
+      { position: 4, track_id: 40, label: 'After It', file_path: '/m/b.mp3' },
+    ],
+  };
+
+  let calls;
+
+  beforeEach(async () => {
+    calls = [];
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      const u = String(url);
+      if (u.includes('/player/queue/reorder')) {
+        calls.push(JSON.parse(opts.body));
+        return { ok: true, status: 204, headers: { get: () => null }, text: async () => '' };
+      }
+      const body = u.includes('/player/queue') ? QUEUE : {};
+      return {
+        ok: true, status: 200,
+        headers: { get: () => 'application/json' },
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      };
+    });
+    loadAppJs();
+    // Let init()'s async chain settle before seeding state — it assigns
+    // serverState from /player/status and would otherwise clobber ours
+    // partway through the test.
+    await flush();
+    globalThis.__setServerState({ is_playing: true });
+    await globalThis.renderQueue();
+  });
+
+  function rightClick(index) {
+    const row = document.querySelectorAll('#queueList li')[index];
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'clientX', { value: 100 });
+    Object.defineProperty(ev, 'clientY', { value: 100 });
+    row.dispatchEvent(ev);
+    return ev;
+  }
+
+  it('opens the menu and suppresses the browser default', () => {
+    const ev = rightClick(1);
+    expect(ev.defaultPrevented).toBe(true);
+    expect(document.getElementById('queueMenu').hidden).toBe(false);
+  });
+
+  it('moves the row to the first slot after the current track', () => {
+    rightClick(1);   // "After It" at position 4
+    document.querySelector('#queueMenu .context-menu-item').click();
+
+    // queue_position is 2, so the first reorderable slot is 3 — not 0, which
+    // the server would reject as already played.
+    expect(calls).toEqual([{ from_position: 4, to_position: 3 }]);
+  });
+
+  it('disables the entry for a row already at the top', () => {
+    rightClick(0);   // "Next Up" is already at position 3
+    const btn = document.querySelector('#queueMenu .context-menu-item');
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('hides the hover card so the two never overlap', () => {
+    const card = document.getElementById('trackCard');
+    card.getBoundingClientRect = () => ({ width: 200, height: 100 });
+    document.querySelectorAll('#queueList li')[1]
+      .dispatchEvent(new MouseEvent('mouseenter'));
+    expect(card.hidden).toBe(false);
+
+    rightClick(1);
+    expect(card.hidden).toBe(true);
+  });
+
+  it('closes on Escape', () => {
+    rightClick(1);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(document.getElementById('queueMenu').hidden).toBe(true);
+  });
+
+  it('closes when the queue re-renders, since positions may have shifted', async () => {
+    rightClick(1);
+    expect(document.getElementById('queueMenu').hidden).toBe(false);
+
+    await globalThis.renderQueue();   // e.g. the 10s status poll landing
+
+    expect(document.getElementById('queueMenu').hidden).toBe(true);
   });
 });
